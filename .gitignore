@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+*.pem
+*.key
+
+# Node
+node_modules/
+
+# Local databases / dumps
+*.duckdb
+*.sqlite
+*.db
+*.dump
+backups/
+
+# Data — source PDFs go to object storage, never git
+data/raw/
+data/interim/
+data/documents/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Claude Code local tooling (user-installed skills incl. 5.8MB of fonts; not project code)
+.claude/skills/
+.claude/settings.local.json
