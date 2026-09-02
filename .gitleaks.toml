@@ -1,0 +1,32 @@
+# gitleaks configuration.
+#
+# `gitleaks detect --no-git` walks the working tree, which includes directories that are
+# git-ignored and therefore can never leak anything: `.venv` alone is ~75 MB of third-party
+# source, and its false positives (SQLAlchemy variable names with high entropy) drown the
+# real finding you are scanning for. A scanner nobody can read the output of is a scanner
+# nobody runs.
+#
+# These paths are all git-ignored. Excluding them here changes what the LOCAL working-tree
+# scan reads, not what can reach a remote: the pre-commit hook scans staged content and the
+# CI job scans git history, and neither can ever see these files.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Paths that are git-ignored and cannot reach a remote"
+# Unanchored on purpose: gitleaks matches these against the path as it reports it, which
+# for a containerised scan is the mount path (`/repo/.venv/...`), not a repo-relative one.
+# An anchored `^\.venv/` silently matches nothing and the exclusion looks applied when it
+# is not.
+paths = [
+  '''(^|/)\.venv/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)backups/''',
+  '''(^|/)\.git/''',
+  '''(^|/)__pycache__/''',
+  '''\.dump$''',
+  '''\.toc\.txt$''',
+  # The template carries placeholder values only. The real file, `.env`, is git-ignored.
+  '''(^|/)\.env\.example$''',
+]

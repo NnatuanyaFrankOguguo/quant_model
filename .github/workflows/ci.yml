@@ -1,0 +1,133 @@
+name: CI
+
+# "One task, one PR, tests required" (CLAUDE.md). `main` is protected with required status
+# checks; required approvals stay OFF while the project is solo, because GitHub does not let
+# you approve your own PR — docs/10 §6.4 corrects docs/03's exit criterion on this point.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # TG21: storage and computation are UTC everywhere. A CI box in another zone that goes
+  # green while a developer's box goes red is a day lost to a timestamp.
+  TZ: UTC
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  quality:
+    name: lint, types, tests, migrations
+    runs-on: ubuntu-latest
+
+    # A throwaway Postgres, never Neon (ADR-0008). CI holds no production credential and
+    # cannot reach the real database — a pipeline that can drop the dataset is a worse risk
+    # than a minor version difference against the managed instance.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: quant
+          POSTGRES_PASSWORD: quant
+          POSTGRES_DB: quant
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U quant"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://quant:quant@localhost:5432/quant
+      # tests/conftest.py hard-fails when these two resolve to the same database, so the
+      # test database is a genuinely separate one, exactly as it is locally.
+      TEST_DATABASE_URL: postgresql://quant:quant@localhost:5432/quant_test
+      ENVIRONMENT: local
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python ${{ env.PYTHON_VERSION }}
+        run: uv python install ${{ env.PYTHON_VERSION }}
+
+      - name: Install the project
+        # `uv sync --frozen` is the hard rule in docs/02 §1.3 once a lockfile is committed;
+        # until then the editable install with dev extras is the equivalent.
+        run: |
+          uv venv
+          uv pip install -e ".[dev]"
+
+      - name: Create the test database
+        run: |
+          PGPASSWORD=quant psql -h localhost -U quant -d quant -c 'CREATE DATABASE quant_test;'
+
+      - name: ruff (lint)
+        run: uv run ruff check .
+
+      - name: ruff (format)
+        run: uv run ruff format --check .
+
+      - name: mypy
+        run: uv run mypy packages services
+
+      - name: Migrations apply from empty
+        # P0 check 1. Proves the schema builds from nothing — the check that catches a
+        # migration which only works because your local database already had the table.
+        run: uv run alembic upgrade head
+
+      - name: Migrations are reversible
+        # P0 check 2, and the one a lazy `downgrade(): pass` slips past. docs/02 §3.4 makes
+        # reversibility a rule; this is what enforces it.
+        run: |
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+
+      - name: Unit tests
+        run: uv run pytest tests/unit -v
+
+      - name: Compliance tests
+        # These may never be skipped or xfailed (docs/07 §4). `-p no:randomly` is not used:
+        # order-dependence in a compliance suite is itself a defect worth surfacing.
+        run: uv run pytest tests/compliance -v --strict-markers
+
+      - name: No skipped invariants
+        # docs/10 §6.4: the universal gate is "zero skips among the invariants that have
+        # switched on" — I4/I5/I10 from P0. A skipped invariant is a green badge over an
+        # unasked question, which is the only thing worse than a red one.
+        run: uv run pytest -m invariant --strict-markers -q -rs --no-header | tee /tmp/inv.txt
+          && ! grep -qE '^SKIPPED' /tmp/inv.txt
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # gitleaks needs history, not just the tip
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+# --- Stages deliberately NOT here yet (docs/10 §6.1 defers them) ----------------------
+#
+#  import-linter        turn on when `apps/` and `services/` both hold real code — today the
+#                       contract in pyproject.toml is real but there is nothing to violate.
+#                       Switch on: P1.
+#  pytest tests/golden  the golden set does not exist until P3 (TG6). An empty directory
+#                       passing is a green badge that means nothing.
+#  pytest tests/synthetic  P7 — the backtester's known-answer and synthetic suites.
+#  lint: no raw SQL in packages/ml and packages/backtest
+#                       R-21's own recommended mitigation against lookahead via restatement.
+#                       docs/10 §6.3: a P8 test asserts it but NO TASK CONFIGURES IT, and
+#                       /packages/backtest is never covered. Switch on: P7, with the package.

@@ -213,11 +213,17 @@ retrofitted.
 > **Update this table at every phase transition.** It is the only place in the document set
 > that claims what is done. Keeping it honest is what stops you from building on sand.
 
-**Current phase: P0 — Foundation & Rails. Status: NOT STARTED.**
+**Current phase: P0 — Foundation & Rails. Status: 🧪 BUILT (spine), 16 of 17 checks passed.**
+
+The spine from [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §6.1 is built and
+verified on 2026-09-02: 17 tables migrated on Neon PostgreSQL 18.6, the mode gate enforced and
+adversarially tested, 159 tests passing with zero skips, a backup dumped and actually restored.
+**It is 🧪 and not ✅ for one reason: check 13 (CI green on a PR) cannot run — there is no
+GitHub remote yet.** The workflow is written and waiting. See "what is left" below.
 
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
-| P0 Foundation & Rails | ⬜ Not started | — | — | — | Next up |
+| P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
 | P1 Macro Backdrop | ⬜ Not started | — | — | — | |
 | P2 US Company Data | ⬜ Not started | — | — | — | |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
@@ -245,26 +251,36 @@ retrofitted.
 | Specification documents (6 in root) | ✅ Written |
 | This planning set (`docs/`, 11 files) | ✅ Written · audited 2026-08-30 · [09 glossary](09_GLOSSARY.md) incomplete (§1 of 10) |
 | Pre-build audit | ✅ Complete — [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) |
-| Git repository | ❌ Not initialised |
-| Python environment | ❌ **3.14.3 installed; the plan pins `>=3.11,<3.13`.** `uv python install 3.12` first |
-| `uv` | ❌ Not installed |
-| PostgreSQL client (`psql`, `pg_dump`) | ❌ Not on PATH — P0 checks 1, 14 and 16 need it |
-| Docker | ✅ 29.6.1 |
+| Git repository | ✅ Initialised, `main` + `p0-spine`; `.env` git-ignored before the first commit |
+| Python environment | ✅ CPython **3.12.14** via `uv`, `.venv` at the repo root |
+| `uv` | ✅ 0.12.8 (winget; **not on the inherited PATH** — restart the shell, or call it by absolute path) |
+| PostgreSQL client (`psql`, `pg_dump`) | ⚠️ Still not on PATH, and no longer needed: the DB is Neon and the backup path runs `postgres:18` in Docker |
+| Docker | ✅ 29.6.1 (Desktop must be *running* for backup/restore) |
 | Node (needed at P9) | ✅ v24.14.0 |
-| Monorepo scaffold | ❌ None |
-| Database / DDL applied | ❌ None yet — but [08](08_DATA_CONTRACTS.md) is now complete and migratable (52 tables, zero unresolved FKs) |
-| FastAPI service | ❌ None |
-| Any application code | ❌ None |
-| CI pipeline | ❌ None |
+| Monorepo scaffold | ✅ 4 packages (`common`, `compliance`, `ingestion`, `scheduler`), the rest reserved — `packages/README.md` |
+| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 17 spine tables + `alembic_version` ([ADR-0008](adr/0008-neon-managed-postgres.md)). The other ~35 tables are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
+| FastAPI service | ✅ `/health`, `/v1/public/ping`, `/v1/personal/ping` — mode gate, bearer auth, audit row per request |
+| Any application code | ✅ The spine. No financial logic, by design |
+| CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed — no remote** |
+| Test suite | ✅ 159 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
+| Backup | ✅ Dumped, verified, copied, **and restored** 2026-09-02 — [REVIEW_CADENCE](REVIEW_CADENCE.md) row 2. Off-site: still zero |
+| ADR log | ✅ [0001–0008](adr/README.md) |
 
 ### The immediate next actions
 
 Ordered. The first four are the difference between P0.4 running and not running.
 
-- [ ] Read [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) end to end — it is the
-      shortest of the eleven and it changes the DDL, two gates and the backup script
-- [ ] Install the missing prerequisites (§1 there): `uv`, Python 3.12, Postgres client tools,
-      BitLocker
+- [x] ~~Read [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) end to end~~
+- [x] ~~Install the missing prerequisites (§1 there)~~ — `uv` and Python 3.12 done.
+      **Postgres client tools deliberately skipped** (Neon + Docker `postgres:18` replace them).
+      **BitLocker is still not enabled** — `OPERATIONS.md` §2.5 names an unencrypted laptop in
+      its threat model, and both backup copies live on this disk
+- [ ] **Create the private GitHub remote and push.** This is the only thing standing between
+      P0 and ✅: check 13 (CI green on a PR) cannot run without it. Then protect `main` with
+      **required status checks, approvals OFF while solo** ([10](10_PRE_BUILD_CORRECTIONS.md)
+      §6.4 — GitHub will not let you approve your own PR)
+- [ ] Install the pre-commit hooks (`.venv\Scripts\pre-commit.exe install`). Configured, not
+      yet installed — until then the secret guard is not actually in the loop
 - [x] ~~Apply the schema corrections into [08_DATA_CONTRACTS](08_DATA_CONTRACTS.md)~~ —
       **done 2026-08-30.** 52 tables, all FK targets resolve, `period_type` present, the
       invalid composite FK fixed, point-in-time keys corrected
