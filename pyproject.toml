@@ -1,0 +1,98 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant-model"
+version = "0.0.1"
+description = "Centralised financial data hub for Nigerian and US listed companies"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "sqlalchemy>=2.0",
+  "alembic",
+  "psycopg[binary]",
+  "pydantic>=2",
+  "pydantic-settings",
+  "python-dotenv",
+  "structlog",
+  "httpx",
+  "apscheduler",
+]
+
+[project.optional-dependencies]
+# The analytical / ingestion stack lands with the phase that first needs it
+# (P1 onward). Keeping it out of the default install keeps `uv sync` in P0 to
+# seconds and keeps CI from building wheels it does not exercise.
+data = [
+  "pandas",
+  "numpy",
+  "pandas-ta-classic",
+  "pdfplumber",
+  "pymupdf",
+  "anthropic",
+]
+ui = [
+  "streamlit",
+  "python-telegram-bot",
+]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "hypothesis",
+  "ruff",
+  "mypy",
+  "import-linter",
+  "pre-commit",
+]
+
+[tool.setuptools]
+packages = ["packages", "services"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "invariant: SPEC 4.1 invariants — NEVER skip",
+  "slow: excluded from the fast loop",
+  "live: touches the network — excluded from CI",
+  "gate: phase-gate only",
+]
+
+[tool.ruff]
+line-length = 100
+# py311, not py312, because `requires-python` allows 3.11. Telling ruff to assume 3.12
+# makes it suggest PEP 695 generics (`def f[T]()`), which are a syntax error on 3.11.
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "N"]
+ignore = [
+  # FastAPI's `Depends()` in an argument default is the framework's documented idiom,
+  # not the mutable-default bug B008 exists to catch.
+  "B008",
+  # `class Mode(str, Enum)` is deliberate and must not become `StrEnum`. They differ in
+  # `str(Mode.PUBLIC)`: the mixin gives "Mode.PUBLIC", StrEnum gives "public". That value
+  # reaches `audit_log.mode` and response bodies, so "modernising" it silently rewrites
+  # what the compliance audit trail records. See packages/compliance/mode.py.
+  "UP042",
+]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true
+
+[tool.importlinter]
+root_package = "packages"
+# `apps` and `services` are outside root_package, so import-linter treats them as external
+# and refuses to run the contract without this. Without it the command exits non-zero with
+# a config error, which reads like "no violations" to a pipeline that only checks output.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "packages must not import apps or services (ADR-0006)"
+type = "forbidden"
+source_modules = ["packages"]
+forbidden_modules = ["apps", "services"]

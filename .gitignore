@@ -42,3 +42,6 @@ Thumbs.db
 # Claude Code local tooling (user-installed skills incl. 5.8MB of fonts; not project code)
 .claude/skills/
 .claude/settings.local.json
+
+# Operational logs (backup runs, etc.)
+logs/
