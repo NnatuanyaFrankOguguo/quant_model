@@ -30,6 +30,10 @@ repos:
       - id: check-toml
       - id: end-of-file-fixer
       - id: trailing-whitespace
+        # Two trailing spaces are a hard line break in Markdown. Without this flag the
+        # hook silently reflows the planning documents, which are the project's source of
+        # truth — and a diff full of invisible whitespace churn is one nobody reads.
+        args: [--markdown-linebreak-ext=md]
       - id: detect-private-key
       - id: no-commit-to-branch
         # `main` is protected by required status checks; work reaches it through a PR.

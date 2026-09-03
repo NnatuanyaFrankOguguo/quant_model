@@ -1516,7 +1516,7 @@ For each of ~10 chosen company-years: the PDF, plus a hand-verified JSON of expe
 **double-checked by a second person** ([TEAM_BRIEF 2.2-C](../TEAM_BRIEF.md)). Stored in
 `tests/golden/`, version-controlled, and treated as the specification of correct extraction.
 
-**Choose deliberately for coverage, not convenience.** Include at least two banks — 
+**Choose deliberately for coverage, not convenience.** Include at least two banks —
 [TEAM_BRIEF.md Part 3](../TEAM_BRIEF.md) warns that "banks break everything built for
 industrials", because their statement structure genuinely differs (interest income rather than
 revenue, a fundamentally different balance sheet shape). A golden set of only industrials will

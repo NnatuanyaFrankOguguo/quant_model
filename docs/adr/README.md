@@ -24,9 +24,17 @@ one of them contradicts `SPEC.md`, the ADR wins on the point it decides, and onl
 | [0006](0006-streamlit-is-a-thin-client.md) | Streamlit is a thin client; business logic in a callback is a defect | ACCEPTED | AD-3 |
 | [0007](0007-multi-user-from-day-one.md) | Multi-user from day one; everything keyed by principal | ACCEPTED | AD-4 |
 | [0008](0008-neon-managed-postgres.md) | Neon managed PostgreSQL, not local Docker | ACCEPTED | Amends 0001; reframes TG19 |
+| [0009](0009-object-storage-and-immutability.md) | Content-addressed, write-once document storage; local disk at P1, B2 at P3 | ACCEPTED (policy), **not implemented** | TG17 (P0.11) |
+| [0010](0010-bulk-export-via-exportview.md) | Bulk export goes through a versioned `ExportView`, never a raw `SELECT` | ACCEPTED (design), **built at P12** | TG22 |
 
 0002 and 0004–0007 were already written in [docs/01_ARCHITECTURE.md](../01_ARCHITECTURE.md) §9
-and are copied here rather than rewritten. 0001, 0003 and 0008 were written during P0.
+and are copied here rather than rewritten. 0001, 0003, 0008, 0009 and 0010 were written during P0.
+
+**0009 and 0010 decide things P0 does not build.** That is deliberate, and it is the direct
+answer to [docs/10](../10_PRE_BUILD_CORRECTIONS.md)'s central finding: work recorded in an
+appendix and never written into a roadmap does not get done. Both decisions are cheap today and
+expensive to retrofit — object storage because P3.1 already assumes it exists, bulk export
+because its obvious implementation defeats three of the five compliance mechanisms.
 
 ## When to write one
 

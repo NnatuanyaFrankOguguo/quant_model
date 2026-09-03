@@ -279,8 +279,12 @@ Ordered. The first four are the difference between P0.4 running and not running.
       P0 and ✅: check 13 (CI green on a PR) cannot run without it. Then protect `main` with
       **required status checks, approvals OFF while solo** ([10](10_PRE_BUILD_CORRECTIONS.md)
       §6.4 — GitHub will not let you approve your own PR)
-- [ ] Install the pre-commit hooks (`.venv\Scripts\pre-commit.exe install`). Configured, not
-      yet installed — until then the secret guard is not actually in the loop
+- [x] ~~Install the pre-commit hooks~~ — installed 2026-09-03 and run over all files:
+      gitleaks, ruff, ruff-format, yaml/toml, large files, private keys, `no-commit-to-branch`
+- [ ] **Create a Backblaze B2 account before P3 collects documents at scale**
+      ([ADR-0009](adr/0009-object-storage-and-immutability.md)). ~$0.10/month at this volume.
+      It needs a payment method, so the build cannot do it for itself, and P3.1 assumes the
+      storage already exists. Belongs in P3's entry criteria
 - [x] ~~Apply the schema corrections into [08_DATA_CONTRACTS](08_DATA_CONTRACTS.md)~~ —
       **done 2026-08-30.** 52 tables, all FK targets resolve, `period_type` present, the
       invalid composite FK fixed, point-in-time keys corrected
