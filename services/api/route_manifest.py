@@ -28,7 +28,13 @@ from dataclasses import dataclass
 from enum import Enum
 
 from packages.compliance.mode import Mode
-from services.api.schemas import Health, PersonalPing, PublicPing
+from services.api.schemas import (
+    Health,
+    MacroObservations,
+    MacroSeriesList,
+    PersonalPing,
+    PublicPing,
+)
 
 __all__ = ["MANIFEST", "RouteClass", "RouteSpec", "registered_routes"]
 
@@ -59,6 +65,10 @@ class RouteSpec:
 MANIFEST: dict[str, RouteSpec] = {
     "GET /health": RouteSpec(RouteClass.INFRA, None, Health),
     "GET /v1/public/ping": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, PublicPing),
+    "GET /v1/public/macro/series": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, MacroSeriesList),
+    "GET /v1/public/macro/series/{code}/observations": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, MacroObservations
+    ),
     "GET /v1/personal/ping": RouteSpec(RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, PersonalPing),
 }
 

@@ -15,6 +15,9 @@ build breaks rather than the gate.
 
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
+
 from pydantic import BaseModel, Field
 
 from packages.compliance.mode import Mode
@@ -23,6 +26,10 @@ from packages.compliance.response_types import register_public_type
 __all__ = [
     "ErrorBody",
     "Health",
+    "MacroObservationPoint",
+    "MacroObservations",
+    "MacroSeriesInfo",
+    "MacroSeriesList",
     "PersonalPing",
     "PersonalSignal",
     "PublicPing",
@@ -75,6 +82,88 @@ class PersonalSignal(BaseModel):
     calibrated_prob: float
     position_size: float
     backtest_run_id: int
+
+
+class MacroSeriesInfo(BaseModel):
+    """One macro series, with the two things `CLAUDE.md` requires on every figure.
+
+    Every response carries an **as-of date** and a **staleness flag**, because a number on a
+    screen with neither is a number a reader will trust for longer than it deserves.
+    ``attribution`` travels with the data rather than living in a footer: the licensing
+    register says attribution is required for these sources, and a client that never
+    receives the text cannot display it.
+    """
+
+    code: str
+    name: str
+    unit: str
+    frequency: str
+    base_period: str | None = Field(
+        default=None,
+        description="'CPI 2024=100'. Rebasing changes past values, so it is part of identity.",
+    )
+    source_name: str
+    attribution: str | None = None
+    expected_lag_days: int
+    observation_count: int
+    latest_as_of: date | None = Field(
+        default=None, description="The period the newest observation describes"
+    )
+    latest_known_as_of: date | None = Field(
+        default=None, description="When that observation was published — not the same date"
+    )
+    latest_value: Decimal | None = None
+    days_since_as_of: int | None = None
+    is_stale: bool | None = Field(
+        default=None,
+        description=(
+            "True when the newest period is older than expected_lag_days. **null means not "
+            "applicable** — an irregular series such as the MPR, or one with no data yet — "
+            "never 'fresh'."
+        ),
+    )
+
+
+@register_public_type
+class MacroSeriesList(BaseModel):
+    """Published government statistics. Public-tier content in every mode.
+
+    "Public tier" is the *content class*, not who may log in: access is still owner plus
+    family until the licence changes (`CLAUDE.md`'s access model).
+    """
+
+    series: list[MacroSeriesInfo]
+    as_of: date = Field(description="The date staleness was evaluated against, in UTC")
+
+
+class MacroObservationPoint(BaseModel):
+    """One observation at one vintage."""
+
+    as_of_date: date = Field(description="The period this value describes")
+    known_as_of: date = Field(description="The date this value was published")
+    value: Decimal | None = Field(
+        default=None,
+        description="null means genuinely no observation. It is never zero-filled.",
+    )
+
+
+@register_public_type
+class MacroObservations(BaseModel):
+    """A series and its points, at the newest vintage visible on ``as_known_on``."""
+
+    code: str
+    name: str
+    unit: str
+    source_name: str
+    attribution: str | None = None
+    as_known_on: date | None = Field(
+        default=None,
+        description=(
+            "When set, vintages published after this date were excluded — the "
+            "point-in-time view. When null, each period shows its newest vintage."
+        ),
+    )
+    observations: list[MacroObservationPoint]
 
 
 class ErrorBody(BaseModel):

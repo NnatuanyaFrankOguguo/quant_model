@@ -35,6 +35,10 @@ data = [
 ]
 ui = [
   "streamlit",
+  # The dashboard builds DataFrames for st.dataframe/st.line_chart, so pandas is a
+  # dependency of the UI extra as well as of the data extra. Installing `[ui]` alone must
+  # give a working dashboard.
+  "pandas",
   "python-telegram-bot",
 ]
 dev = [
@@ -61,6 +65,12 @@ markers = [
 
 [tool.ruff]
 line-length = 100
+# Ruff formats Python code blocks embedded in Markdown. On this repository that means
+# `ruff format .` silently rewrites the planning documents — which are the source of truth,
+# whose snippets are illustrative rather than executable, and whose deliberate comment
+# alignment the formatter destroys. It would also make CI's `ruff format --check .` fail on
+# eight documents that contain no code we ship.
+extend-exclude = ["*.md"]
 # py311, not py312, because `requires-python` allows 3.11. Telling ruff to assume 3.12
 # makes it suggest PEP 695 generics (`def f[T]()`), which are a syntax error on 3.11.
 target-version = "py311"
