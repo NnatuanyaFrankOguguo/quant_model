@@ -224,7 +224,7 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
-| P1 Macro Backdrop | ⬜ Not started | — | — | — | |
+| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 10/13 | **Needs data**: no key, no CSV yet |
 | P2 US Company Data | ⬜ Not started | — | — | — | |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
@@ -243,6 +243,26 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 
 **A phase is only ✅ when its test checkpoint passes**, not when the code is written.
 "Built but not verified" is 🧪, and 🧪 is not permission to start the next phase.
+
+**P1, stated precisely.** Built and tested: P1.0 the document store, P1.1 the connector
+contract, P1.2 FRED, P1.4 the API, P1.5 the scheduler and health check, P1.6 the dashboard,
+P1.7 the manual CSV path. Checks 1–10 of the P1 checkpoint pass.
+
+**What is not done, and why it is not a code problem.** Checks 11–13 and the exit criterion
+*"ten series populated with real values"* need **actual data**, and there is none: no
+`FRED_API_KEY` is set, and no CSV has been uploaded. Both are owner actions —
+[data/manual/README.md](../data/manual/README.md) is the 30-minute path in, and needs no key.
+The eleven series exist and render with an honest "no data yet" state.
+
+No macro figures were invented to fill the gap. A fabricated CPI print carrying a provenance
+chain that claims NBS published it is precisely the thing this system exists to prevent, and
+a dev database is exactly where such a number would quietly become "the number we have".
+
+**P1.3 (CBN/NBS/DMO scraping) is deliberately not built.** `docs/03` P1.3's own
+recommendation is a scope cut — scrape CBN, mirror NBS via FRED, defer DMO to P4 where the
+PDF toolchain exists. Even the CBN half is unwritten: it is the 🔴 FRAGILE task in this
+phase, and the manual CSV path (P1.7) covers the same series without it. **Until a scraper
+exists, every Nigerian series is fed by hand**, which is the guaranteed path, not the fast one.
 
 ### What exists right now
 
