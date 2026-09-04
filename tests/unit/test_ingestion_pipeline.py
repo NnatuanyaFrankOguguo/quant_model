@@ -1,0 +1,233 @@
+"""The full connector loop against the real database. P1.1 + P1.7.
+
+`fetch → store raw → parse → write → connector_runs row`, asserted end to end, because the
+ordering is the part of the contract that unit tests of `parse()` cannot reach. In particular
+this is where `rows_written` is proved to count rows *inserted* rather than records parsed —
+the distinction the silent-failure detector depends on.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from packages.common.models import ConnectorRun, MacroObservation, MacroSeries, SourceDocument
+from packages.common.storage import LocalDiskBackend
+from packages.ingestion import base as ingestion_base
+from packages.ingestion.base import register
+from packages.ingestion.manual_csv import ManualCsvConnector
+
+CSV = (
+    "series_code,as_of_date,known_as_of,value\n"
+    "NG_CPI_YOY,2026-07-31,2026-08-15,34.2\n"
+    "NG_CPI_CORE,2026-07-31,2026-08-15,\n"
+    "NG_MPR,2026-07-22,2026-07-22,27.50\n"
+)
+
+
+@pytest.fixture
+def csv_path(tmp_path):
+    path = tmp_path / "nbs_july.csv"
+    # write_bytes, not write_text: on Windows write_text translates "\n" to "\r\n", so the
+    # bytes on disk would not equal CSV.encode() and the round-trip assertion below would
+    # be testing the platform's newline policy rather than the store.
+    path.write_bytes(CSV.encode("utf-8"))
+    return path
+
+
+@pytest.fixture
+def local_store(tmp_path, monkeypatch) -> LocalDiskBackend:
+    """Point the document store at a temp directory for the duration of the test."""
+    store = LocalDiskBackend(tmp_path / "documents")
+    monkeypatch.setattr(ingestion_base, "get_storage", lambda: store)
+    return store
+
+
+def _observation_count(session: Session) -> int:
+    return session.execute(select(func.count()).select_from(MacroObservation)).scalar_one()
+
+
+def test_run_writes_observations_document_and_health_row(
+    db_session: Session, csv_path, local_store: LocalDiskBackend
+) -> None:
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+    db_session.commit()
+
+    before = _observation_count(db_session)
+    result = connector.run(db_session, path=csv_path)
+
+    assert result.status == "ok"
+    assert result.records_parsed == 3
+    assert result.rows_written == 3
+    assert _observation_count(db_session) == before + 3
+
+    # The raw CSV is in the store, addressed by its own hash, and pointed at by a row.
+    document = db_session.execute(
+        select(SourceDocument).where(SourceDocument.id == result.source_document_id)
+    ).scalar_one()
+    assert local_store.verify(document.sha256) is True
+    assert local_store.get(document.sha256) == CSV.encode()
+    assert document.media_type == "text/csv"
+
+    # Every figure points at that exact file — provenance, not a claim about provenance.
+    series_id = db_session.execute(
+        select(MacroSeries.id).where(MacroSeries.code == "NG_CPI_YOY")
+    ).scalar_one()
+    observation = db_session.execute(
+        select(MacroObservation).where(
+            MacroObservation.series_id == series_id,
+            MacroObservation.as_of_date == dt.date(2026, 7, 31),
+        )
+    ).scalar_one()
+    assert observation.source_document_id == document.id
+    assert observation.value == Decimal("34.2")
+    # Published mid-September for a July period: the two dates differ, and that is the point.
+    assert observation.known_as_of == dt.date(2026, 8, 15)
+
+    run_row = (
+        db_session.execute(
+            select(ConnectorRun)
+            .where(ConnectorRun.connector_name == connector.name)
+            .order_by(ConnectorRun.id.desc())
+        )
+        .scalars()
+        .first()
+    )
+    assert run_row is not None
+    assert run_row.status == "ok"
+    assert run_row.rows_written == 3
+
+
+@pytest.mark.invariant
+def test_absent_value_is_stored_null_never_zero(
+    db_session: Session, csv_path, local_store: LocalDiskBackend
+) -> None:
+    """SPEC 4.1: never infer missing financial data."""
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+    connector.run(db_session, path=csv_path)
+
+    series_id = db_session.execute(
+        select(MacroSeries.id).where(MacroSeries.code == "NG_CPI_CORE")
+    ).scalar_one()
+    value = db_session.execute(
+        select(MacroObservation.value).where(MacroObservation.series_id == series_id)
+    ).scalar_one()
+    assert value is None
+
+
+def test_rerunning_the_same_file_writes_no_new_rows(
+    db_session: Session, csv_path, local_store: LocalDiskBackend
+) -> None:
+    """`rows_written` counts rows INSERTED, not records parsed.
+
+    This is the whole basis of the silent-failure detector: a connector that re-parses the
+    same three records forever must report 0, not 3, or `status='ok' AND rows_written=0`
+    stops meaning anything.
+    """
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+    first = connector.run(db_session, path=csv_path)
+    second = connector.run(db_session, path=csv_path)
+
+    assert first.rows_written == 3
+    assert second.records_parsed == 3
+    assert second.rows_written == 0
+    assert second.status == "ok"
+
+    # The identical file is stored once — the key is the content.
+    documents = db_session.execute(select(func.count()).select_from(SourceDocument)).scalar_one()
+    assert documents == 1
+    assert second.source_document_id == first.source_document_id
+
+
+def test_a_revision_is_a_new_row_not_an_update(
+    db_session: Session, tmp_path, local_store: LocalDiskBackend
+) -> None:
+    """A restated figure inserts a second vintage. Nothing is ever overwritten.
+
+    `known_as_of` sits inside the primary key precisely so this works, and migration 0002's
+    `no_update` trigger means it holds even for someone with a SQL client.
+    """
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+
+    original = tmp_path / "v1.csv"
+    original.write_text(
+        "series_code,as_of_date,known_as_of,value\nNG_GDP_GROWTH_YOY,2026-06-30,2026-08-25,3.1\n",
+        encoding="utf-8",
+    )
+    revised = tmp_path / "v2.csv"
+    revised.write_text(
+        "series_code,as_of_date,known_as_of,value\nNG_GDP_GROWTH_YOY,2026-06-30,2026-11-20,3.4\n",
+        encoding="utf-8",
+    )
+    connector.run(db_session, path=original)
+    connector.run(db_session, path=revised)
+
+    series_id = db_session.execute(
+        select(MacroSeries.id).where(MacroSeries.code == "NG_GDP_GROWTH_YOY")
+    ).scalar_one()
+    rows = db_session.execute(
+        select(MacroObservation.known_as_of, MacroObservation.value)
+        .where(MacroObservation.series_id == series_id)
+        .order_by(MacroObservation.known_as_of)
+    ).all()
+    assert [(r.known_as_of, r.value) for r in rows] == [
+        (dt.date(2026, 8, 25), Decimal("3.1")),
+        (dt.date(2026, 11, 20), Decimal("3.4")),
+    ]
+
+
+def test_a_failing_run_still_writes_a_health_row(
+    db_session: Session, tmp_path, local_store: LocalDiskBackend
+) -> None:
+    """A connector that dies silently is indistinguishable from one nobody scheduled."""
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+    db_session.commit()
+
+    result = connector.run(db_session, path=tmp_path / "does_not_exist.csv")
+
+    assert result.status == "error"
+    assert result.rows_written == 0
+    assert "FileNotFoundError" in (result.error or "")
+
+    run_row = (
+        db_session.execute(
+            select(ConnectorRun)
+            .where(ConnectorRun.connector_name == connector.name)
+            .order_by(ConnectorRun.id.desc())
+        )
+        .scalars()
+        .first()
+    )
+    assert run_row is not None
+    assert run_row.status == "error"
+    assert run_row.error is not None
+
+
+def test_unknown_series_codes_are_skipped_not_invented(
+    db_session: Session, tmp_path, local_store: LocalDiskBackend
+) -> None:
+    """A connector must not create a series nobody chose (docs/03 P1: the list is decided)."""
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+
+    path = tmp_path / "unknown.csv"
+    path.write_text(
+        "series_code,as_of_date,known_as_of,value\nNOT_A_REAL_SERIES,2026-07-31,2026-08-15,1.0\n",
+        encoding="utf-8",
+    )
+    before_series = db_session.execute(select(func.count()).select_from(MacroSeries)).scalar_one()
+    result = connector.run(db_session, path=path)
+
+    assert result.records_parsed == 1
+    assert result.rows_written == 0
+    after_series = db_session.execute(select(func.count()).select_from(MacroSeries)).scalar_one()
+    assert after_series == before_series

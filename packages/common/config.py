@@ -93,6 +93,15 @@ class Settings(BaseSettings):
     environment: str = "local"
     app_version: str = "0.0.1"
 
+    # P1.0 / ADR-0009. Local disk is the P1 backend; a remote bucket arrives at P3 entry
+    # behind the same StorageBackend interface. Git-ignored, and covered by scripts/backup.ps1.
+    documents_dir: str = "data/documents"
+
+    # P1.2. Free key from fred.stlouisfed.org. Absent is a legitimate state: the FRED
+    # connector refuses to run rather than half-running, and the manual CSV path (P1.7)
+    # needs no key at all — which is the point of having it.
+    fred_api_key: str | None = None
+
     def __repr__(self) -> str:
         """Credential-free repr. See the module docstring for why this is not optional."""
         return (
