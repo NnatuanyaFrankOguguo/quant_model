@@ -19,13 +19,24 @@ from __future__ import annotations
 import sys
 
 from packages.common.db import get_session
+from packages.ingestion.cbn import CbnExchangeRateConnector, CbnMoneyMarketConnector
 from packages.ingestion.fred import FRED_SERIES
 from packages.ingestion.manual_csv import MANUAL_SOURCES
 from packages.scheduler.runner import check_health
 
 #: What we expect to see runs from. FRED runs once per series; the manual paths run when a
 #: human feeds them, which is monthly rather than daily.
-EXPECTED_CONNECTORS = {"fred", *(f"manual_csv_{s.lower()}" for s in MANUAL_SOURCES)}
+#:
+#: **Every connector must be listed here, including ones that are currently running fine.**
+#: `check_health` can only report on runs that exist, so a connector missing from this set
+#: disappears from the report entirely once it stops running — the failure looks like
+#: silence, which is the one failure mode this script exists to break.
+EXPECTED_CONNECTORS = {
+    "fred",
+    CbnExchangeRateConnector.name,
+    CbnMoneyMarketConnector.name,
+    *(f"manual_csv_{s.lower()}" for s in MANUAL_SOURCES),
+}
 
 
 def main(argv: list[str] | None = None) -> int:
