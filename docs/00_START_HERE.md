@@ -224,7 +224,7 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
-| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 10/13 | **Needs data**: no key, no CSV yet |
+| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 11/13 | 2 of 11 series live from CBN |
 | P2 US Company Data | ⬜ Not started | — | — | — | |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
@@ -248,21 +248,40 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 contract, P1.2 FRED, P1.4 the API, P1.5 the scheduler and health check, P1.6 the dashboard,
 P1.7 the manual CSV path. Checks 1–10 of the P1 checkpoint pass.
 
-**What is not done, and why it is not a code problem.** Checks 11–13 and the exit criterion
-*"ten series populated with real values"* need **actual data**, and there is none: no
-`FRED_API_KEY` is set, and no CSV has been uploaded. Both are owner actions —
-[data/manual/README.md](../data/manual/README.md) is the 30-minute path in, and needs no key.
-The eleven series exist and render with an honest "no data yet" state.
+**P1.3 CBN is built and two series carry real data.** 6,052 NFEM USD/NGN observations back to
+2001-12-10 and 18 months of the Monetary Policy Rate, ingested from CBN's own endpoints and
+rendering with as-of dates and freshness. The point-in-time view is proven on real history:
+USD/NGN as known on 2015-06-30 returns ₦196.4500, against ₦1,320.7160 today.
 
-No macro figures were invented to fill the gap. A fabricated CPI print carrying a provenance
-chain that claims NBS published it is precisely the thing this system exists to prevent, and
-a dev database is exactly where such a number would quietly become "the number we have".
+**R-02 had already happened before we wrote a line.** The `.asp` URLs the source documents
+name are 404 — CBN rebuilt the site and the tables now render client-side. The data is
+reachable as JSON, which is better than scraping HTML but is an undocumented endpoint with no
+contract, so P1.7's manual CSV path stays wired rather than being retired.
 
-**P1.3 (CBN/NBS/DMO scraping) is deliberately not built.** `docs/03` P1.3's own
-recommendation is a scope cut — scrape CBN, mirror NBS via FRED, defer DMO to P4 where the
-PDF toolchain exists. Even the CBN half is unwritten: it is the 🔴 FRAGILE task in this
-phase, and the manual CSV path (P1.7) covers the same series without it. **Until a scraper
-exists, every Nigerian series is fed by hand**, which is the guaranteed path, not the fast one.
+**What is still missing is data, not code.** Nine of eleven series are empty: NBS (CPI, GDP)
+and DMO (debt, bond stop rates) have no connector, and the four FRED series need a key that
+is not set. Both remaining paths are owner actions — a free key from `fred.stlouisfed.org`,
+or [data/manual/README.md](../data/manual/README.md), which needs no key at all. The exit
+criterion *"ten series populated with real values"* is therefore not met.
+
+No macro figures were invented to close that gap. A fabricated CPI print carrying a
+provenance chain that claims NBS published it is precisely what this system exists to
+prevent, and a dev database is exactly where such a number quietly becomes "the number we
+have".
+
+**Checkpoint status: 11 of 13.** Checks 1–10 pass. Check 11 (open the dashboard beside the
+source page and confirm the number *and the date*) is half done — value and date come from
+the same JSON record and a test pins the mapping, but the visual cross-check against CBN's
+rendered page is still worth doing by eye. Check 12 needs an NBS CPI figure to reconcile
+against its release, and there is none yet.
+
+**A known limitation, recorded rather than smoothed over.** CBN republishes corrected rates
+without saying when it corrected them — six USD dates carry two rows and four disagree, one
+by 3.4%. The later record is kept and the superseded vintage is not, so a backtest deciding
+on 2024-02-22 would have acted on a rate this table no longer holds. Inventing a correction
+date would put a fabricated value in the column whose whole purpose is to say when something
+was knowable. Closing it needs a CBN publication calendar or our own daily snapshots — P3/P7
+work, and it belongs in P7's pre-registration.
 
 ### What exists right now
 
