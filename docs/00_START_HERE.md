@@ -224,7 +224,7 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
-| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 11/13 | 2 of 11 series live from CBN |
+| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 11/13 | 4 of 13 series live from CBN |
 | P2 US Company Data | ⬜ Not started | — | — | — | |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
@@ -248,10 +248,26 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 contract, P1.2 FRED, P1.4 the API, P1.5 the scheduler and health check, P1.6 the dashboard,
 P1.7 the manual CSV path. Checks 1–10 of the P1 checkpoint pass.
 
-**P1.3 CBN is built and two series carry real data.** 6,052 NFEM USD/NGN observations back to
-2001-12-10 and 18 months of the Monetary Policy Rate, ingested from CBN's own endpoints and
-rendering with as-of dates and freshness. The point-in-time view is proven on real history:
-USD/NGN as known on 2015-06-30 returns ₦196.4500, against ₦1,320.7160 today.
+**P1.3 CBN is built and four series carry real data.** 6,052 NFEM USD/NGN observations back
+to 2001-12-10, 18 months of the Monetary Policy Rate, and 18 months of headline and core CPI,
+ingested from CBN's own endpoints and rendering with as-of dates and freshness. The
+point-in-time view is proven on real history: USD/NGN as known on 2015-06-30 returns
+₦196.4500, against ₦1,320.7160 today.
+
+**The CPI figures are a mirror and are labelled as one.** Nigeria's CPI is compiled by NBS;
+CBN republishes it, and CBN is what we can currently reach. Those figures therefore land in
+`NG_CPI_YOY_CBN` / `NG_CPI_CORE_CBN`, and the NBS-attributed primaries stay **empty on
+purpose** — attribution shown to a reader comes from the series, so filling `NG_CPI_YOY` from
+CBN bytes would print NBS's name over CBN's data. An empty primary beside a populated mirror
+is what keeps `docs/03` P1.3's warning about second-hand Nigerian sources visible.
+
+**The two monthly CBN series need opposite `known_as_of` treatment**, and the dashboard now
+shows both: CPI for period 2026-07-31 published 2026-08-31, beside the MPR with both dates
+equal. The MPC announces immediately, so a month's policy rate was public within that month;
+a month's CPI is computed after it ends. Month-end for CPI would have been textbook
+lookahead. CBN publishes no release date, so `known_as_of` is **bounded** at the last day of
+the following month — never earlier than the real release. [NEEDS VERIFICATION] against NBS's
+release calendar.
 
 **R-02 had already happened before we wrote a line.** The `.asp` URLs the source documents
 name are 404 — CBN rebuilt the site and the tables now render client-side. The data is
