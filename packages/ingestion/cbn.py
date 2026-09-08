@@ -8,11 +8,20 @@ itself turned out to be reachable as JSON, which is better than scraping HTML bu
 **undocumented internal endpoint with no contract**: it can change or vanish without notice,
 which is exactly why P1.7's manual CSV path exists and stays wired.
 
-Two datasets, one per connector, because `run()` is one fetch and one parse:
+Three datasets, one connector each, because `run()` is one fetch and one parse:
 
 * `/api/GetAllExchangeRates` — daily rates by currency, back to 2001. Feeds
   `NG_FX_NFEM_USDNGN` from `centralrate`, the official mid.
 * `/api/GetAllMoneyMarketIndicatorsGRAPH` — monthly indicators. Feeds `NG_MPR`.
+* `/api/GetAllInflationRatesGRAPH` — monthly CPI. Feeds the `_CBN` **mirror** series, not
+  the NBS-attributed ones; see :class:`CbnInflationConnector` for why that distinction is
+  not pedantry.
+
+The two monthly datasets need opposite treatment of `known_as_of`, and getting that backwards
+is the single most expensive mistake available in this file. The MPR in force during a month
+was public *within* that month, because the MPC announces immediately. A month's CPI is
+computed *after* the month ends and released mid-way through the next one. Same shape of row,
+opposite knowledge date.
 
 **Three data-quality traps found in the live payload, each handled explicitly.** They are
 worth reading before changing anything here, because all three fail silently:
@@ -59,6 +68,7 @@ from packages.ingestion.base import (
 __all__ = [
     "CbnConnector",
     "CbnExchangeRateConnector",
+    "CbnInflationConnector",
     "CbnMoneyMarketConnector",
 ]
 
@@ -257,3 +267,70 @@ def _parse_decimal(value: object) -> Decimal | None:
         return Decimal(text)
     except InvalidOperation:
         return None
+
+
+class CbnInflationConnector(CbnConnector):
+    """Nigerian CPI, year-on-year: headline and core. Feeds the `_CBN` mirror series.
+
+    **This is second-hand data and it is labelled as such.** Nigeria's CPI is compiled and
+    published by the NBS; CBN republishes it. The figures therefore land in
+    `NG_CPI_YOY_CBN` / `NG_CPI_CORE_CBN`, not in the NBS-attributed `NG_CPI_YOY` /
+    `NG_CPI_CORE`, for the same reason the World Bank mirror is kept separate in migration
+    0005: the attribution a reader sees must match where the bytes actually came from, and
+    the licensing register that governs our copy is CBN's row, not NBS's.
+
+    `docs/03` P1.3 warns against "a Nigerian macro dashboard whose Nigerian sources are all
+    second-hand". This connector does not close that gap — it narrows it while an NBS path
+    is still missing, and keeps the primary series visibly empty so the gap stays visible.
+
+    **The publication-date rule, which is the whole reason this class needs care.** Unlike
+    the MPR — which the MPC announces immediately, so the rate in force during a month was
+    public within that month — a month's CPI is *computed after the month ends* and released
+    in the middle of the following one. Setting `known_as_of` to the period end would claim
+    July's inflation was knowable on 31 July, which is precisely the lookahead that makes a
+    P7 backtest profitable and wrong.
+
+    CBN's payload does not carry the release date, so it is bounded rather than invented:
+    `known_as_of` is the **last day of the following month**, which is never earlier than the
+    real release. The asymmetry is deliberate — erring late costs a little responsiveness,
+    erring early manufactures knowledge nobody had. [NEEDS VERIFICATION] against NBS's
+    published release calendar, which would replace the bound with the actual date.
+    """
+
+    name = "cbn_inflation"
+    path = "/api/GetAllInflationRatesGRAPH"
+
+    #: CBN's field name -> our series code. `allItemsLessFrmProdAndEnergyYearOn` is
+    #: "all items less farm produce and energy", which is the core measure.
+    FIELDS = {
+        "allItemsYearOn": "NG_CPI_YOY_CBN",
+        "allItemsLessFrmProdAndEnergyYearOn": "NG_CPI_CORE_CBN",
+    }
+
+    def parse(self, raw: RawResponse) -> list[MacroRecord]:
+        payload = json.loads(raw.data.decode("utf-8"))
+        records: list[MacroRecord] = []
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            period_end = _month_end(row.get("tyear"), row.get("tmonth"))
+            if period_end is None:
+                continue
+            published_by = _end_of_following_month(period_end)
+            for field, series_code in self.FIELDS.items():
+                records.append(
+                    MacroRecord(
+                        series_code=series_code,
+                        as_of_date=period_end,
+                        known_as_of=published_by,
+                        value=_parse_decimal(row.get(field)),
+                    )
+                )
+        return records
+
+
+def _end_of_following_month(period_end: dt.date) -> dt.date:
+    """A conservative upper bound on the release date. Never earlier than the real one."""
+    year = period_end.year + (1 if period_end.month == 12 else 0)
+    month = 1 if period_end.month == 12 else period_end.month + 1
+    return dt.date(year, month, calendar.monthrange(year, month)[1])

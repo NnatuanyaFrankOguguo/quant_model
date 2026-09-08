@@ -54,6 +54,7 @@ __all__ = [
     "LicenceNotDeclaredError",
     "MacroRecord",
     "RawResponse",
+    "record_run",
     "register",
     "store_raw",
 ]
@@ -203,7 +204,7 @@ class Connector(ABC):
                 error=f"{type(exc).__name__}: {exc}"[:2000],
             )
             _log.error("connector_failed", connector=self.name, error_type=type(exc).__name__)
-        _record_run(session, result)
+        record_run(session, result)
         if result.status == "ok" and result.rows_written == 0:
             # Not an error — re-fetching an unchanged page is normal. But it is the signature
             # of a silent scraper failure, so it is said out loud rather than inferred later
@@ -379,7 +380,7 @@ def register(session: Session, connector: Connector) -> int:
     return row.id
 
 
-def _record_run(session: Session, result: ConnectorRunResult) -> None:
+def record_run(session: Session, result: ConnectorRunResult) -> None:
     """Write the `connector_runs` row. Never lets bookkeeping mask the result.
 
     Uses its own transaction, so a failed run — which has already rolled back — still gets

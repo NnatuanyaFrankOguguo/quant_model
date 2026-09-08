@@ -101,3 +101,79 @@ def test_a_connector_that_never_ran_has_no_row(db_session: Session) -> None:
     """
     names = {h.connector_name for h in check_health(db_session, now=NOW)}
     assert "never_scheduled" not in names
+
+
+class _StubConnector:
+    """Just enough connector for `run_job`'s logging. The retry logic never calls it."""
+
+    name = "stub"
+
+
+# --------------------------------------------------------------------------------------
+# Retry on a dropped connection — the Neon cold-start cost, paid here (ADR-0008)
+# --------------------------------------------------------------------------------------
+
+
+def test_run_job_retries_a_dropped_connection(monkeypatch) -> None:
+    """Neon scales to zero and kills the connection mid-statement.
+
+    `pool_pre_ping` does not cover it: the connection was alive at checkout. Without a retry
+    every unattended run that lands on a cold endpoint writes an `error` row, and the health
+    check cannot tell that apart from a source that genuinely broke.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    from packages.scheduler import runner
+
+    calls: list[int] = []
+
+    def flaky(job):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OperationalError("SELECT 1", {}, Exception("terminating connection"))
+        return runner.ConnectorRunResult(
+            connector_name="flaky",
+            status="ok",
+            rows_written=7,
+            records_parsed=7,
+            started_at=NOW,
+            finished_at=NOW,
+        )
+
+    monkeypatch.setattr(runner, "_run_once", flaky)
+    job = runner.ScheduledJob(connector=_StubConnector(), params={})  # type: ignore[arg-type]
+    result = runner.run_job(job, attempts=3, backoff_sec=0)
+
+    assert len(calls) == 2, "should have retried exactly once"
+    assert result.status == "ok"
+    assert result.rows_written == 7
+
+
+def test_run_job_does_not_retry_a_deterministic_failure(monkeypatch) -> None:
+    """A parse error or a licence violation is already an error *result*, not an exception.
+
+    Retrying it would write the same failure row three times and delay the schedule for
+    nothing. Only connection failures are worth a second attempt.
+    """
+    from packages.scheduler import runner
+
+    calls: list[int] = []
+
+    def failing(job):
+        calls.append(1)
+        return runner.ConnectorRunResult(
+            connector_name="broken_parser",
+            status="error",
+            rows_written=0,
+            records_parsed=0,
+            started_at=NOW,
+            finished_at=NOW,
+            error="ValueError: bad payload",
+        )
+
+    monkeypatch.setattr(runner, "_run_once", failing)
+    job = runner.ScheduledJob(connector=_StubConnector(), params={})  # type: ignore[arg-type]
+    result = runner.run_job(job, attempts=3, backoff_sec=0)
+
+    assert len(calls) == 1, "a deterministic failure must not be retried"
+    assert result.status == "error"

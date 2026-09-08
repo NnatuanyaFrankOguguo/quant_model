@@ -14,7 +14,11 @@ from decimal import Decimal
 import pytest
 
 from packages.ingestion.base import RawResponse
-from packages.ingestion.cbn import CbnExchangeRateConnector, CbnMoneyMarketConnector
+from packages.ingestion.cbn import (
+    CbnExchangeRateConnector,
+    CbnInflationConnector,
+    CbnMoneyMarketConnector,
+)
 
 
 def _raw(payload: object) -> RawResponse:
@@ -135,3 +139,73 @@ def test_cbn_declares_the_reviewed_licence() -> None:
     assert licence.source_name == "CBN"
     assert licence.redistribution_allowed is False
     assert licence.attribution_text == "Source: Central Bank of Nigeria"
+
+
+# --------------------------------------------------------------------------------------
+# CPI mirror — where known_as_of must NOT equal the period end
+# --------------------------------------------------------------------------------------
+
+CPI_PAYLOAD = [
+    {
+        "id": 296,
+        "tyear": 2026,
+        "tmonth": 7,
+        "period": "July 2026",
+        "allItemsYearOn": "15.43",
+        "allItemsLessFrmProdAndEnergyYearOn": "14.97",
+    },
+    {
+        "id": 297,
+        "tyear": 2026,
+        "tmonth": 12,
+        "period": "December 2026",
+        "allItemsYearOn": "",
+        "allItemsLessFrmProdAndEnergyYearOn": "13.10",
+    },
+]
+
+
+@pytest.mark.invariant
+def test_cpi_is_not_knowable_within_its_own_month() -> None:
+    """The opposite of the MPR rule, and the expensive one to get backwards.
+
+    July's CPI is computed after July ends and released in August. A `known_as_of` of
+    2026-07-31 would claim it was knowable on the last day of the month it describes —
+    lookahead, invisible, and it would make a P7 backtest profitable and wrong.
+    """
+    records = CbnInflationConnector().parse(_raw(CPI_PAYLOAD))
+    july = [r for r in records if r.as_of_date == dt.date(2026, 7, 31)]
+    assert july, "July should parse"
+    for record in july:
+        assert record.known_as_of > record.as_of_date
+        assert record.known_as_of == dt.date(2026, 8, 31)
+
+
+def test_cpi_year_boundary_rolls_into_january() -> None:
+    """December's figure is released in the next calendar year."""
+    records = CbnInflationConnector().parse(_raw(CPI_PAYLOAD))
+    december = [r for r in records if r.as_of_date == dt.date(2026, 12, 31)]
+    assert {r.known_as_of for r in december} == {dt.date(2027, 1, 31)}
+
+
+def test_cpi_feeds_the_mirror_series_not_the_nbs_ones() -> None:
+    """Attribution must match where the bytes came from."""
+    records = CbnInflationConnector().parse(_raw(CPI_PAYLOAD))
+    codes = {r.series_code for r in records}
+    assert codes == {"NG_CPI_YOY_CBN", "NG_CPI_CORE_CBN"}
+    assert "NG_CPI_YOY" not in codes and "NG_CPI_CORE" not in codes
+
+
+def test_cpi_headline_and_core_map_to_the_right_fields() -> None:
+    records = CbnInflationConnector().parse(_raw(CPI_PAYLOAD))
+    july = {r.series_code: r.value for r in records if r.as_of_date == dt.date(2026, 7, 31)}
+    assert july["NG_CPI_YOY_CBN"] == Decimal("15.43")
+    assert july["NG_CPI_CORE_CBN"] == Decimal("14.97")
+
+
+@pytest.mark.invariant
+def test_empty_cpi_field_is_none_never_zero() -> None:
+    records = CbnInflationConnector().parse(_raw(CPI_PAYLOAD))
+    december = {r.series_code: r.value for r in records if r.as_of_date == dt.date(2026, 12, 31)}
+    assert december["NG_CPI_YOY_CBN"] is None
+    assert december["NG_CPI_CORE_CBN"] == Decimal("13.10")

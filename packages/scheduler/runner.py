@@ -23,17 +23,19 @@ The health rules, and why each is shaped the way it is:
 from __future__ import annotations
 
 import datetime as dt
+import time
 from dataclasses import dataclass
 from typing import Any
 
 import structlog
 from sqlalchemy import func, select
+from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
 from packages.common.db import get_session
 from packages.common.models import ConnectorRun
 from packages.common.timez import utcnow
-from packages.ingestion.base import Connector, ConnectorRunResult, register
+from packages.ingestion.base import Connector, ConnectorRunResult, record_run, register
 
 __all__ = [
     "ConnectorHealth",
@@ -77,14 +79,67 @@ class ConnectorHealth:
     finding: str | None
 
 
-def run_job(job: ScheduledJob) -> ConnectorRunResult:
+#: Transient database failures worth one more attempt. Observed in practice, not theorised:
+#: Neon scales to zero, and a run that starts while the endpoint is asleep gets
+#: `AdminShutdown: terminating connection due to administrator command` mid-statement.
+#: `pool_pre_ping` does not cover it — the connection was alive at checkout and killed during
+#: the work. Left unhandled, every unattended run that happens to land on a cold endpoint
+#: writes an `error` row, and the health check cannot tell that apart from a real failure
+#: (ADR-0008 records the cold-start cost; this is where it is paid).
+_RETRYABLE_DB_ERRORS = (OperationalError, InterfaceError, DBAPIError)
+
+
+def run_job(
+    job: ScheduledJob, *, attempts: int = 3, backoff_sec: float = 2.0
+) -> ConnectorRunResult:
     """Run one connector in its own session, registering its source first.
 
     Registration is not skippable and not cached: `register()` re-checks that the declared
     licence still agrees with the reviewed `data_sources` row on every run, so a connector
     whose rights were quietly widened in code stops here rather than at the point where the
     data has already been served.
+
+    Retries only apply to *connection* failures. A parse error, a licence violation or an
+    HTTP failure is not retried: `Connector.run()` has already caught it, rolled back and
+    returned an error result, and retrying a deterministic failure just writes the same row
+    three times.
     """
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return _run_once(job)
+        except _RETRYABLE_DB_ERRORS as exc:
+            last_error = exc
+            _log.warning(
+                "connector_db_connection_failed",
+                connector=job.connector.name,
+                attempt=attempt,
+                of=attempts,
+                error_type=type(exc).__name__,
+            )
+            if attempt < attempts:
+                time.sleep(backoff_sec * attempt)
+    # Out of attempts. Report it as a failed run rather than raising, so the scheduler keeps
+    # its other jobs and the failure still lands in `connector_runs` where it can be seen.
+    now = utcnow()
+    result = ConnectorRunResult(
+        connector_name=job.connector.name,
+        status="error",
+        rows_written=0,
+        records_parsed=0,
+        started_at=now,
+        finished_at=now,
+        error=f"database unreachable after {attempts} attempts: {type(last_error).__name__}",
+    )
+    try:
+        with get_session() as session:
+            record_run(session, result)
+    except Exception:  # noqa: BLE001 - the database is what failed; do not mask the result
+        _log.error("connector_run_row_unwritable", connector=job.connector.name)
+    return result
+
+
+def _run_once(job: ScheduledJob) -> ConnectorRunResult:
     with get_session() as session:
         register(session, job.connector)
         result = job.connector.run(session, **job.params)

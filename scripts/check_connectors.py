@@ -19,7 +19,11 @@ from __future__ import annotations
 import sys
 
 from packages.common.db import get_session
-from packages.ingestion.cbn import CbnExchangeRateConnector, CbnMoneyMarketConnector
+from packages.ingestion.cbn import (
+    CbnExchangeRateConnector,
+    CbnInflationConnector,
+    CbnMoneyMarketConnector,
+)
 from packages.ingestion.fred import FRED_SERIES
 from packages.ingestion.manual_csv import MANUAL_SOURCES
 from packages.scheduler.runner import check_health
@@ -34,6 +38,7 @@ from packages.scheduler.runner import check_health
 EXPECTED_CONNECTORS = {
     "fred",
     CbnExchangeRateConnector.name,
+    CbnInflationConnector.name,
     CbnMoneyMarketConnector.name,
     *(f"manual_csv_{s.lower()}" for s in MANUAL_SOURCES),
 }
