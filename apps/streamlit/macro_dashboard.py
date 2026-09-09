@@ -48,8 +48,10 @@ def fetch_series() -> dict[str, Any]:
 
 
 @st.cache_data(ttl=60)
-def fetch_observations(code: str, as_known_on: str | None) -> dict[str, Any]:
-    params = {"as_known_on": as_known_on} if as_known_on else {}
+def fetch_observations(code: str, as_known_on: str | None, limit: int = 2000) -> dict[str, Any]:
+    params: dict[str, Any] = {"limit": limit}
+    if as_known_on:
+        params["as_known_on"] = as_known_on
     response = httpx.get(
         f"{API_BASE}/v1/public/macro/series/{code}/observations",
         params=params,
@@ -105,8 +107,9 @@ def main() -> None:
         st.warning(
             f"**{len(empty)} series have no observations yet:** "
             + ", ".join(s["code"] for s in empty)
-            + ".  Feed them with `scripts/ingest_csv.py` (no API key needed), or set "
-            "`FRED_API_KEY` for the FRED series."
+            + ".  These are the sources with no machine-readable feed — NBS publishes "
+            "through a portal and DMO publishes PDFs. Feed them with "
+            "`scripts/ingest_csv.py`, which needs no API key."
         )
 
     table = pd.DataFrame(
@@ -162,6 +165,15 @@ def main() -> None:
             "did not exist — it is not zero."
         )
     else:
+        if observations.get("truncated"):
+            # Said out loud, not inferred from a short line. A reader who thinks they are
+            # looking at the whole history when they are looking at the most recent slice
+            # will draw the wrong conclusion and have no way to notice.
+            st.info(
+                f"Showing the most recent {len(points):,} of "
+                f"{observations['total_available']:,} periods. Set a start date to see "
+                f"earlier history."
+            )
         frame = pd.DataFrame(points)
         frame["as_of_date"] = pd.to_datetime(frame["as_of_date"])
         frame["value"] = pd.to_numeric(frame["value"], errors="coerce")

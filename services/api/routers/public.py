@@ -26,6 +26,12 @@ from services.api.schemas import (
     PublicPing,
 )
 
+#: Enough for a readable chart of any series in the set, and small enough that one request
+#: is bounded work. A caller wanting more narrows the window or raises the limit to the cap.
+DEFAULT_OBSERVATION_LIMIT = 2000
+#: Hard ceiling, enforced by the route rather than trusted to the caller.
+MAX_OBSERVATION_LIMIT = 20000
+
 router = APIRouter(prefix=f"{API_V1}/public", tags=["public"], route_class=PublicAPIRoute)
 
 
@@ -87,18 +93,35 @@ async def macro_observations(
             "each period at its newest vintage."
         ),
     ),
+    limit: int = Query(
+        default=DEFAULT_OBSERVATION_LIMIT,
+        ge=1,
+        le=MAX_OBSERVATION_LIMIT,
+        description=(
+            "Maximum points to return, taking the most recent. Responses say "
+            "`truncated` and `total_available` so a partial series is never mistaken "
+            "for a whole one."
+        ),
+    ),
 ) -> MacroObservations:
     """The observation array for one series.
 
     `as_known_on` is the parameter that makes this honest. Without it a caller sees today's
     view of history, in which every restatement has always been known — which is exactly the
     lookahead that makes a P7 backtest profitable and wrong.
+
+    **The limit is not decoration.** `US_10Y_TREASURY` holds 16,876 periods; an unbounded
+    endpoint meant one request did unbounded work, which is a slow dashboard today and a
+    trivial way to exhaust the server at P12. The cap is enforced by the route, so no caller
+    can opt out of it.
     """
     with get_session() as session:
         summary = macro.series_summary(session, code)
         if summary is None:
             raise HTTPException(status_code=404, detail="not_found")
-        points = macro.observations(session, code, start=start, end=end, as_known_on=as_known_on)
+        page = macro.observation_page(
+            session, code, start=start, end=end, as_known_on=as_known_on, limit=limit
+        )
         return MacroObservations(
             code=summary.code,
             name=summary.name,
@@ -106,10 +129,12 @@ async def macro_observations(
             source_name=summary.source_name,
             attribution=summary.attribution,
             as_known_on=as_known_on,
+            total_available=page.total_available,
+            truncated=page.truncated,
             observations=[
                 MacroObservationPoint(
                     as_of_date=p.as_of_date, known_as_of=p.known_as_of, value=p.value
                 )
-                for p in points
+                for p in page.points
             ],
         )

@@ -34,9 +34,11 @@ from packages.common.timez import utctoday
 
 __all__ = [
     "IRREGULAR",
+    "ObservationPage",
     "ObservationPoint",
     "SeriesSummary",
     "list_series",
+    "observation_page",
     "observations",
     "series_summary",
 ]
@@ -184,6 +186,21 @@ def series_summary(
     return None
 
 
+@dataclass(frozen=True)
+class ObservationPage:
+    """Points, plus whether they are all of them.
+
+    `total_available` and `truncated` exist so a partial answer can never be mistaken for a
+    whole one. A series like `US_10Y_TREASURY` holds 16,876 periods; returning the most recent
+    slice is the right default for a chart, but a caller that silently received 2,000 of
+    16,876 and drew a line from it would be drawing a different series.
+    """
+
+    points: list[ObservationPoint]
+    total_available: int
+    truncated: bool
+
+
 def observations(
     session: Session,
     code: str,
@@ -191,20 +208,43 @@ def observations(
     start: dt.date | None = None,
     end: dt.date | None = None,
     as_known_on: dt.date | None = None,
+    limit: int | None = None,
 ) -> list[ObservationPoint]:
     """One point per period, at the newest vintage visible on `as_known_on`.
 
-    Returns `[]` for an unknown code rather than raising — the caller distinguishes "no such
-    series" from "no data" via `list_series`, and a 404 is the API's decision to make.
+    Thin wrapper over :func:`observation_page` for callers that only want the points.
+    """
+    return observation_page(
+        session, code, start=start, end=end, as_known_on=as_known_on, limit=limit
+    ).points
+
+
+def observation_page(
+    session: Session,
+    code: str,
+    *,
+    start: dt.date | None = None,
+    end: dt.date | None = None,
+    as_known_on: dt.date | None = None,
+    limit: int | None = None,
+) -> ObservationPage:
+    """One point per period, newest vintage, optionally limited to the most recent `limit`.
+
+    **The limit takes the most recent periods, not the first.** Asking for "some" of a price
+    series and receiving 1962 onwards would be useless for every caller that exists, and the
+    full series is still reachable with an explicit `start`/`end` window.
+
+    Returns an empty page for an unknown code rather than raising — the caller distinguishes
+    "no such series" from "no data" via `list_series`, and a 404 is the API's decision.
     """
     series_id = session.execute(
         select(MacroSeries.id).where(MacroSeries.code == code)
     ).scalar_one_or_none()
     if series_id is None:
-        return []
+        return ObservationPage(points=[], total_available=0, truncated=False)
 
     latest = _latest_vintage_subquery(as_known_on)
-    query = (
+    base = (
         select(MacroObservation.as_of_date, MacroObservation.known_as_of, MacroObservation.value)
         .join(
             latest,
@@ -213,14 +253,32 @@ def observations(
             & (latest.c.known_as_of == MacroObservation.known_as_of),
         )
         .where(MacroObservation.series_id == series_id)
-        .order_by(MacroObservation.as_of_date)
     )
     if start is not None:
-        query = query.where(MacroObservation.as_of_date >= start)
+        base = base.where(MacroObservation.as_of_date >= start)
     if end is not None:
-        query = query.where(MacroObservation.as_of_date <= end)
+        base = base.where(MacroObservation.as_of_date <= end)
 
-    return [
-        ObservationPoint(as_of_date=row.as_of_date, known_as_of=row.known_as_of, value=row.value)
-        for row in session.execute(query).all()
-    ]
+    total = session.execute(select(func.count()).select_from(base.subquery())).scalar_one()
+
+    if limit is None:
+        rows = session.execute(base.order_by(MacroObservation.as_of_date)).all()
+    else:
+        # Newest first to apply the limit, then flipped back so the caller always receives
+        # points in chronological order — a chart that plots them in arrival order draws
+        # time backwards, and nothing in the response would say so.
+        newest = session.execute(
+            base.order_by(MacroObservation.as_of_date.desc()).limit(limit)
+        ).all()
+        rows = list(reversed(newest))
+
+    return ObservationPage(
+        points=[
+            ObservationPoint(
+                as_of_date=row.as_of_date, known_as_of=row.known_as_of, value=row.value
+            )
+            for row in rows
+        ],
+        total_available=total,
+        truncated=len(rows) < total,
+    )

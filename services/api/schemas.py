@@ -163,6 +163,16 @@ class MacroObservations(BaseModel):
             "point-in-time view. When null, each period shows its newest vintage."
         ),
     )
+    total_available: int = Field(
+        description="Periods matching the query, before any limit was applied."
+    )
+    truncated: bool = Field(
+        description=(
+            "True when fewer points were returned than exist. The points are the MOST "
+            "RECENT ones; narrow the window with start/end, or raise limit, to see more. "
+            "Never ignore this: a partial series charted as a whole one is a different series."
+        )
+    )
     observations: list[MacroObservationPoint]
 
 

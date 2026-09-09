@@ -164,3 +164,28 @@ def test_a_series_with_no_data_reports_null_not_false(client) -> None:
     for series in empty:
         assert series["is_stale"] is None
         assert series["latest_as_of"] is None
+
+
+def test_observations_are_limited_and_say_so(client, gdp_vintages) -> None:
+    """An unbounded endpoint is unbounded work. The cap is enforced by the route."""
+    body = client.get(
+        "/v1/public/macro/series/NG_GDP_GROWTH_YOY/observations", params={"limit": 1}
+    ).json()
+    assert body["total_available"] >= 1
+    assert "truncated" in body
+    assert len(body["observations"]) <= 1
+
+
+def test_limit_above_the_cap_is_refused(client) -> None:
+    """The ceiling is the route's to enforce, not the caller's to respect."""
+    response = client.get(
+        "/v1/public/macro/series/NG_GDP_GROWTH_YOY/observations", params={"limit": 10_000_000}
+    )
+    assert response.status_code == 422
+
+
+def test_limit_of_zero_is_refused(client) -> None:
+    response = client.get(
+        "/v1/public/macro/series/NG_GDP_GROWTH_YOY/observations", params={"limit": 0}
+    )
+    assert response.status_code == 422

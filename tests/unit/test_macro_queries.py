@@ -155,3 +155,68 @@ def test_every_series_carries_its_source_and_attribution(db_session: Session) ->
     for summary in macro.list_series(db_session):
         assert summary.source_name
         assert summary.attribution, f"{summary.code} has no attribution text"
+
+
+# --------------------------------------------------------------------------------------
+# Limits — a partial answer must never look like a whole one
+# --------------------------------------------------------------------------------------
+
+
+def test_limit_returns_the_most_recent_periods(db_session: Session, document_id: int) -> None:
+    """Asking for "some" of a price series and getting 1962 onwards is useless to everyone."""
+    for day in range(1, 11):
+        _add(db_session, "NG_CPI_YOY", f"2026-01-{day:02d}", "2026-03-01", str(day), document_id)
+    db_session.flush()
+
+    page = macro.observation_page(db_session, "NG_CPI_YOY", limit=3)
+    assert page.total_available == 10
+    assert page.truncated is True
+    assert [p.as_of_date.day for p in page.points] == [8, 9, 10], "newest three, oldest first"
+
+
+def test_points_are_always_chronological(db_session: Session, document_id: int) -> None:
+    """The limit is applied newest-first internally; the caller must not see that order.
+
+    A chart that plots points in arrival order draws time backwards, and nothing in the
+    response would say so.
+    """
+    for day in range(1, 6):
+        _add(db_session, "NG_CPI_YOY", f"2026-01-{day:02d}", "2026-03-01", str(day), document_id)
+    db_session.flush()
+
+    page = macro.observation_page(db_session, "NG_CPI_YOY", limit=3)
+    dates = [p.as_of_date for p in page.points]
+    assert dates == sorted(dates)
+
+
+def test_not_truncated_when_the_limit_exceeds_the_data(
+    db_session: Session, document_id: int
+) -> None:
+    _add(db_session, "NG_CPI_YOY", "2026-01-31", "2026-03-01", "29.9", document_id)
+    db_session.flush()
+
+    page = macro.observation_page(db_session, "NG_CPI_YOY", limit=500)
+    assert page.total_available == 1
+    assert page.truncated is False
+
+
+def test_total_available_counts_the_window_not_the_series(
+    db_session: Session, document_id: int
+) -> None:
+    """`total_available` must describe the query that was asked, or it misleads about scope."""
+    for month in range(1, 5):
+        _add(db_session, "NG_CPI_YOY", f"2026-0{month}-28", "2026-06-01", "30.0", document_id)
+    db_session.flush()
+
+    page = macro.observation_page(
+        db_session, "NG_CPI_YOY", start=dt.date(2026, 2, 1), end=dt.date(2026, 3, 31), limit=1
+    )
+    assert page.total_available == 2, "two periods fall in the window, not four"
+    assert page.truncated is True
+
+
+def test_unknown_series_gives_an_empty_page(db_session: Session) -> None:
+    page = macro.observation_page(db_session, "NOT_A_SERIES")
+    assert page.points == []
+    assert page.total_available == 0
+    assert page.truncated is False
