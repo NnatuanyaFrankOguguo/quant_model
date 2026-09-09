@@ -11,6 +11,7 @@ without anyone deciding it should.
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -76,6 +77,74 @@ def redact_url(url: str) -> str:
     port = f":{parts.port}" if parts.port else ""
     database = parts.path.lstrip("/") or "?"
     return f"{parts.scheme}://<redacted>@{host}{port}/{database}"
+
+
+#: Query parameters and headers whose value is a credential. Matched case-insensitively,
+#: up to the next `&`, whitespace or quote.
+_SECRET_PARAM = re.compile(
+    r"((?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|token|password|passwd|secret)"
+    r"\s*[=:]\s*)([^&\s\"'<>]+)",
+    re.IGNORECASE,
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Strip credentials out of a string before it is logged, stored or displayed.
+
+    **Why this exists, in one incident.** The FRED connector deliberately stores a
+    key-free URL on its `RawResponse`, and that worked. But when a request failed, `httpx`
+    raised an exception whose *message* contained the real request URL — key and all — and
+    that message went straight into `connector_runs.error`, into the terminal, and would
+    have gone into any log aggregator. A credential redacted in the happy path and printed
+    on the error path is not redacted.
+
+    Two passes, because either alone leaves a hole:
+
+    1. **By parameter name** — catches `api_key=…` in any URL, including for services this
+       code has never heard of and for keys that are not in our settings.
+    2. **By known value** — catches a bare credential with no parameter name attached: a
+       password inside a connection string, or a key echoed back in a response body.
+
+    Never raises. It runs on error paths, where a redaction failure would replace a real
+    diagnostic with a new traceback.
+    """
+    if not text:
+        return text
+    try:
+        result = _SECRET_PARAM.sub(r"\1<redacted>", text)
+        for value in _known_secret_values():
+            # A short "secret" would match far too much ordinary text.
+            if value and len(value) >= 8:
+                result = result.replace(value, "<redacted>")
+        return result
+    except Exception:  # noqa: BLE001 - redaction must never break the caller
+        return "<redaction failed; message withheld to avoid leaking a credential>"
+
+
+def _known_secret_values() -> list[str]:
+    """Literal secrets this process holds, for the value-based pass.
+
+    Includes the password inside each connection string, which is the one credential most
+    likely to turn up in a driver's error text.
+    """
+    try:
+        settings = get_settings()
+    except Exception:  # noqa: BLE001 - settings may be unavailable mid-failure
+        return []
+    values: list[str] = []
+    for candidate in (settings.fred_api_key,):
+        if candidate:
+            values.append(candidate)
+    for url in (settings.database_url, settings.test_database_url):
+        if not url:
+            continue
+        try:
+            password = urlsplit(url).password
+        except ValueError:  # pragma: no cover
+            password = None
+        if password:
+            values.append(password)
+    return values
 
 
 class Settings(BaseSettings):

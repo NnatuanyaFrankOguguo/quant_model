@@ -32,7 +32,13 @@ from packages.ingestion.base import (
     RawResponse,
 )
 
-__all__ = ["FRED_SERIES", "FredConnector", "MissingApiKeyError"]
+__all__ = [
+    "FRED_SERIES",
+    "FredConnector",
+    "MissingApiKeyError",
+    "VintageLimitExceededError",
+    "windows_from_vintage_dates",
+]
 
 _BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 
@@ -50,6 +56,10 @@ FRED_SERIES: dict[str, str] = {
 
 class MissingApiKeyError(Exception):
     """No `FRED_API_KEY`. The connector refuses to run rather than half-running."""
+
+
+class VintageLimitExceededError(Exception):
+    """The real-time window holds more vintage dates than FRED will return at once."""
 
 
 class FredConnector(Connector):
@@ -105,29 +115,74 @@ class FredConnector(Connector):
             ),
         )
 
+    def vintage_dates(self, series_id: str) -> list[dt.date]:
+        """Every date on which FRED published a new vintage of this series.
+
+        A *planning* call, deliberately outside the `fetch`/`parse` contract: it decides how
+        many runs a backfill needs, and does not itself produce records. Keeping it separate
+        is what lets `parse()` stay pure.
+        """
+        response = httpx.get(
+            _VINTAGE_URL,
+            params={"series_id": series_id, "api_key": self.api_key, "file_type": "json"},
+            timeout=self._timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        dates: list[dt.date] = []
+        for item in payload.get("vintage_dates", []):
+            parsed = _parse_date(item)
+            if parsed is not None:
+                dates.append(parsed)
+        return dates
+
     def fetch(self, **params: object) -> RawResponse:
-        """One FRED series, all vintages.
+        """One FRED series over one real-time window.
 
         `realtime_start=1776-07-04` is FRED's own sentinel for "the beginning of time"; with
         `realtime_end=9999-12-31` it asks for every vintage rather than only today's view.
+        That is the default, and it is what most series need.
+
+        **It does not work for every series, and the failure is a hard 400.** FRED caps a
+        JSON response at 2,000 vintage dates. `DGS10` has 5,104 and is simply refused:
+        *"This exceeds the maximum number of vintage dates allowed for this file type."*
+        So the window is a parameter, and a long-history daily series is loaded as several
+        runs — see :meth:`vintage_dates` and
+        :func:`windows_from_vintage_dates`. One run is still one fetch and one parse, so the
+        contract in `docs/08` §5 holds; there are just more runs.
         """
         series_id = str(params["series_id"])
+        realtime_start = str(params.get("realtime_start") or "1776-07-04")
+        realtime_end = str(params.get("realtime_end") or "9999-12-31")
         query = {
             "series_id": series_id,
             "api_key": self.api_key,
             "file_type": "json",
-            "realtime_start": "1776-07-04",
-            "realtime_end": "9999-12-31",
+            "realtime_start": realtime_start,
+            "realtime_end": realtime_end,
         }
         response = httpx.get(_BASE_URL, params=query, timeout=self._timeout)
+        if response.status_code == 400 and "vintage dates" in response.text:
+            # Say what to do about it. The raw message names the count and the cap, which is
+            # the number you need in order to pick a window size.
+            raise VintageLimitExceededError(
+                f"FRED refused {series_id} for {realtime_start}..{realtime_end}: too many "
+                f"vintage dates in one request. Load it in windows — see "
+                f"packages.ingestion.fred.windows_from_vintage_dates(). FRED said: "
+                f"{response.json().get('error_message', '')}"
+            )
         response.raise_for_status()
         return RawResponse(
             data=response.content,
             media_type="application/json",
             # The stored URL has the key stripped. Raw responses are kept forever and the
             # register is read by people who are not the owner; a live credential must not
-            # be one of the things preserved forever alongside them.
-            url=f"{_BASE_URL}?series_id={series_id}&file_type=json",
+            # be one of the things preserved forever alongside them. The real-time window is
+            # kept, because without it you cannot tell which slice of history this file is.
+            url=(
+                f"{_BASE_URL}?series_id={series_id}&file_type=json"
+                f"&realtime_start={realtime_start}&realtime_end={realtime_end}"
+            ),
             http_status=response.status_code,
             etag=response.headers.get("etag"),
         )
@@ -184,3 +239,42 @@ def _parse_value(value: object) -> Decimal | None:
         return Decimal(value.strip())
     except InvalidOperation:
         return None
+
+
+#: FRED's cap on vintage dates in one JSON response. Not configurable by us; discovered by
+#: being refused. Windows are sized under it so a series that gains vintages between runs
+#: does not start failing on a boundary.
+FRED_MAX_VINTAGE_DATES = 2000
+
+_VINTAGE_URL = "https://api.stlouisfed.org/fred/series/vintagedates"
+
+#: FRED's sentinel for "and everything after today". It is the ONLY future value the API
+#: accepts: any other `realtime_end` beyond today is a 400.
+REALTIME_MAX = "9999-12-31"
+
+
+def windows_from_vintage_dates(
+    dates: list[dt.date], *, max_per_window: int = 1500
+) -> list[tuple[str, str]]:
+    """Turn a series' real vintage dates into request windows.
+
+    Windowing by *calendar* guesswork fails twice over, and both failures are 400s that say
+    nothing useful until you read the body:
+
+    * a window before the series' first vintage is refused with *"the series does not exist
+      in ALFRED"* — it exists, it just has no vintages that far back;
+    * a window whose `realtime_end` is in the future is refused outright, because FRED
+      accepts no future date except its own sentinel.
+
+    Driving off the actual vintage list avoids both. Each window spans real vintages, and
+    the final window ends at the sentinel so today's vintage — and tomorrow's — are included.
+    """
+    if not dates:
+        return []
+    ordered = sorted(set(dates))
+    windows: list[tuple[str, str]] = []
+    for start in range(0, len(ordered), max_per_window):
+        chunk = ordered[start : start + max_per_window]
+        is_last = start + max_per_window >= len(ordered)
+        windows.append((chunk[0].isoformat(), REALTIME_MAX if is_last else chunk[-1].isoformat()))
+    return windows

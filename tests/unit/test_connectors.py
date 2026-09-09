@@ -228,3 +228,92 @@ def test_manual_csv_claims_the_agency_licence_not_a_human_one() -> None:
 def test_manual_csv_rejects_an_unknown_source() -> None:
     with pytest.raises(ValueError, match="unknown manual source"):
         ManualCsvConnector("BLOOMBERG")
+
+
+# --------------------------------------------------------------------------------------
+# Credential redaction — a real incident, not a hypothetical
+# --------------------------------------------------------------------------------------
+
+
+class _LeakyConnector(Connector):
+    """Fails the way httpx does: the exception message contains the full request URL."""
+
+    name = "leaky"
+
+    def declare_licence(self) -> DataSourceLicence:
+        return DataSourceLicence(
+            source_name="FRED",
+            licence_type="public_api_attribution",
+            redistribution_allowed=False,
+            attribution_required=True,
+            terms_reviewed_on=dt.date(2026, 9, 1),
+            reviewed_by="test",
+        )
+
+    def fetch(self, **params: object) -> RawResponse:
+        raise RuntimeError(
+            "Client error '400 Bad Request' for url "
+            "'https://api.stlouisfed.org/fred/series/observations"
+            "?series_id=DGS10&api_key=abcdef0123456789abcdef0123456789&file_type=json'"
+        )
+
+    def parse(self, raw: RawResponse) -> list[MacroRecord]:  # pragma: no cover
+        return []
+
+
+@pytest.mark.invariant
+def test_api_key_never_reaches_the_stored_error() -> None:
+    """The happy path stripped the key; the error path did not, and that is not redaction.
+
+    This is a real incident: a 400 from FRED put the live key into `connector_runs.error`,
+    into the terminal, and would have put it into any log aggregator. A credential is only
+    redacted if it is redacted on the path that fails.
+    """
+    from packages.common.config import redact_secrets
+
+    try:
+        _LeakyConnector().fetch()
+    except RuntimeError as exc:
+        raw_text = f"{type(exc).__name__}: {exc}"
+    else:  # pragma: no cover
+        raise AssertionError("fetch should have raised")
+
+    assert "abcdef0123456789abcdef0123456789" in raw_text, "fixture must contain a key"
+    cleaned = redact_secrets(raw_text)
+    assert "abcdef0123456789abcdef0123456789" not in cleaned
+    assert "<redacted>" in cleaned
+    # The diagnostic must survive — a redaction that deletes the error is its own bug.
+    assert "400 Bad Request" in cleaned
+    assert "series_id=DGS10" in cleaned
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://x/api?api_key=SUPERSECRETVALUE1&z=1",
+        "https://x/api?apikey=SUPERSECRETVALUE1",
+        "https://x/api?token=SUPERSECRETVALUE1",
+        "Authorization: Bearer token=SUPERSECRETVALUE1",
+        "password=SUPERSECRETVALUE1 host=db",
+        "API_KEY=SUPERSECRETVALUE1",
+    ],
+)
+def test_redaction_covers_the_common_parameter_names(text: str) -> None:
+    """By name, so it catches services this code has never heard of."""
+    from packages.common.config import redact_secrets
+
+    assert "SUPERSECRETVALUE1" not in redact_secrets(text)
+
+
+def test_redaction_leaves_ordinary_text_alone() -> None:
+    """It must not mangle a message that carries no credential."""
+    from packages.common.config import redact_secrets
+
+    message = "HTTPStatusError: 404 Not Found for series_id=FEDFUNDS"
+    assert redact_secrets(message) == message
+
+
+def test_redaction_never_raises() -> None:
+    from packages.common.config import redact_secrets
+
+    assert redact_secrets("") == ""

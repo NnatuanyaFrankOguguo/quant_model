@@ -29,14 +29,17 @@ from __future__ import annotations
 
 import datetime as dt
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Any
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from packages.common.config import redact_secrets
 from packages.common.models import (
     ConnectorRun,
     DataSource,
@@ -60,6 +63,22 @@ __all__ = [
 ]
 
 _log = structlog.get_logger(__name__)
+
+#: Rows per INSERT. PostgreSQL's wire protocol caps a single statement at 65,535 bound
+#: parameters, and a `macro_observations` row binds six — so one statement tops out near
+#: 10,900 rows and fails with "number of parameters must be between 0 and 65535".
+#:
+#: This was found the hard way. The CBN load was 6,052 rows and passed; the first FRED
+#: series with a long daily history crossed the line. The failure is not a slow query or a
+#: partial write — the statement is simply rejected, so the whole run writes nothing. 2,000
+#: leaves room for a table that grows a column later without anyone re-deriving this number.
+INSERT_BATCH_ROWS = 2000
+
+
+def _batched(rows: list[dict[str, Any]], size: int) -> Iterator[list[dict[str, Any]]]:
+    """Yield successive chunks. `itertools.batched` is 3.12-only; this project allows 3.11."""
+    for start in range(0, len(rows), size):
+        yield rows[start : start + size]
 
 
 class LicenceNotDeclaredError(Exception):
@@ -201,7 +220,10 @@ class Connector(ABC):
                 finished_at=utcnow(),
                 source_document_id=source_document_id,
                 http_status=http_status,
-                error=f"{type(exc).__name__}: {exc}"[:2000],
+                # Redacted, not raw. An exception message routinely contains the request
+                # that failed, and for an API-key source that request carries the key.
+                # `connector_runs.error` is stored forever and read by whoever is on call.
+                error=redact_secrets(f"{type(exc).__name__}: {exc}")[:2000],
             )
             _log.error("connector_failed", connector=self.name, error_type=type(exc).__name__)
         record_run(session, result)
@@ -244,13 +266,16 @@ class Connector(ABC):
         ]
         if not rows:
             return 0
-        statement = (
-            pg_insert(MacroObservation)
-            .values(rows)
-            .on_conflict_do_nothing(index_elements=["series_id", "as_of_date", "known_as_of"])
-            .returning(MacroObservation.as_of_date)
-        )
-        return len(session.execute(statement).fetchall())
+        inserted = 0
+        for batch in _batched(rows, INSERT_BATCH_ROWS):
+            statement = (
+                pg_insert(MacroObservation)
+                .values(batch)
+                .on_conflict_do_nothing(index_elements=["series_id", "as_of_date", "known_as_of"])
+                .returning(MacroObservation.as_of_date)
+            )
+            inserted += len(session.execute(statement).fetchall())
+        return inserted
 
 
 def _resolve_series_ids(session: Session, codes: set[str]) -> dict[str, int]:
@@ -396,7 +421,10 @@ def record_run(session: Session, result: ConnectorRunResult) -> None:
                 status=result.status,
                 rows_written=result.rows_written,
                 http_status=result.http_status,
-                error=result.error,
+                # Redacted again at the write, not only where the result was built. This is
+                # the single place every connector's error text reaches the database, so a
+                # future caller that constructs a result by hand cannot route round it.
+                error=redact_secrets(result.error or "") or None,
             )
         )
         session.commit()

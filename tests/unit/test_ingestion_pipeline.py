@@ -231,3 +231,62 @@ def test_unknown_series_codes_are_skipped_not_invented(
     assert result.rows_written == 0
     after_series = db_session.execute(select(func.count()).select_from(MacroSeries)).scalar_one()
     assert after_series == before_series
+
+
+# --------------------------------------------------------------------------------------
+# Batched inserts — PostgreSQL's 65,535 bound-parameter ceiling
+# --------------------------------------------------------------------------------------
+
+
+def test_batched_splits_evenly_and_covers_everything() -> None:
+    """Pure logic, so the arithmetic is checked without touching the database."""
+    from packages.ingestion.base import _batched
+
+    rows = [{"i": i} for i in range(7)]
+    batches = list(_batched(rows, 3))
+    assert [len(b) for b in batches] == [3, 3, 1]
+    assert [r["i"] for b in batches for r in b] == list(range(7))
+    assert list(_batched([], 3)) == []
+
+
+def test_write_spans_multiple_batches_and_counts_once(
+    db_session: Session, local_store: LocalDiskBackend, tmp_path, monkeypatch
+) -> None:
+    """A load larger than one statement must insert everything and count it once.
+
+    The real failure this guards: PostgreSQL rejects a statement with more than 65,535 bound
+    parameters, and an observation row binds six — so a single INSERT tops out near 10,900
+    rows. It is not a partial write. The statement is refused and the whole run stores
+    nothing, which is how a 60,000-row backfill silently produced zero.
+
+    The batch size is lowered rather than generating 11,000 rows, so the multi-batch path is
+    exercised in a second instead of hammering the database to prove arithmetic.
+    """
+    from packages.ingestion import base as ingestion_base
+
+    monkeypatch.setattr(ingestion_base, "INSERT_BATCH_ROWS", 3)
+
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+
+    lines = ["series_code,as_of_date,known_as_of,value"]
+    for day in range(1, 11):  # 10 rows, batch size 3 -> 4 statements
+        lines.append(f"NG_CPI_YOY,2026-01-{day:02d},2026-03-01,{20 + day}.0")
+    path = tmp_path / "many.csv"
+    path.write_bytes(("\n".join(lines) + "\n").encode())
+
+    result = connector.run(db_session, path=path)
+
+    assert result.status == "ok"
+    assert result.records_parsed == 10
+    assert result.rows_written == 10, "every batch must be counted, and counted only once"
+
+    series_id = db_session.execute(
+        select(MacroSeries.id).where(MacroSeries.code == "NG_CPI_YOY")
+    ).scalar_one()
+    stored = db_session.execute(
+        select(func.count())
+        .select_from(MacroObservation)
+        .where(MacroObservation.series_id == series_id)
+    ).scalar_one()
+    assert stored == 10
