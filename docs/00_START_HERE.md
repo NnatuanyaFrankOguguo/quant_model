@@ -224,7 +224,7 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
-| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 11/13 | 4 of 13 series live from CBN |
+| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 11/13 | 8 of 13 series live · 71,662 rows |
 | P2 US Company Data | ⬜ Not started | — | — | — | |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
@@ -274,11 +274,25 @@ name are 404 — CBN rebuilt the site and the tables now render client-side. The
 reachable as JSON, which is better than scraping HTML but is an undocumented endpoint with no
 contract, so P1.7's manual CSV path stays wired rather than being retired.
 
-**What is still missing is data, not code.** Nine of eleven series are empty: NBS (CPI, GDP)
-and DMO (debt, bond stop rates) have no connector, and the four FRED series need a key that
-is not set. Both remaining paths are owner actions — a free key from `fred.stlouisfed.org`,
-or [data/manual/README.md](../data/manual/README.md), which needs no key at all. The exit
-criterion *"ten series populated with real values"* is therefore not met.
+**FRED is loaded.** The key was set on 2026-09-09 and all four FRED series came in: 60,835 US
+10-year Treasury observations, 3,361 US CPI, 920 fed funds, and 440 rows of the World Bank
+Nigeria CPI mirror. **Eight of thirteen series now hold real data — 71,662 observations.**
+
+**What is still missing is data, not code.** Five series remain empty, all Nigerian: NBS
+(headline CPI, core CPI, GDP) and DMO (public debt, bond stop rates) have no machine-readable
+source. NBS publishes through a data portal and a microdata archive, neither a drop-in; DMO is
+PDF, and `docs/03` P1.3 defers it to P4 where the PDF toolchain exists. The route today is
+[data/manual/README.md](../data/manual/README.md), which needs no key.
+
+The exit criterion is *"ten series populated with real values"*. Eight is not ten — but note
+that two of the eight are `_CBN` mirrors of NBS figures, so the honest count of *distinct*
+macro facts is lower still.
+
+> 🔴 **Rotate the FRED API key.** It was exposed on 2026-09-09: a failed request put it into
+> `connector_runs.error` and into terminal output. The stored row was scrubbed and the code
+> now redacts credentials from every error before storing (`redact_secrets`), but a key that
+> has appeared in output must be treated as compromised regardless of clean-up. Free to
+> replace at `fredaccount.stlouisfed.org/apikeys`.
 
 No macro figures were invented to close that gap. A fabricated CPI print carrying a
 provenance chain that claims NBS published it is precisely what this system exists to
