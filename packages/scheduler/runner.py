@@ -140,6 +140,15 @@ def run_job(
 
 
 def _run_once(job: ScheduledJob) -> ConnectorRunResult:
+    # `politeness_delay_sec` is declared on every connector and, until now, was enforced
+    # nowhere — a number in a class attribute that no code read. The Nigeria Data Portal
+    # returned 403 Forbidden on a second request issued immediately after the first, which is
+    # what an unenforced declaration costs. Spacing consecutive runs is the honest minimum;
+    # it does not throttle *within* a fetch that issues several requests, and a connector
+    # that needs that must do it itself.
+    delay = getattr(job.connector, "politeness_delay_sec", 0.0) or 0.0
+    if delay > 0:
+        time.sleep(delay)
     with get_session() as session:
         register(session, job.connector)
         result = job.connector.run(session, **job.params)

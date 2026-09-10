@@ -1,7 +1,9 @@
-"""Run the connector schedule. P1.5 / TG8.
+r"""Run the connector schedule. P1.5 / TG8.
 
-    .venv\Scripts\python.exe scripts\run_scheduler.py          # run forever
-    .venv\Scripts\python.exe scripts\run_scheduler.py --once   # run every job now, then exit
+    .venv\Scripts\python.exe scripts
+un_scheduler.py          # run forever
+    .venv\Scripts\python.exe scripts
+un_scheduler.py --once   # run every job now, then exit
 
 Until this existed, `build_scheduler()` was a function nothing called — the schedule was
 designed and unstartable, which is the same as not having one. `OPERATIONS.md` §2.3's whole
@@ -30,6 +32,7 @@ from packages.ingestion.cbn import (
     CbnMoneyMarketConnector,
 )
 from packages.ingestion.fred import FRED_SERIES, FredConnector
+from packages.ingestion.nigeria_data_portal import ITEM_KEYS, NigeriaDataPortalConnector
 from packages.scheduler.runner import ScheduledJob, build_scheduler, run_job
 
 _log = structlog.get_logger("scheduler")
@@ -53,6 +56,19 @@ def build_jobs() -> list[ScheduledJob]:
         ScheduledJob(connector=CbnMoneyMarketConnector(), params={}, hour=5, minute=45),
         ScheduledJob(connector=CbnInflationConnector(), params={}, hour=6, minute=0),
     ]
+    # NBS CPI via the Nigeria Data Portal. Monthly data, so a daily pull is generous; it runs
+    # daily anyway because the cost is one request and the alternative is noticing a release
+    # a month late.
+    for offset, item in enumerate(ITEM_KEYS):
+        jobs.append(
+            ScheduledJob(
+                connector=NigeriaDataPortalConnector(),
+                params={"item": item},
+                hour=6,
+                minute=5 + offset * 5,
+                job_id=f"ndp:{item}",
+            )
+        )
     for offset, series_id in enumerate(FRED_SERIES):
         jobs.append(
             ScheduledJob(

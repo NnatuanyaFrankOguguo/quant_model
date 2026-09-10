@@ -421,3 +421,27 @@ class TestTimezoneDiscipline:
         """Guessing a naive datetime's zone is how a one-hour error enters the data."""
         with pytest.raises(ValueError, match="Naive datetime"):
             session_date_for(datetime(2026, 9, 1, 13, 30))
+
+
+@pytest.mark.invariant
+def test_every_alembic_revision_id_fits_the_version_column() -> None:
+    """`alembic_version.version_num` is varchar(32). A longer id half-applies a migration.
+
+    Found the hard way: a 34-character revision ran its changes, then failed stamping the
+    version, leaving the database holding the change while reporting the previous revision.
+    Nothing raised at write time and the next `upgrade` would have tried to run it again.
+    """
+    import re
+    from pathlib import Path
+
+    versions = Path(__file__).resolve().parents[2] / "db" / "migrations" / "versions"
+    ids: list[str] = []
+    for path in sorted(versions.glob("*.py")):
+        match = re.search(r'^revision: str = "([^"]+)"', path.read_text(encoding="utf-8"), re.M)
+        assert match, f"{path.name} declares no revision id"
+        ids.append(match.group(1))
+
+    assert ids, "no migrations found"
+    too_long = [r for r in ids if len(r) > 32]
+    assert not too_long, f"revision ids longer than varchar(32): {too_long}"
+    assert len(set(ids)) == len(ids), "duplicate revision ids"
