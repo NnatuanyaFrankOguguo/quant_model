@@ -224,7 +224,7 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
-| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 11/13 | 8 of 13 series live · 71,662 rows |
+| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 12/13 | 10 of 13 series live · 71,997 rows |
 | P2 US Company Data | ⬜ Not started | — | — | — | |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
@@ -245,8 +245,10 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 "Built but not verified" is 🧪, and 🧪 is not permission to start the next phase.
 
 **P1, stated precisely.** Built and tested: P1.0 the document store, P1.1 the connector
-contract, P1.2 FRED, P1.4 the API, P1.5 the scheduler and health check, P1.6 the dashboard,
-P1.7 the manual CSV path. Checks 1–10 of the P1 checkpoint pass.
+contract, P1.2 FRED, P1.3 CBN and NBS-via-portal, P1.4 the API, P1.5 the scheduler and
+health check, P1.6 the dashboard, P1.7 the manual CSV path. **Ten of thirteen series hold
+real data — 71,997 observations — which meets the exit criterion's "ten series populated".**
+Checks 1–10 and 12 of the P1 checkpoint pass.
 
 **P1.3 CBN is built and four series carry real data.** 6,052 NFEM USD/NGN observations back
 to 2001-12-10, 18 months of the Monetary Policy Rate, and 18 months of headline and core CPI,
@@ -254,39 +256,78 @@ ingested from CBN's own endpoints and rendering with as-of dates and freshness. 
 point-in-time view is proven on real history: USD/NGN as known on 2015-06-30 returns
 ₦196.4500, against ₦1,320.7160 today.
 
-**The CPI figures are a mirror and are labelled as one.** Nigeria's CPI is compiled by NBS;
-CBN republishes it, and CBN is what we can currently reach. Those figures therefore land in
-`NG_CPI_YOY_CBN` / `NG_CPI_CORE_CBN`, and the NBS-attributed primaries stay **empty on
-purpose** — attribution shown to a reader comes from the series, so filling `NG_CPI_YOY` from
-CBN bytes would print NBS's name over CBN's data. An empty primary beside a populated mirror
-is what keeps `docs/03` P1.3's warning about second-hand Nigerian sources visible.
+**NBS is reachable after all, through the Nigeria Data Portal.** `docs/03` P1.3 says NBS has
+no REST API, and `nigerianstat.gov.ng` still does not — but NBS also publishes through the
+AfDB's Nigeria Data Portal, which has a documented JSON API. Two NBS-attributed series are now
+filled from it: `NG_CPI_YOY` with 296 monthly observations back to April 2001, and
+`NG_GDP_GROWTH_YOY` with 39 quarters from 2015Q1. Compiler and transport are kept apart: the
+*series* is credited to NBS, who compile the figures; the *document* points at the portal's
+own `data_sources` row, which is where the bytes came from and whose terms govern our copy.
+
+**The GDP series is labelled with the base it is actually on.** The portal's dataset is at
+2010 constant basic prices and stops at 2024Q3; NBS rebased to 2019 in mid-2025 and the
+portal does not carry those figures. Migration 0008 changed `base_period` from "GDP 2019
+rebasing" to "GDP 2010=100 constant basic prices", because a definition that names a base
+the data is not on is a definition that lies. The series is flagged stale (712 days), which
+is correct and should stay visible. Three real-growth indicators exist on the portal; the
+one loaded is the one whose values match NBS's own headline text (Q3 2024 = 3.46%, Q2 2024 =
+3.19%, Q3 2023 = 2.54%), and a test pins that reconciliation. Market-price growth (3.12% for
+the same quarter), nominal growth, sector rows and annual rows are each refused by name.
+
+**Check 12 found something, which is what check 12 is for.** Reconciling the NBS CPI against
+its release exposed that `NG_CPI_YOY` (via the portal) and `NG_CPI_YOY_CBN` disagree by
+about three points on every one of the ten months they share — 23.18% against 26.27% for
+February 2025, 14.45% against 17.33% for November. **Both are NBS figures. They are different
+vintages.** In its December 2025 CPI report, published mid-January 2026, NBS moved the
+year-on-year reference from a single month to the 2024 twelve-month average and revised every
+2025 print upward. CBN's endpoint carries only the revised series; the portal froze on the
+originals. Three consequences, each acted on:
+
+1. **The CBN mirror's 2025 rows had stored lookahead.** They were bounded at the end of the
+   following month, which is right for a first print and wrong for a revision published a
+   year later: the table said 26.27% was knowable on 2025-03-31 when the market had 23.18%
+   until January 2026. Migration 0009 re-dates those twenty rows (headline and core,
+   February–November 2025) to `known_as_of = 2026-01-31, revision = 2`, and the connector now
+   emits them that way. Proven on the point-in-time query: February 2025 CPI as known on
+   2025-04-30 is 23.18% from NBS and *not yet knowable* from CBN; as known on 2026-02-28, both.
+2. **The NBS primary now holds the superseded vintage** and the mirror holds the current
+   one. That is correct point-in-time data, not a defect — but the revised NBS series can only
+   enter an NBS-attributed series from an NBS publication. The route is P1.7's manual CSV,
+   fed from the December 2025 CPI report itself: one Collector task, ~30 minutes, and the
+   first real use of the path P1.7 exists for.
+3. **CBN's June 2025 row is a copy of May's** — 26.06% where NBS's revised June is 25.29%,
+   every field identical. It is stored as CBN published it, because the mirror records what
+   CBN says, and the connector now logs a month identical to its predecessor rather than
+   silently accepting it. This is the concrete case behind `docs/03` P1.3's warning about
+   second-hand Nigerian sources, and why the mirrors are labelled.
 
 **The two monthly CBN series need opposite `known_as_of` treatment**, and the dashboard now
 shows both: CPI for period 2026-07-31 published 2026-08-31, beside the MPR with both dates
 equal. The MPC announces immediately, so a month's policy rate was public within that month;
-a month's CPI is computed after it ends. Month-end for CPI would have been textbook
-lookahead. CBN publishes no release date, so `known_as_of` is **bounded** at the last day of
-the following month — never earlier than the real release. [NEEDS VERIFICATION] against NBS's
-release calendar.
+a month's CPI is computed after it ends. CBN publishes no release date, so `known_as_of` is
+**bounded** at the last day of the following month — never earlier than the real release —
+and the portal's NBS series use the same rule, one period later for quarterly GDP. [NEEDS
+VERIFICATION] against NBS's release calendar, which would replace the bounds with real dates.
 
 **R-02 had already happened before we wrote a line.** The `.asp` URLs the source documents
 name are 404 — CBN rebuilt the site and the tables now render client-side. The data is
 reachable as JSON, which is better than scraping HTML but is an undocumented endpoint with no
-contract, so P1.7's manual CSV path stays wired rather than being retired.
+contract, so P1.7's manual CSV path stays wired rather than being retired. The portal
+returned 403 on a second request issued immediately after the first, which is how it was
+discovered that `politeness_delay_sec` was declared on every connector and enforced nowhere;
+`run_job` now spaces consecutive runs by it.
 
 **FRED is loaded.** The key was set on 2026-09-09 and all four FRED series came in: 60,835 US
 10-year Treasury observations, 3,361 US CPI, 920 fed funds, and 440 rows of the World Bank
-Nigeria CPI mirror. **Eight of thirteen series now hold real data — 71,662 observations.**
+Nigeria CPI mirror.
 
-**What is still missing is data, not code.** Five series remain empty, all Nigerian: NBS
-(headline CPI, core CPI, GDP) and DMO (public debt, bond stop rates) have no machine-readable
-source. NBS publishes through a data portal and a microdata archive, neither a drop-in; DMO is
-PDF, and `docs/03` P1.3 defers it to P4 where the PDF toolchain exists. The route today is
-[data/manual/README.md](../data/manual/README.md), which needs no key.
-
-The exit criterion is *"ten series populated with real values"*. Eight is not ten — but note
-that two of the eight are `_CBN` mirrors of NBS figures, so the honest count of *distinct*
-macro facts is lower still.
+**What is still missing is data, not code.** Three series remain empty: NBS core CPI (the
+portal carries core as an index, not a published year-on-year rate, and deriving one would
+be publishing our own statistic under NBS's name), and DMO's public debt and bond stop rates
+(PDF; `docs/03` P1.3 defers them to P4 where the PDF toolchain exists). The route today is
+[data/manual/README.md](../data/manual/README.md), which needs no key. Note that two of the
+ten populated series are `_CBN` mirrors and one is a World Bank mirror, so the count of
+*distinct* macro facts from primary sources is seven.
 
 > 🔴 **Rotate the FRED API key.** It was exposed on 2026-09-09: a failed request put it into
 > `connector_runs.error` and into terminal output. The stored row was scrubbed and the code
@@ -294,24 +335,26 @@ macro facts is lower still.
 > has appeared in output must be treated as compromised regardless of clean-up. Free to
 > replace at `fredaccount.stlouisfed.org/apikeys`.
 
-No macro figures were invented to close that gap. A fabricated CPI print carrying a
+No macro figures were invented to close any gap. A fabricated CPI print carrying a
 provenance chain that claims NBS published it is precisely what this system exists to
 prevent, and a dev database is exactly where such a number quietly becomes "the number we
 have".
 
-**Checkpoint status: 11 of 13.** Checks 1–10 pass. Check 11 (open the dashboard beside the
-source page and confirm the number *and the date*) is half done — value and date come from
-the same JSON record and a test pins the mapping, but the visual cross-check against CBN's
-rendered page is still worth doing by eye. Check 12 needs an NBS CPI figure to reconcile
-against its release, and there is none yet.
+**Checkpoint status: 12 of 13.** Checks 1–10 pass. Check 12 is done, with the finding above.
+Check 11 (open the dashboard beside the source page and confirm the number *and the date*)
+is half done — value and date come from the same JSON record and a test pins the mapping,
+but the visual cross-check against CBN's rendered page is still worth doing by eye. Check 13
+(unplug the internet and reload) has not been done, and ADR-0008 makes it interesting: the
+database is Neon, so "the internet is down" takes the data with it, not just the sources.
 
-**A known limitation, recorded rather than smoothed over.** CBN republishes corrected rates
+**Known limitations, recorded rather than smoothed over.** CBN republishes corrected rates
 without saying when it corrected them — six USD dates carry two rows and four disagree, one
 by 3.4%. The later record is kept and the superseded vintage is not, so a backtest deciding
-on 2024-02-22 would have acted on a rate this table no longer holds. Inventing a correction
-date would put a fabricated value in the column whose whole purpose is to say when something
-was knowable. Closing it needs a CBN publication calendar or our own daily snapshots — P3/P7
-work, and it belongs in P7's pre-registration.
+on 2024-02-22 would have acted on a rate this table no longer holds. The portal has the same
+shape of problem for GDP: it carries NBS's latest revision of each quarter, not the first
+print, so a revised quarter sits under a `known_as_of` bounded at its first release. Both
+are the size of the publisher's revisions, both need a source that publishes vintages or our
+own daily snapshots — P3/P7 work — and both belong in P7's pre-registration.
 
 ### What exists right now
 
@@ -327,11 +370,11 @@ work, and it belongs in P7's pre-registration.
 | Docker | ✅ 29.6.1 (Desktop must be *running* for backup/restore) |
 | Node (needed at P9) | ✅ v24.14.0 |
 | Monorepo scaffold | ✅ 4 packages (`common`, `compliance`, `ingestion`, `scheduler`), the rest reserved — `packages/README.md` |
-| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 17 spine tables + `alembic_version` ([ADR-0008](adr/0008-neon-managed-postgres.md)). The other ~35 tables are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
+| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 17 spine tables + `alembic_version`, at migration 0009 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The other ~35 tables are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
 | FastAPI service | ✅ `/health`, `/v1/public/ping`, `/v1/personal/ping` — mode gate, bearer auth, audit row per request |
 | Any application code | ✅ The spine. No financial logic, by design |
 | CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed — no remote** |
-| Test suite | ✅ 159 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
+| Test suite | ✅ 295 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
 | Backup | ✅ Dumped, verified, copied, **and restored** 2026-09-02 — [REVIEW_CADENCE](REVIEW_CADENCE.md) row 2. Off-site: still zero |
 | ADR log | ✅ [0001–0008](adr/README.md) |
 
