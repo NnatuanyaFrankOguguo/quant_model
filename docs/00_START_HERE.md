@@ -224,7 +224,7 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
-| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 12/13 | 10 of 13 series live · 71,997 rows |
+| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 12/13 | 10 of 13 series live · 28,053 rows |
 | P2 US Company Data | ⬜ Not started | — | — | — | |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
@@ -247,7 +247,7 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 **P1, stated precisely.** Built and tested: P1.0 the document store, P1.1 the connector
 contract, P1.2 FRED, P1.3 CBN and NBS-via-portal, P1.4 the API, P1.5 the scheduler and
 health check, P1.6 the dashboard, P1.7 the manual CSV path. **Ten of thirteen series hold
-real data — 71,997 observations — which meets the exit criterion's "ten series populated".**
+real data — 28,053 observations, an honest count (see FRED below) — which meets the exit criterion's "ten series populated".**
 Checks 1–10 and 12 of the P1 checkpoint pass.
 
 **P1.3 CBN is built and four series carry real data.** 6,052 NFEM USD/NGN observations back
@@ -317,9 +317,34 @@ returned 403 on a second request issued immediately after the first, which is ho
 discovered that `politeness_delay_sec` was declared on every connector and enforced nowhere;
 `run_job` now spaces consecutive runs by it.
 
-**FRED is loaded.** The key was set on 2026-09-09 and all four FRED series came in: 60,835 US
-10-year Treasury observations, 3,361 US CPI, 920 fed funds, and 440 rows of the World Bank
-Nigeria CPI mirror.
+**FRED is loaded — and the first count of it was wrong by a factor of three.** The key was
+set on 2026-09-09 and all four FRED series came in: 3,362 US CPI, 920 fed funds, 440 rows of
+the World Bank Nigeria CPI mirror, and what this tracker recorded as "60,835 US 10-year
+Treasury observations". 43,952 of those were an artefact of our own loading. ALFRED clips
+`realtime_start` to the start of the real-time window asked for, so each of the four backfill
+windows returned every observation already known before it dated *at* the window's first
+day, and each was stored as a new vintage — 1990-01-02's yield of 7.94 four times over.
+Point-in-time queries returned the right value throughout, because the duplicates carried
+the value the query would have found anyway; the vintage count did not. Migration 0010
+removed them (round-tripped: 60,835 → 16,883 → 60,835 → 16,883), and `Connector.write()`
+now refuses a record whose value equals the latest earlier vintage of the same period — a
+figure republished unchanged is the same vintage continuing, for every source.
+
+**DGS10's scheduled job had never succeeded.** It asked FRED for every vintage, FRED refuses
+more than 2,000 in one response, and the series had not refreshed since the one-off load.
+The job now asks for a three-year look-back window, which is safe only because of the rule
+above: live, it parsed 16,878 records, skipped 16,095 as unchanged, and inserted the two
+trading days published since the load. The failure had been invisible for two reasons that
+are both fixed: the console gave no per-step account of a run, and all four FRED jobs
+recorded their runs as `fred`, so three healthy series hid the fourth. Runs are now
+recorded per job — `fred:DGS10` — and the health check derives its expectations from the
+job list it shares with the scheduler.
+
+**The console now shows every step of every flow**, colour-coded by meaning (blue
+information, green success, yellow warning, red error) and numbered by nesting (`2.1` is the
+first step inside the second job), with every printed string redacted and tracebacks kept
+free of local variables. `packages/common/console.py`; `LOG_FORMAT=json` for a log
+aggregator. The first run under it is what surfaced both defects above.
 
 **What is still missing is data, not code.** Three series remain empty: NBS core CPI (the
 portal carries core as an index, not a published year-on-year rate, and deriving one would
@@ -370,11 +395,11 @@ own daily snapshots — P3/P7 work — and both belong in P7's pre-registration.
 | Docker | ✅ 29.6.1 (Desktop must be *running* for backup/restore) |
 | Node (needed at P9) | ✅ v24.14.0 |
 | Monorepo scaffold | ✅ 4 packages (`common`, `compliance`, `ingestion`, `scheduler`), the rest reserved — `packages/README.md` |
-| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 17 spine tables + `alembic_version`, at migration 0009 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The other ~35 tables are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
+| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 17 spine tables + `alembic_version`, at migration 0010 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The other ~35 tables are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
 | FastAPI service | ✅ `/health`, `/v1/public/ping`, `/v1/personal/ping` — mode gate, bearer auth, audit row per request |
 | Any application code | ✅ The spine. No financial logic, by design |
 | CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed — no remote** |
-| Test suite | ✅ 295 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
+| Test suite | ✅ 330 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
 | Backup | ✅ Dumped, verified, copied, **and restored** 2026-09-02 — [REVIEW_CADENCE](REVIEW_CADENCE.md) row 2. Off-site: still zero |
 | ADR log | ✅ [0001–0008](adr/README.md) |
 
