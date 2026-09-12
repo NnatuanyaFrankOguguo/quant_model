@@ -21,11 +21,9 @@ best; polling more often is load on someone else's server for no new data.
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 
-import structlog
-
+from packages.common.console import configure_logging, error, info, step, success, warning
 from packages.ingestion.cbn import (
     CbnExchangeRateConnector,
     CbnInflationConnector,
@@ -38,8 +36,6 @@ from packages.ingestion.nigeria_data_portal import (
     NigeriaDataPortalGdpConnector,
 )
 from packages.scheduler.runner import ScheduledJob, build_scheduler, run_job
-
-_log = structlog.get_logger("scheduler")
 
 
 def build_jobs() -> list[ScheduledJob]:
@@ -105,36 +101,36 @@ def main(argv: list[str] | None = None) -> int:
         help="Run every job immediately and exit. Use this to verify the list, or to catch up.",
     )
     args = parser.parse_args(argv)
+    configure_logging()
 
-    jobs = build_jobs()
+    with step("Build the job list") as building:
+        jobs = build_jobs()
+        for job in jobs:
+            building.note("job", id=job.identity(), at_utc=f"{job.hour:02d}:{job.minute:02d}")
+        building.result(jobs=len(jobs))
 
     if args.once:
-        failures = 0
-        for job in jobs:
-            result = run_job(job)
-            status = "ok " if result.status == "ok" else "ERR"
-            print(
-                f"{status} {job.identity():38} parsed={result.records_parsed:>7} "
-                f"inserted={result.rows_written:>7}"
-            )
-            if result.status != "ok":
-                failures += 1
-                print(f"      {result.error}", file=sys.stderr)
-        print(f"\n{len(jobs) - failures} of {len(jobs)} jobs succeeded.")
-        # Non-zero on any failure, so a one-shot run is usable as a scheduled task whose
-        # exit code is the alert.
-        return 1 if failures else 0
+        # Each `run_job` is its own top-level step, numbered after the one above, with the
+        # connector's fetch / store raw / parse / write / record stages nested beneath it.
+        failed = [job.identity() for job in jobs if run_job(job).status != "ok"]
+        if failed:
+            # Non-zero on any failure, so a one-shot run is usable as a scheduled task
+            # whose exit code is the alert.
+            error("jobs failed", failed=len(failed), of=len(jobs), which=failed)
+            return 1
+        success("every job succeeded", jobs=len(jobs))
+        return 0
 
-    scheduler = build_scheduler(jobs)
-    scheduler.start()
-    for job in jobs:
-        _log.info("scheduled", job=job.identity(), at_utc=f"{job.hour:02d}:{job.minute:02d}")
-    print(f"{len(jobs)} jobs scheduled (UTC). Ctrl+C to stop.")
+    with step("Start the scheduler", timezone="UTC") as starting:
+        scheduler = build_scheduler(jobs)
+        scheduler.start()
+        starting.result(jobs=len(jobs))
+    info("running; each firing is logged as its own numbered flow. Ctrl+C to stop.")
     try:
         while True:
             time.sleep(60)
     except KeyboardInterrupt:
-        print("\nStopping.")
+        warning("stopping on Ctrl+C")
         scheduler.shutdown(wait=False)
     return 0
 

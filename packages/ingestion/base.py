@@ -40,6 +40,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from packages.common.config import redact_secrets
+from packages.common.console import step
 from packages.common.models import (
     ConnectorRun,
     DataSource,
@@ -192,13 +193,25 @@ class Connector(ABC):
         source_document_id: int | None = None
         http_status: int | None = None
         try:
-            raw = self.fetch(**params)
-            http_status = raw.http_status
-            document = store_raw(session, raw, connector=self)
-            source_document_id = document.id
-            records = self.parse(raw)
-            rows_written = self.write(session, records, source_document_id=document.id)
-            session.commit()
+            # Each stage is a numbered step on the console. The steps observe; the
+            # try/except below is what decides, exactly as it did before they existed.
+            with step("fetch", connector=self.name) as fetching:
+                raw = self.fetch(**params)
+                http_status = raw.http_status
+                fetching.result(http_status=raw.http_status, bytes=len(raw.data))
+            with step("store raw") as storing:
+                document = store_raw(session, raw, connector=self)
+                source_document_id = document.id
+                storing.result(document_id=document.id, sha256=document.sha256[:12])
+            with step("parse") as parsing:
+                records = self.parse(raw)
+                parsing.result(records=len(records))
+            with step("write") as writing:
+                rows_written = self.write(session, records, source_document_id=document.id)
+                session.commit()
+                writing.result(records=len(records), rows_inserted=rows_written)
+                if records and rows_written == 0:
+                    writing.warn("every parsed record was already present")
             result = ConnectorRunResult(
                 connector_name=self.name,
                 status="ok",
@@ -226,7 +239,9 @@ class Connector(ABC):
                 error=redact_secrets(f"{type(exc).__name__}: {exc}")[:2000],
             )
             _log.error("connector_failed", connector=self.name, error_type=type(exc).__name__)
-        record_run(session, result)
+        with step("record run") as recording:
+            record_run(session, result)
+            recording.result(status=result.status, rows_written=result.rows_written)
         if result.status == "ok" and result.rows_written == 0:
             # Not an error — re-fetching an unchanged page is normal. But it is the signature
             # of a silent scraper failure, so it is said out loud rather than inferred later

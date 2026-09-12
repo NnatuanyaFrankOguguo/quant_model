@@ -32,6 +32,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
+from packages.common.console import reset_steps, step
 from packages.common.db import get_session
 from packages.common.models import ConnectorRun
 from packages.common.timez import utcnow
@@ -106,19 +107,32 @@ def run_job(
     """
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
-        try:
-            return _run_once(job)
-        except _RETRYABLE_DB_ERRORS as exc:
-            last_error = exc
-            _log.warning(
-                "connector_db_connection_failed",
-                connector=job.connector.name,
-                attempt=attempt,
-                of=attempts,
-                error_type=type(exc).__name__,
-            )
-            if attempt < attempts:
-                time.sleep(backoff_sec * attempt)
+        with step(f"Run {job.identity()}", attempt=attempt, of=attempts) as running:
+            try:
+                result = _run_once(job)
+            except _RETRYABLE_DB_ERRORS as exc:
+                last_error = exc
+                running.warn(
+                    "connector_db_connection_failed",
+                    connector=job.connector.name,
+                    attempt=attempt,
+                    of=attempts,
+                    error_type=type(exc).__name__,
+                )
+            else:
+                running.result(
+                    status=result.status,
+                    rows_written=result.rows_written,
+                    records_parsed=result.records_parsed,
+                )
+                if result.status != "ok":
+                    # The connector caught its own failure and reported it as a result; the
+                    # error text is already redacted. Close the step red so the console
+                    # agrees with the `connector_runs` row.
+                    running.fail("connector_reported_error", error=result.error)
+                return result
+        if attempt < attempts:
+            time.sleep(backoff_sec * attempt)
     # Out of attempts. Report it as a failed run rather than raising, so the scheduler keeps
     # its other jobs and the failure still lands in `connector_runs` where it can be seen.
     now = utcnow()
@@ -174,7 +188,7 @@ def build_scheduler(jobs: list[ScheduledJob]):
     scheduler = BackgroundScheduler(timezone="UTC")  # TG21: schedules are UTC, like storage
     for job in jobs:
         scheduler.add_job(
-            run_job,
+            _scheduled_run,
             trigger=CronTrigger(hour=job.hour, minute=job.minute, timezone="UTC"),
             args=[job],
             id=job.identity(),
@@ -184,6 +198,16 @@ def build_scheduler(jobs: list[ScheduledJob]):
             misfire_grace_time=3600,
         )
     return scheduler
+
+
+def _scheduled_run(job: ScheduledJob) -> ConnectorRunResult:
+    """A scheduled firing is its own flow on the console: numbering starts at 1 each time.
+
+    Worker threads are reused, and a step counter that kept climbing across days of firings
+    would number the four-hundredth run "487" for no one's benefit.
+    """
+    reset_steps()
+    return run_job(job)
 
 
 def check_health(

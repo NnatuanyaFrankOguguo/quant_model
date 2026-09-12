@@ -23,9 +23,9 @@ rejected one, because the gaps are invisible and you have already moved on.
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
+from packages.common.console import configure_logging, error, step, success, warning
 from packages.common.db import get_session
 from packages.ingestion.base import register
 from packages.ingestion.manual_csv import MANUAL_SOURCES, ManualCsvConnector
@@ -41,29 +41,47 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--path", required=True, type=Path, help="The CSV to ingest")
     args = parser.parse_args(argv)
+    configure_logging()
 
     connector = ManualCsvConnector(args.source)
     with get_session() as session:
-        register(session, connector)
-        result = connector.run(session, path=args.path)
+        with step("Register the source licence", source=args.source) as registering:
+            data_source_id = register(session, connector)
+            registering.result(data_source_id=data_source_id)
+        # The connector's own fetch / store raw / parse / write / record stages appear as
+        # numbered sub-steps of this one.
+        with step("Ingest the CSV", path=str(args.path)) as ingesting:
+            result = connector.run(session, path=args.path)
+            if result.status != "ok":
+                ingesting.fail("nothing was written", error=result.error)
+            else:
+                ingesting.result(
+                    records_parsed=result.records_parsed,
+                    rows_inserted=result.rows_written,
+                    source_document_id=result.source_document_id,
+                )
 
     if result.status != "ok":
-        print(f"FAILED: {result.error}", file=sys.stderr)
-        print(
-            "Nothing was written. Fix the file and re-run — the connector_runs row records "
-            "this attempt either way.",
-            file=sys.stderr,
+        error(
+            "ingest failed: fix the file and re-run; the connector_runs row records this "
+            "attempt either way",
+            error=result.error,
         )
         return 1
 
-    print(f"Parsed {result.records_parsed} record(s); inserted {result.rows_written}.")
     if result.rows_written == 0 and result.records_parsed > 0:
-        print(
-            "Every row was already present, so nothing was inserted. That is a successful "
-            "no-op, not a failure — observations are never overwritten, and a revision is a "
-            "new row with a later known_as_of."
+        warning(
+            "every row was already present, so nothing was inserted: a successful no-op, "
+            "not a failure: observations are never overwritten, and a revision is a new row "
+            "with a later known_as_of",
+            records_parsed=result.records_parsed,
         )
-    print(f"Stored as source_document id={result.source_document_id}.")
+    success(
+        "ingested",
+        records_parsed=result.records_parsed,
+        rows_inserted=result.rows_written,
+        source_document_id=result.source_document_id,
+    )
     return 0
 
 

@@ -17,6 +17,9 @@ dependencies = [
   "pydantic-settings",
   "python-dotenv",
   "structlog",
+  # Windows only: legacy conhost needs ANSI translated for the coloured console
+  # (packages/common/console.py). Windows Terminal does not, and other platforms never did.
+  "colorama; sys_platform == 'win32'",
   "httpx",
   "apscheduler",
 ]

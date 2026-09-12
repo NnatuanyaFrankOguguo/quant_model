@@ -167,7 +167,7 @@ class FredConnector(Connector):
             # the number you need in order to pick a window size.
             raise VintageLimitExceededError(
                 f"FRED refused {series_id} for {realtime_start}..{realtime_end}: too many "
-                f"vintage dates in one request. Load it in windows — see "
+                f"vintage dates in one request. Load it in windows - see "
                 f"packages.ingestion.fred.windows_from_vintage_dates(). FRED said: "
                 f"{response.json().get('error_message', '')}"
             )

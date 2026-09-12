@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sys
 
+from packages.common.console import configure_logging, error, step, success
 from packages.common.db import get_session
 from packages.ingestion.cbn import (
     CbnExchangeRateConnector,
@@ -54,42 +55,55 @@ def main(argv: list[str] | None = None) -> int:
     window_days = 30
     if argv:
         window_days = int(argv[0])
+    configure_logging()
 
-    with get_session() as session:
-        health = check_health(session, window_days=window_days)
+    with step("Query connector health", window_days=window_days) as querying:
+        with get_session() as session:
+            health = check_health(session, window_days=window_days)
+        querying.result(connectors_seen=len(health))
 
-    print(f"Connector health, last {window_days} days\n")
-    print(f"{'connector':24} {'last run':22} {'status':8} {'runs':>5} {'rows':>7}")
-    print("-" * 72)
-    for row in health:
-        last = row.last_run_at.strftime("%Y-%m-%d %H:%MZ") if row.last_run_at else "never"
-        print(
-            f"{row.connector_name:24} {last:22} {row.last_status or '-':8} "
-            f"{row.runs_in_window:>5} {row.rows_in_window:>7}"
-        )
+    # One line per connector, coloured by what it needs: green needs nothing, yellow needs
+    # a look, red needs a human now.
+    with step("Review every connector that ran") as reviewing:
+        for row in health:
+            last = row.last_run_at.strftime("%Y-%m-%d %H:%MZ") if row.last_run_at else "never"
+            fields = {
+                "connector": row.connector_name,
+                "last_run": last,
+                "last_status": row.last_status or "-",
+                "runs": row.runs_in_window,
+                "rows": row.rows_in_window,
+            }
+            if not row.unhealthy:
+                reviewing.ok("healthy", **fields)
+            elif row.last_status == "error":
+                reviewing.fail(row.finding or "last run failed", **fields)
+            else:
+                reviewing.warn(row.finding or "unhealthy", **fields)
 
     findings = [r for r in health if r.unhealthy]
     seen = {r.connector_name for r in health}
     never_ran = sorted(EXPECTED_CONNECTORS - seen)
 
-    print()
-    for row in findings:
-        print(f"UNHEALTHY  {row.connector_name}: {row.finding}")
-    for name in never_ran:
-        print(
-            f"NEVER RAN  {name}: no run in the window. A connector that never runs fails "
-            f"exactly like one that runs and returns nothing, except quieter."
-        )
+    with step("Check for connectors that never ran", expected=len(EXPECTED_CONNECTORS)) as absent:
+        for name in never_ran:
+            absent.fail(
+                "never ran in the window: a connector that never runs fails exactly like "
+                "one that runs and returns nothing, except quieter",
+                connector=name,
+            )
+        absent.result(never_ran=len(never_ran))
 
     if not findings and not never_ran:
-        print("All expected connectors ran and wrote rows.")
+        success("all expected connectors ran and wrote rows", connectors=len(health))
         return 0
 
-    print(
-        f"\n{len(findings)} unhealthy, {len(never_ran)} never ran. "
-        f"FRED_SERIES covers {len(FRED_SERIES)} series; the manual paths cover "
-        f"{len(MANUAL_SOURCES)} agencies.",
-        file=sys.stderr,
+    error(
+        "connector health needs a human",
+        unhealthy=len(findings),
+        never_ran=len(never_ran),
+        fred_series=len(FRED_SERIES),
+        manual_agencies=len(MANUAL_SOURCES),
     )
     return 1
 
