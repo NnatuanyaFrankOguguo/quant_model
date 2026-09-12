@@ -26,7 +26,10 @@ from packages.ingestion.cbn import (
 )
 from packages.ingestion.fred import FRED_SERIES
 from packages.ingestion.manual_csv import MANUAL_SOURCES
-from packages.ingestion.nigeria_data_portal import NigeriaDataPortalConnector
+from packages.ingestion.nigeria_data_portal import (
+    NigeriaDataPortalCpiConnector,
+    NigeriaDataPortalGdpConnector,
+)
 from packages.scheduler.runner import check_health
 
 #: What we expect to see runs from. FRED runs once per series; the manual paths run when a
@@ -41,7 +44,8 @@ EXPECTED_CONNECTORS = {
     CbnExchangeRateConnector.name,
     CbnInflationConnector.name,
     CbnMoneyMarketConnector.name,
-    NigeriaDataPortalConnector.name,
+    NigeriaDataPortalCpiConnector.name,
+    NigeriaDataPortalGdpConnector.name,
     *(f"manual_csv_{s.lower()}" for s in MANUAL_SOURCES),
 }
 

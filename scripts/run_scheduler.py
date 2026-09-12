@@ -32,7 +32,11 @@ from packages.ingestion.cbn import (
     CbnMoneyMarketConnector,
 )
 from packages.ingestion.fred import FRED_SERIES, FredConnector
-from packages.ingestion.nigeria_data_portal import ITEM_KEYS, NigeriaDataPortalConnector
+from packages.ingestion.nigeria_data_portal import (
+    ITEM_KEYS,
+    NigeriaDataPortalCpiConnector,
+    NigeriaDataPortalGdpConnector,
+)
 from packages.scheduler.runner import ScheduledJob, build_scheduler, run_job
 
 _log = structlog.get_logger("scheduler")
@@ -62,13 +66,24 @@ def build_jobs() -> list[ScheduledJob]:
     for offset, item in enumerate(ITEM_KEYS):
         jobs.append(
             ScheduledJob(
-                connector=NigeriaDataPortalConnector(),
+                connector=NigeriaDataPortalCpiConnector(),
                 params={"item": item},
                 hour=6,
                 minute=5 + offset * 5,
                 job_id=f"ndp:{item}",
             )
         )
+    # NBS GDP growth via the same portal. Quarterly data polled daily, for the same reason:
+    # one request, and the alternative is a release noticed a quarter late.
+    jobs.append(
+        ScheduledJob(
+            connector=NigeriaDataPortalGdpConnector(),
+            params={},
+            hour=6,
+            minute=5 + len(ITEM_KEYS) * 5,
+            job_id="ndp:gdp",
+        )
+    )
     for offset, series_id in enumerate(FRED_SERIES):
         jobs.append(
             ScheduledJob(
