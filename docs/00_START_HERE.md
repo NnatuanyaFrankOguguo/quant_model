@@ -213,18 +213,20 @@ retrofitted.
 > **Update this table at every phase transition.** It is the only place in the document set
 > that claims what is done. Keeping it honest is what stops you from building on sand.
 
-**Current phase: P0 — Foundation & Rails. Status: 🧪 BUILT (spine), 16 of 17 checks passed.**
+**Current phase: P1 — Macro Backdrop. Status: 🧪 BUILT, 12½ of 13 checks passed. P0 is also
+🧪, for one reason that has not changed.**
 
-The spine from [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §6.1 is built and
+The P0 spine from [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §6.1 is built and
 verified on 2026-09-02: 17 tables migrated on Neon PostgreSQL 18.6, the mode gate enforced and
-adversarially tested, 159 tests passing with zero skips, a backup dumped and actually restored.
-**It is 🧪 and not ✅ for one reason: check 13 (CI green on a PR) cannot run — there is no
-GitHub remote yet.** The workflow is written and waiting. See "what is left" below.
+adversarially tested, a backup dumped and actually restored. **It is 🧪 and not ✅ for one
+reason: check 13 (CI green on a PR) cannot run — there is no GitHub remote yet.** The
+workflow is written and waiting. P1 is 🧪 for the by-eye check 11 alone. Both are the
+operator's to close; see "the immediate next actions" below.
 
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
-| P1 Macro Backdrop | 🔨 In progress | 2026-09-03 | — | 12/13 | 10 of 13 series live · 28,053 rows |
+| P1 Macro Backdrop | 🧪 Built | 2026-09-03 | — | 12½/13 | 10 of 13 series live · 28,053 rows · check 11 by eye |
 | P2 US Company Data | ⬜ Not started | — | — | — | |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
@@ -365,12 +367,17 @@ provenance chain that claims NBS published it is precisely what this system exis
 prevent, and a dev database is exactly where such a number quietly becomes "the number we
 have".
 
-**Checkpoint status: 12 of 13.** Checks 1–10 pass. Check 12 is done, with the finding above.
-Check 11 (open the dashboard beside the source page and confirm the number *and the date*)
-is half done — value and date come from the same JSON record and a test pins the mapping,
-but the visual cross-check against CBN's rendered page is still worth doing by eye. Check 13
-(unplug the internet and reload) has not been done, and ADR-0008 makes it interesting: the
-database is Neon, so "the internet is down" takes the data with it, not just the sources.
+**Checkpoint status: 12 of 13, and the thirteenth is half done.** Checks 1–10 pass. Check 12
+is done, with the finding above. Check 13 (unplug the internet and reload) is done in code
+rather than with a cable, because ADR-0008 changed its meaning: the database is Neon, so
+"the internet is down" takes the data with it, not just the sources. What survives that —
+and is proven in `tests/compliance/test_degraded_database.py` — is that nothing crashes and
+nothing leaks: `/health` answers 503, the series endpoint answers a JSON error with no
+traceback and no connection string, and the dashboard renders its banner saying what is
+wrong and how to start the API. **The one thing left is by eye: check 11** — open the
+dashboard beside CBN's MPR page and confirm the number *and the date*. Value and date come
+from the same JSON record and a test pins the mapping; the visual cross-check is the
+operator's, and it is the last item between P1 and ✅.
 
 **Known limitations, recorded rather than smoothed over.** CBN republishes corrected rates
 without saying when it corrected them — six USD dates carry two rows and four disagree, one
@@ -399,7 +406,7 @@ own daily snapshots — P3/P7 work — and both belong in P7's pre-registration.
 | FastAPI service | ✅ `/health`, `/v1/public/ping`, `/v1/personal/ping` — mode gate, bearer auth, audit row per request |
 | Any application code | ✅ The spine. No financial logic, by design |
 | CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed — no remote** |
-| Test suite | ✅ 330 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
+| Test suite | ✅ 333 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
 | Backup | ✅ Dumped, verified, copied, **and restored** 2026-09-02 — [REVIEW_CADENCE](REVIEW_CADENCE.md) row 2. Off-site: still zero |
 | ADR log | ✅ [0001–0008](adr/README.md) |
 
