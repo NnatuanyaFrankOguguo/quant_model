@@ -209,3 +209,96 @@ def test_empty_cpi_field_is_none_never_zero() -> None:
     december = {r.series_code: r.value for r in records if r.as_of_date == dt.date(2026, 12, 31)}
     assert december["NG_CPI_YOY_CBN"] is None
     assert december["NG_CPI_CORE_CBN"] == Decimal("13.10")
+
+
+# --------------------------------------------------------------------------------------
+# The 2025 revision — where the ordinary bound would have stored lookahead
+# --------------------------------------------------------------------------------------
+
+REVISED_2025_PAYLOAD = [
+    {"id": 278, "tyear": 2024, "tmonth": 12, "allItemsYearOn": "34.80",
+     "allItemsLessFrmProdAndEnergyYearOn": "29.28"},
+    {"id": 279, "tyear": 2025, "tmonth": 2, "allItemsYearOn": "26.27",
+     "allItemsLessFrmProdAndEnergyYearOn": "25.66"},
+    {"id": 282, "tyear": 2025, "tmonth": 5, "allItemsYearOn": "26.06",
+     "allItemsLessFrmProdAndEnergyYearOn": "24.92"},
+    {"id": 283, "tyear": 2025, "tmonth": 6, "allItemsYearOn": "26.06",
+     "allItemsLessFrmProdAndEnergyYearOn": "24.92"},
+    {"id": 288, "tyear": 2025, "tmonth": 11, "allItemsYearOn": "17.33",
+     "allItemsLessFrmProdAndEnergyYearOn": "20.59"},
+    {"id": 289, "tyear": 2025, "tmonth": 12, "allItemsYearOn": "15.15",
+     "allItemsLessFrmProdAndEnergyYearOn": "18.63"},
+]  # fmt: skip
+
+
+def _by_period(records, series_code: str = "NG_CPI_YOY_CBN"):
+    return {r.as_of_date: r for r in records if r.series_code == series_code}
+
+
+@pytest.mark.invariant
+def test_2025_figures_are_the_january_2026_revision() -> None:
+    """February 2025's 26.27% is NBS's *revised* print. The market had 23.18% in March 2025.
+
+    Bounding it at 2025-03-31 would let a backtest deciding in April 2025 discount at a rate
+    nobody published until January 2026. The revision's publication is the bound.
+    """
+    by_period = _by_period(CbnInflationConnector().parse(_raw(REVISED_2025_PAYLOAD)))
+    february = by_period[dt.date(2025, 2, 28)]
+    assert february.value == Decimal("26.27")
+    assert february.known_as_of == dt.date(2026, 1, 31)
+    assert february.revision == 2
+    november = by_period[dt.date(2025, 11, 30)]
+    assert november.known_as_of == dt.date(2026, 1, 31)
+    assert november.revision == 2
+
+
+def test_the_revision_applies_to_core_as_well() -> None:
+    by_period = _by_period(
+        CbnInflationConnector().parse(_raw(REVISED_2025_PAYLOAD)), "NG_CPI_CORE_CBN"
+    )
+    assert by_period[dt.date(2025, 2, 28)].known_as_of == dt.date(2026, 1, 31)
+    assert by_period[dt.date(2025, 2, 28)].revision == 2
+
+
+def test_periods_before_the_revision_window_are_first_prints() -> None:
+    by_period = _by_period(CbnInflationConnector().parse(_raw(REVISED_2025_PAYLOAD)))
+    december_2024 = by_period[dt.date(2024, 12, 31)]
+    assert december_2024.known_as_of == dt.date(2025, 1, 31)
+    assert december_2024.revision == 1
+
+
+def test_december_2025_is_a_first_print_under_the_new_method() -> None:
+    """The first figure computed on the new base, published in the same report as the
+    revision. The ordinary bound lands on the same date, and it is a first print."""
+    by_period = _by_period(CbnInflationConnector().parse(_raw(REVISED_2025_PAYLOAD)))
+    december = by_period[dt.date(2025, 12, 31)]
+    assert december.known_as_of == dt.date(2026, 1, 31)
+    assert december.revision == 1
+
+
+def test_later_periods_keep_the_ordinary_bound_and_revision() -> None:
+    by_period = _by_period(CbnInflationConnector().parse(_raw(CPI_PAYLOAD)))
+    assert by_period[dt.date(2026, 7, 31)].known_as_of == dt.date(2026, 8, 31)
+    assert by_period[dt.date(2026, 7, 31)].revision == 1
+
+
+def test_a_month_identical_to_its_predecessor_is_flagged_not_dropped(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """CBN's June 2025 row is a copy of May's; NBS's revised June is 25.29%.
+
+    The mirror stores what CBN published — that is what a mirror is — but it says so.
+    """
+    by_period = _by_period(CbnInflationConnector().parse(_raw(REVISED_2025_PAYLOAD)))
+    assert by_period[dt.date(2025, 5, 31)].value == Decimal("26.06")
+    assert by_period[dt.date(2025, 6, 30)].value == Decimal("26.06")
+    out = capsys.readouterr().out
+    assert "cbn_cpi_row_identical_to_previous_period" in out
+    assert "2025-06-30" in out
+
+
+def test_revised_cpi_parse_is_deterministic_regardless_of_row_order() -> None:
+    connector = CbnInflationConnector()
+    forward = connector.parse(_raw(REVISED_2025_PAYLOAD))
+    backward = connector.parse(_raw(list(reversed(REVISED_2025_PAYLOAD))))
+    assert forward == backward

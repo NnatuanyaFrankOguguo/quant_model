@@ -295,10 +295,33 @@ class CbnInflationConnector(CbnConnector):
     real release. The asymmetry is deliberate — erring late costs a little responsiveness,
     erring early manufactures knowledge nobody had. [NEEDS VERIFICATION] against NBS's
     published release calendar, which would replace the bound with the actual date.
+
+    **The 2025 figures are a later vintage, and the bound above is wrong for them.** In its
+    December 2025 CPI report (published mid-January 2026) NBS moved the year-on-year
+    reference from a single month to the 2024 twelve-month average and revised every 2025
+    print upward: February 23.18% became 26.27%, November 14.45% became 17.33%. CBN's
+    endpoint carries *only* the revised vintage — the figures the market actually had during
+    2025 are gone from it. A revised February figure bounded at 2025-03-31 would claim the
+    market knew 26.27% when it knew 23.18%, so for those periods `known_as_of` is bounded at
+    the revision's publication instead, and the record is marked `revision=2`. The original
+    prints live in `NG_CPI_YOY`, from NBS via the Nigeria Data Portal, which froze on them.
+
+    This was found by P1 checkpoint 12 — reconciling one figure against its release — and it
+    is precisely why `docs/03` P1.3 warns about second-hand Nigerian sources. The same
+    reconciliation showed CBN's June 2025 row to be a copy of May's (26.06 against NBS's
+    revised 25.29). That row is stored as CBN published it, because this series is a mirror
+    of what CBN says; the parser flags a month identical to its predecessor rather than
+    deciding which of the two is real.
     """
 
     name = "cbn_inflation"
     path = "/api/GetAllInflationRatesGRAPH"
+
+    #: Periods whose values on CBN's endpoint are the January-2026 revision, and the earliest
+    #: date that revision could have been known. December 2025 onward are first prints under
+    #: the new method and the ordinary bound already lands on or after this date.
+    REVISED_PERIODS = (dt.date(2025, 1, 31), dt.date(2025, 11, 30))
+    REVISION_PUBLISHED_BY = dt.date(2026, 1, 31)
 
     #: CBN's field name -> our series code. `allItemsLessFrmProdAndEnergyYearOn` is
     #: "all items less farm produce and energy", which is the core measure.
@@ -310,23 +333,52 @@ class CbnInflationConnector(CbnConnector):
     def parse(self, raw: RawResponse) -> list[MacroRecord]:
         payload = json.loads(raw.data.decode("utf-8"))
         records: list[MacroRecord] = []
+        dated: list[tuple[dt.date, dict[str, object]]] = []
         for row in payload:
             if not isinstance(row, dict):
                 continue
             period_end = _month_end(row.get("tyear"), row.get("tmonth"))
             if period_end is None:
                 continue
-            published_by = _end_of_following_month(period_end)
+            dated.append((period_end, row))
+        dated.sort(key=lambda item: item[0])
+
+        previous: dict[str, Decimal | None] | None = None
+        for period_end, row in dated:
+            values = {field: _parse_decimal(row.get(field)) for field in self.FIELDS}
+            if (
+                previous is not None
+                and values == previous
+                and any(v is not None for v in values.values())
+            ):
+                # Every headline and core figure equal to last month's, to two decimals, is
+                # a copy-paste on the publisher's side far more often than it is an economy
+                # standing perfectly still. Said out loud, not dropped: the mirror records
+                # what CBN published, and the NBS primary is where the truth is checked.
+                _log.warning("cbn_cpi_row_identical_to_previous_period", period=str(period_end))
+            previous = values
+
+            known_as_of, revision = self._vintage(period_end)
             for field, series_code in self.FIELDS.items():
                 records.append(
                     MacroRecord(
                         series_code=series_code,
                         as_of_date=period_end,
-                        known_as_of=published_by,
-                        value=_parse_decimal(row.get(field)),
+                        known_as_of=known_as_of,
+                        value=values[field],
+                        revision=revision,
                     )
                 )
         return records
+
+    @classmethod
+    def _vintage(cls, period_end: dt.date) -> tuple[dt.date, int]:
+        """When the figure CBN now serves for this period became knowable, and which print."""
+        published_by = _end_of_following_month(period_end)
+        first, last = cls.REVISED_PERIODS
+        if first <= period_end <= last:
+            return max(published_by, cls.REVISION_PUBLISHED_BY), 2
+        return published_by, 1
 
 
 def _end_of_following_month(period_end: dt.date) -> dt.date:
