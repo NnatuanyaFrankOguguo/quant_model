@@ -290,3 +290,90 @@ def test_write_spans_multiple_batches_and_counts_once(
         .where(MacroObservation.series_id == series_id)
     ).scalar_one()
     assert stored == 10
+
+
+@pytest.mark.invariant
+def test_an_unchanged_value_republished_later_is_not_a_new_vintage(
+    db_session: Session, tmp_path, local_store: LocalDiskBackend
+) -> None:
+    """A vintage is a change in what was known. The same figure on a later date is not one.
+
+    ALFRED clips `realtime_start` to a requested window, so every observation already known
+    before the window comes back dated at the window start; the DGS10 backfill stored 43,952
+    such rows as vintages. The rule is general: no point-in-time query can tell a period
+    whose value was reconfirmed from one that was left alone.
+    """
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+
+    first = tmp_path / "first.csv"
+    first.write_text(
+        "series_code,as_of_date,known_as_of,value\nNG_GDP_GROWTH_YOY,2026-06-30,2026-08-25,3.1\n",
+        encoding="utf-8",
+    )
+    reconfirmed = tmp_path / "reconfirmed.csv"
+    reconfirmed.write_text(
+        "series_code,as_of_date,known_as_of,value\nNG_GDP_GROWTH_YOY,2026-06-30,2026-11-20,3.10\n",
+        encoding="utf-8",
+    )
+    revised = tmp_path / "revised.csv"
+    revised.write_text(
+        "series_code,as_of_date,known_as_of,value\nNG_GDP_GROWTH_YOY,2026-06-30,2027-02-01,3.4\n",
+        encoding="utf-8",
+    )
+    assert connector.run(db_session, path=first).rows_written == 1
+    # Same value, later date, even spelled "3.10": not written, and reported as such.
+    result = connector.run(db_session, path=reconfirmed)
+    assert result.status == "ok" and result.records_parsed == 1 and result.rows_written == 0
+    # A different value is a revision and is written.
+    assert connector.run(db_session, path=revised).rows_written == 1
+
+    series_id = db_session.execute(
+        select(MacroSeries.id).where(MacroSeries.code == "NG_GDP_GROWTH_YOY")
+    ).scalar_one()
+    rows = db_session.execute(
+        select(MacroObservation.known_as_of, MacroObservation.value)
+        .where(MacroObservation.series_id == series_id)
+        .order_by(MacroObservation.known_as_of)
+    ).all()
+    assert [(r.known_as_of, r.value) for r in rows] == [
+        (dt.date(2026, 8, 25), Decimal("3.1")),
+        (dt.date(2027, 2, 1), Decimal("3.4")),
+    ]
+
+
+@pytest.mark.invariant
+def test_an_absent_value_reconfirmed_absent_is_not_a_new_vintage(
+    db_session: Session, tmp_path, local_store: LocalDiskBackend
+) -> None:
+    """NULL followed by NULL is a continuation too; a holiday does not become two vintages."""
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+    first = tmp_path / "first.csv"
+    first.write_text(
+        "series_code,as_of_date,known_as_of,value\nNG_CPI_CORE,2026-07-31,2026-08-15,\n",
+        encoding="utf-8",
+    )
+    again = tmp_path / "again.csv"
+    again.write_text(
+        "series_code,as_of_date,known_as_of,value\nNG_CPI_CORE,2026-07-31,2026-09-15,\n",
+        encoding="utf-8",
+    )
+    assert connector.run(db_session, path=first).rows_written == 1
+    assert connector.run(db_session, path=again).rows_written == 0
+
+
+def test_a_value_returning_to_an_earlier_one_is_still_a_revision(
+    db_session: Session, tmp_path, local_store: LocalDiskBackend
+) -> None:
+    """Only the *latest* earlier vintage is compared: A, then B, then A again is three."""
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+    vintages = (("a", "2026-08-25", "3.1"), ("b", "2026-11-20", "3.4"), ("c", "2027-02-01", "3.1"))
+    for name, known, value in vintages:
+        path = tmp_path / f"{name}.csv"
+        path.write_text(
+            f"series_code,as_of_date,known_as_of,value\nNG_GDP_GROWTH_YOY,2026-06-30,{known},{value}\n",
+            encoding="utf-8",
+        )
+        assert connector.run(db_session, path=path).rows_written == 1, name

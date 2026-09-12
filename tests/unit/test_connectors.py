@@ -317,3 +317,56 @@ def test_redaction_never_raises() -> None:
     from packages.common.config import redact_secrets
 
     assert redact_secrets("") == ""
+
+
+# --------------------------------------------------------------------------------------
+# P1.2 — the real-time window a FRED request asks for
+# --------------------------------------------------------------------------------------
+
+
+def test_fred_default_window_is_every_vintage() -> None:
+    from packages.ingestion.fred import resolve_realtime_window
+
+    assert resolve_realtime_window({"series_id": "FEDFUNDS"}, today=dt.date(2026, 9, 12)) == (
+        "1776-07-04",
+        "9999-12-31",
+    )
+
+
+def test_fred_lookback_window_starts_n_days_before_today_and_runs_to_the_sentinel() -> None:
+    """How DGS10 is kept up to date without asking for the 5,000 vintages FRED refuses."""
+    from packages.ingestion.fred import resolve_realtime_window
+
+    start, end = resolve_realtime_window(
+        {"series_id": "DGS10", "lookback_days": 3 * 365}, today=dt.date(2026, 9, 12)
+    )
+    assert (start, end) == ("2023-09-13", "9999-12-31")
+
+
+def test_fred_explicit_window_beats_lookback() -> None:
+    from packages.ingestion.fred import resolve_realtime_window
+
+    start, end = resolve_realtime_window(
+        {"realtime_start": "2012-01-19", "realtime_end": "2018-03-13", "lookback_days": 30},
+        today=dt.date(2026, 9, 12),
+    )
+    assert (start, end) == ("2012-01-19", "2018-03-13")
+
+
+def test_fred_lookback_must_be_positive() -> None:
+    from packages.ingestion.fred import resolve_realtime_window
+
+    with pytest.raises(ValueError, match="lookback_days"):
+        resolve_realtime_window({"lookback_days": 0}, today=dt.date(2026, 9, 12))
+
+
+def test_the_scheduled_dgs10_job_is_bounded_and_the_others_are_not() -> None:
+    """The docstring used to claim the default window kept DGS10 up to date. It did not."""
+    import sys
+
+    sys.path.insert(0, "scripts")
+    from run_scheduler import build_jobs
+
+    fred_jobs = {job.job_id: job.params for job in build_jobs() if job.job_id.startswith("fred:")}
+    assert fred_jobs["fred:DGS10"].get("lookback_days") == 3 * 365
+    assert all("lookback_days" not in p for j, p in fred_jobs.items() if j != "fred:DGS10")

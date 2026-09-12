@@ -25,6 +25,7 @@ from decimal import Decimal, InvalidOperation
 import httpx
 
 from packages.common.config import get_settings
+from packages.common.timez import utctoday
 from packages.ingestion.base import (
     Connector,
     DataSourceLicence,
@@ -37,6 +38,7 @@ __all__ = [
     "FredConnector",
     "MissingApiKeyError",
     "VintageLimitExceededError",
+    "resolve_realtime_window",
     "windows_from_vintage_dates",
 ]
 
@@ -146,14 +148,14 @@ class FredConnector(Connector):
         **It does not work for every series, and the failure is a hard 400.** FRED caps a
         JSON response at 2,000 vintage dates. `DGS10` has 5,104 and is simply refused:
         *"This exceeds the maximum number of vintage dates allowed for this file type."*
-        So the window is a parameter, and a long-history daily series is loaded as several
-        runs — see :meth:`vintage_dates` and
-        :func:`windows_from_vintage_dates`. One run is still one fetch and one parse, so the
-        contract in `docs/08` §5 holds; there are just more runs.
+        So the window is a parameter — see :func:`resolve_realtime_window`. A long-history
+        daily series is *loaded* as several runs (:meth:`vintage_dates` and
+        :func:`windows_from_vintage_dates`) and *kept up to date* with `lookback_days`. One
+        run is still one fetch and one parse, so the contract in `docs/08` §5 holds; there
+        are just more runs.
         """
         series_id = str(params["series_id"])
-        realtime_start = str(params.get("realtime_start") or "1776-07-04")
-        realtime_end = str(params.get("realtime_end") or "9999-12-31")
+        realtime_start, realtime_end = resolve_realtime_window(params, today=utctoday())
         query = {
             "series_id": series_id,
             "api_key": self.api_key,
@@ -251,6 +253,43 @@ _VINTAGE_URL = "https://api.stlouisfed.org/fred/series/vintagedates"
 #: FRED's sentinel for "and everything after today". It is the ONLY future value the API
 #: accepts: any other `realtime_end` beyond today is a 400.
 REALTIME_MAX = "9999-12-31"
+
+#: FRED's own sentinel for "the beginning of time".
+REALTIME_MIN = "1776-07-04"
+
+
+def resolve_realtime_window(params: dict[str, object], *, today: dt.date) -> tuple[str, str]:
+    """The real-time window a request asks for, from the job's parameters.
+
+    Three ways to say it, in order of precedence:
+
+    * `realtime_start` / `realtime_end` explicitly — the one-off windowed backfill;
+    * `lookback_days=N` — a window that starts N days before today and runs to the
+      sentinel. This is how a long-history daily series is *kept up to date*: `DGS10` has
+      over 5,000 vintage dates and FRED refuses more than 2,000 in one response, so the
+      scheduled job cannot ask for everything, and until it stopped asking it failed on
+      every run. Three years of a daily series is ~760 vintages;
+    * nothing — every vintage there is, which is right for the other three series.
+
+    A bounded window returns *every* observation the series has, with `realtime_start`
+    clipped to the window for those already known before it. That is safe only because
+    `Connector.write()` refuses a record whose value equals the latest earlier vintage —
+    without that rule each scheduled run would insert the whole series again as a fake
+    new vintage, which is precisely what the four-window backfill did.
+    """
+    start = params.get("realtime_start")
+    lookback = params.get("lookback_days")
+    if start:
+        realtime_start = str(start)
+    elif lookback is not None:
+        days = int(str(lookback))
+        if days <= 0:
+            raise ValueError(f"lookback_days must be positive, not {days}")
+        realtime_start = (today - dt.timedelta(days=days)).isoformat()
+    else:
+        realtime_start = REALTIME_MIN
+    realtime_end = str(params.get("realtime_end") or REALTIME_MAX)
+    return realtime_start, realtime_end
 
 
 def windows_from_vintage_dates(

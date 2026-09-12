@@ -263,6 +263,16 @@ class Connector(ABC):
         `known_as_of`, and a re-fetch of an unchanged vintage is a no-op. There is no
         reachable path here that updates an existing observation — migration 0002 puts a
         `no_update` trigger on the table so the rule holds even outside this code.
+
+        **A record whose value equals the latest earlier vintage of the same period is not
+        a revision, and is not written.** A vintage is a *change* in what was known; a
+        figure republished unchanged on a later date is the same vintage continuing. This
+        was learned from ALFRED, which clips `realtime_start` to the start of the requested
+        real-time window: every observation that was already known before the window comes
+        back dated *at* the window start, and the four-window DGS10 backfill stored 43,952
+        such rows as if they were new vintages — 1990-01-02's yield of 7.94 four times over.
+        The rule is stated generally because it is true generally: no point-in-time query
+        can distinguish a period whose value was reconfirmed from one that was left alone.
         """
         if not records:
             return 0
@@ -281,6 +291,11 @@ class Connector(ABC):
         ]
         if not rows:
             return 0
+        rows, unchanged = _drop_unchanged_vintages(session, rows)
+        if unchanged:
+            _log.info("unchanged_vintages_skipped", count=unchanged)
+        if not rows:
+            return 0
         inserted = 0
         for batch in _batched(rows, INSERT_BATCH_ROWS):
             statement = (
@@ -291,6 +306,49 @@ class Connector(ABC):
             )
             inserted += len(session.execute(statement).fetchall())
         return inserted
+
+
+def _drop_unchanged_vintages(
+    session: Session, rows: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], int]:
+    """Remove rows whose value equals the latest *earlier* stored vintage of their period.
+
+    One query per series over the batch's date span, rather than one per row: a daily
+    series re-fetched over a bounded window carries every observation it has, and that is
+    exactly the case this exists for. Only stored vintages are consulted; within one
+    response a source does not republish a period unchanged (ALFRED collapses those into a
+    single real-time range, and every other connector emits one vintage per period).
+    """
+    by_series: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_series.setdefault(row["series_id"], []).append(row)
+
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for series_id, series_rows in by_series.items():
+        dates = [r["as_of_date"] for r in series_rows]
+        existing = session.execute(
+            select(
+                MacroObservation.as_of_date,
+                MacroObservation.known_as_of,
+                MacroObservation.value,
+            )
+            .where(MacroObservation.series_id == series_id)
+            .where(MacroObservation.as_of_date.between(min(dates), max(dates)))
+        ).all()
+        vintages: dict[dt.date, list[tuple[dt.date, Decimal | None]]] = {}
+        for as_of_date, known_as_of, value in existing:
+            vintages.setdefault(as_of_date, []).append((known_as_of, value))
+        for history in vintages.values():
+            history.sort()
+
+        for row in series_rows:
+            earlier = [v for v in vintages.get(row["as_of_date"], []) if v[0] < row["known_as_of"]]
+            if earlier and earlier[-1][1] == row["value"]:
+                dropped += 1
+                continue
+            kept.append(row)
+    return kept, dropped
 
 
 def _resolve_series_ids(session: Session, codes: set[str]) -> dict[str, int]:

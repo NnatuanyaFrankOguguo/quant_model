@@ -37,6 +37,15 @@ from packages.ingestion.nigeria_data_portal import (
 )
 from packages.scheduler.runner import ScheduledJob, build_scheduler, run_job
 
+#: Per-series overrides of the FRED request window. Only a series that FRED refuses in full
+#: needs one. Three years of a daily series is ~760 vintage dates, well under the 2,000 cap
+#: and far longer than any outage the scheduler is expected to recover from; anything older
+#: is already loaded, and `Connector.write()` refuses the unchanged re-sends a bounded window
+#: carries, so the job inserts only what is genuinely new.
+FRED_JOB_PARAMS: dict[str, dict[str, object]] = {
+    "DGS10": {"lookback_days": 3 * 365},
+}
+
 
 def build_jobs() -> list[ScheduledJob]:
     """Every scheduled data pull.
@@ -46,10 +55,12 @@ def build_jobs() -> list[ScheduledJob]:
     free API we do not pay for never sees four simultaneous requests.
 
     FRED jobs ask for the default real-time window, which is every vintage. That is correct
-    for three of the four series. `DGS10` exceeds FRED's 2,000-vintage response cap and needs
-    windowed backfilling — see `packages.ingestion.fred.windows_from_vintage_dates`. Its
-    scheduled job still works for keeping up to date, because the *recent* window is small;
-    the historical load is a one-off, not a scheduled concern.
+    for three of the four series. `DGS10` exceeds FRED's 2,000-vintage response cap: its
+    history was loaded once in windows (`packages.ingestion.fred.windows_from_vintage_dates`)
+    and its scheduled job asks only for the last three years of vintages. An earlier version
+    of this docstring claimed the default window "still works for keeping up to date"; it
+    did not — every scheduled DGS10 run was refused, and the first run under the numbered
+    console made that impossible to miss.
     """
     jobs: list[ScheduledJob] = [
         ScheduledJob(connector=CbnExchangeRateConnector(), params={}, hour=5, minute=30),
@@ -84,7 +95,7 @@ def build_jobs() -> list[ScheduledJob]:
         jobs.append(
             ScheduledJob(
                 connector=FredConnector(timeout_sec=180),
-                params={"series_id": series_id},
+                params={"series_id": series_id, **FRED_JOB_PARAMS.get(series_id, {})},
                 hour=6,
                 minute=15 + offset * 5,
                 job_id=f"fred:{series_id}",
