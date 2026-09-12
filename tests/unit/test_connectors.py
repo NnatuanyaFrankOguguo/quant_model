@@ -362,11 +362,34 @@ def test_fred_lookback_must_be_positive() -> None:
 
 def test_the_scheduled_dgs10_job_is_bounded_and_the_others_are_not() -> None:
     """The docstring used to claim the default window kept DGS10 up to date. It did not."""
-    import sys
-
-    sys.path.insert(0, "scripts")
-    from run_scheduler import build_jobs
+    from packages.scheduler.jobs import build_jobs
 
     fred_jobs = {job.job_id: job.params for job in build_jobs() if job.job_id.startswith("fred:")}
     assert fred_jobs["fred:DGS10"].get("lookback_days") == 3 * 365
     assert all("lookback_days" not in p for j, p in fred_jobs.items() if j != "fred:DGS10")
+
+
+# --------------------------------------------------------------------------------------
+# P1.5 — one job list, one set of expected run names
+# --------------------------------------------------------------------------------------
+
+
+def test_every_job_has_a_distinct_identity_and_the_cbn_ones_keep_their_history() -> None:
+    """Runs are recorded under the job's identity, so identities must not collide — and the
+    CBN jobs keep the names their existing `connector_runs` rows already carry."""
+    from packages.scheduler.jobs import build_jobs
+
+    jobs = build_jobs()
+    identities = [job.identity() for job in jobs]
+    assert len(identities) == len(set(identities))
+    assert {"cbn_fx", "cbn_mpr", "cbn_inflation"} <= set(identities)
+    assert {"fred:DGS10", "fred:FEDFUNDS", "ndp:gdp"} <= set(identities)
+
+
+def test_the_health_check_expects_exactly_what_the_scheduler_runs() -> None:
+    """Derived, not maintained: a job cannot be forgotten by the health check."""
+    from packages.scheduler.jobs import build_jobs, expected_run_names
+
+    expected = expected_run_names()
+    assert {job.identity() for job in build_jobs()} <= expected
+    assert {"manual_csv_nbs", "manual_csv_cbn", "manual_csv_dmo"} <= expected

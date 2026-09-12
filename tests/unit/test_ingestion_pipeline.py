@@ -377,3 +377,20 @@ def test_a_value_returning_to_an_earlier_one_is_still_a_revision(
             encoding="utf-8",
         )
         assert connector.run(db_session, path=path).rows_written == 1, name
+
+
+def test_a_run_is_recorded_under_the_name_it_was_given(
+    db_session: Session, csv_path, local_store: LocalDiskBackend
+) -> None:
+    """A connector serving several series records each job under its own name, so one
+    failing series cannot hide behind three healthy ones."""
+    connector = ManualCsvConnector("NBS")
+    register(db_session, connector)
+    result = connector.run(db_session, run_name="manual:nbs:july", path=csv_path)
+    assert result.connector_name == "manual:nbs:july"
+    recorded = db_session.execute(
+        select(ConnectorRun.connector_name).order_by(ConnectorRun.id.desc()).limit(1)
+    ).scalar_one()
+    assert recorded == "manual:nbs:july"
+    # Without a name, the connector's own name - unchanged behaviour for the manual path.
+    assert connector.run(db_session, path=csv_path).connector_name == "manual_csv_nbs"

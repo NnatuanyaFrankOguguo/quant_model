@@ -181,14 +181,25 @@ class Connector(ABC):
         """Pure and deterministic. Given the same bytes, returns the same records."""
 
     def run(
-        self, session: Session, *, storage: StorageBackend | None = None, **params: object
+        self,
+        session: Session,
+        *,
+        storage: StorageBackend | None = None,
+        run_name: str | None = None,
+        **params: object,
     ) -> ConnectorRunResult:
         """fetch → store raw → parse → write → `connector_runs` row.
 
         The order is the contract. `parse()` is handed a `RawResponse` that has already been
         persisted, so a connector physically cannot parse something it did not store.
+
+        `run_name` is what the `connector_runs` row is recorded under; it defaults to the
+        connector's own name. The scheduler passes the job's identity, because a connector
+        that serves several series — FRED, one job per series — otherwise records every
+        series under one name, and three healthy series hide a fourth that fails every day.
         """
         storage = storage or get_storage()
+        recorded_as = run_name or self.name
         started_at = utcnow()
         source_document_id: int | None = None
         http_status: int | None = None
@@ -213,7 +224,7 @@ class Connector(ABC):
                 if records and rows_written == 0:
                     writing.warn("every parsed record was already present")
             result = ConnectorRunResult(
-                connector_name=self.name,
+                connector_name=recorded_as,
                 status="ok",
                 rows_written=rows_written,
                 records_parsed=len(records),
@@ -225,7 +236,7 @@ class Connector(ABC):
         except Exception as exc:
             session.rollback()
             result = ConnectorRunResult(
-                connector_name=self.name,
+                connector_name=recorded_as,
                 status="error",
                 rows_written=0,
                 records_parsed=0,

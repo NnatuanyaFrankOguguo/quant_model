@@ -137,7 +137,7 @@ def run_job(
     # its other jobs and the failure still lands in `connector_runs` where it can be seen.
     now = utcnow()
     result = ConnectorRunResult(
-        connector_name=job.connector.name,
+        connector_name=job.identity(),
         status="error",
         rows_written=0,
         records_parsed=0,
@@ -165,7 +165,7 @@ def _run_once(job: ScheduledJob) -> ConnectorRunResult:
         time.sleep(delay)
     with get_session() as session:
         register(session, job.connector)
-        result = job.connector.run(session, **job.params)
+        result = job.connector.run(session, run_name=job.identity(), **job.params)
     _log.info(
         "connector_run",
         connector=result.connector_name,

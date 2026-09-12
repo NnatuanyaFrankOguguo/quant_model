@@ -10,9 +10,10 @@ designed and unstartable, which is the same as not having one. `OPERATIONS.md` �
 point is that a connector which never runs fails exactly like one that runs and returns
 nothing, only quieter.
 
-**The job list is here, in code, not in a crontab.** One place says what runs and how often,
-and `scripts/check_connectors.py` compares what ran against the same expectation. A schedule
-living only in the operating system is a schedule nobody can review in a pull request.
+**The job list is in code, not in a crontab** — `packages/scheduler/jobs.py`. One place says
+what runs and how often, and `scripts/check_connectors.py` derives what it expects from the
+same list. A schedule living only in the operating system is a schedule nobody can review
+in a pull request.
 
 Times are UTC (TG21), and deliberately coarse. These sources publish monthly or daily at
 best; polling more often is load on someone else's server for no new data.
@@ -24,84 +25,8 @@ import argparse
 import time
 
 from packages.common.console import configure_logging, error, info, step, success, warning
-from packages.ingestion.cbn import (
-    CbnExchangeRateConnector,
-    CbnInflationConnector,
-    CbnMoneyMarketConnector,
-)
-from packages.ingestion.fred import FRED_SERIES, FredConnector
-from packages.ingestion.nigeria_data_portal import (
-    ITEM_KEYS,
-    NigeriaDataPortalCpiConnector,
-    NigeriaDataPortalGdpConnector,
-)
-from packages.scheduler.runner import ScheduledJob, build_scheduler, run_job
-
-#: Per-series overrides of the FRED request window. Only a series that FRED refuses in full
-#: needs one. Three years of a daily series is ~760 vintage dates, well under the 2,000 cap
-#: and far longer than any outage the scheduler is expected to recover from; anything older
-#: is already loaded, and `Connector.write()` refuses the unchanged re-sends a bounded window
-#: carries, so the job inserts only what is genuinely new.
-FRED_JOB_PARAMS: dict[str, dict[str, object]] = {
-    "DGS10": {"lookback_days": 3 * 365},
-}
-
-
-def build_jobs() -> list[ScheduledJob]:
-    """Every scheduled data pull.
-
-    CBN first and early: the FX rate is the only daily Nigerian series, and the rest of the
-    day's work reads it. FRED runs after, one job per series, staggered by a few minutes so a
-    free API we do not pay for never sees four simultaneous requests.
-
-    FRED jobs ask for the default real-time window, which is every vintage. That is correct
-    for three of the four series. `DGS10` exceeds FRED's 2,000-vintage response cap: its
-    history was loaded once in windows (`packages.ingestion.fred.windows_from_vintage_dates`)
-    and its scheduled job asks only for the last three years of vintages. An earlier version
-    of this docstring claimed the default window "still works for keeping up to date"; it
-    did not — every scheduled DGS10 run was refused, and the first run under the numbered
-    console made that impossible to miss.
-    """
-    jobs: list[ScheduledJob] = [
-        ScheduledJob(connector=CbnExchangeRateConnector(), params={}, hour=5, minute=30),
-        ScheduledJob(connector=CbnMoneyMarketConnector(), params={}, hour=5, minute=45),
-        ScheduledJob(connector=CbnInflationConnector(), params={}, hour=6, minute=0),
-    ]
-    # NBS CPI via the Nigeria Data Portal. Monthly data, so a daily pull is generous; it runs
-    # daily anyway because the cost is one request and the alternative is noticing a release
-    # a month late.
-    for offset, item in enumerate(ITEM_KEYS):
-        jobs.append(
-            ScheduledJob(
-                connector=NigeriaDataPortalCpiConnector(),
-                params={"item": item},
-                hour=6,
-                minute=5 + offset * 5,
-                job_id=f"ndp:{item}",
-            )
-        )
-    # NBS GDP growth via the same portal. Quarterly data polled daily, for the same reason:
-    # one request, and the alternative is a release noticed a quarter late.
-    jobs.append(
-        ScheduledJob(
-            connector=NigeriaDataPortalGdpConnector(),
-            params={},
-            hour=6,
-            minute=5 + len(ITEM_KEYS) * 5,
-            job_id="ndp:gdp",
-        )
-    )
-    for offset, series_id in enumerate(FRED_SERIES):
-        jobs.append(
-            ScheduledJob(
-                connector=FredConnector(timeout_sec=180),
-                params={"series_id": series_id, **FRED_JOB_PARAMS.get(series_id, {})},
-                hour=6,
-                minute=15 + offset * 5,
-                job_id=f"fred:{series_id}",
-            )
-        )
-    return jobs
+from packages.scheduler.jobs import build_jobs
+from packages.scheduler.runner import build_scheduler, run_job
 
 
 def main(argv: list[str] | None = None) -> int:
