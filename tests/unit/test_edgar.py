@@ -545,3 +545,49 @@ def test_the_seeded_chart_loads_with_priorities(db_session: Session) -> None:
     ]
     assert "gross_earnings" not in chart.keys_for("income", "non_financial")
     assert "profit_after_tax" in chart.keys_for("income", "financial")
+
+
+def test_two_tickers_on_one_exchange_share_one_security(
+    db_session: Session, local_store: LocalDiskBackend
+) -> None:
+    """Alphabet: tickers ["GOOGL", "GOOG"], exchanges ["Nasdaq", "Nasdaq"] - parallel lists.
+
+    The first live run treated the exchange list as a set and the tickers as its children,
+    inserted the same identifier twice, and Alphabet failed to register.
+    """
+    payload = json.loads(_submissions_raw().data)
+    payload.update(
+        {
+            "cik": 1652044,
+            "name": "Alphabet Inc.",
+            "tickers": ["GOOGL", "GOOG"],
+            "exchanges": ["Nasdaq", "Nasdaq"],
+            "sic": "7370",
+            "fiscalYearEnd": "1231",
+        }
+    )
+    raw = RawResponse(data=json.dumps(payload).encode(), media_type="application/json", url="g")
+    connector = EdgarSubmissionsConnector(user_agent=UA)
+    register(db_session, connector)
+    connector.fetch = lambda **params: raw  # type: ignore[method-assign]
+    result = connector.run(db_session, cik="0001652044")
+    assert result.status == "ok", result.error
+
+    company = db_session.execute(select(Company).where(Company.cik == "0001652044")).scalar_one()
+    securities = (
+        db_session.execute(select(Security).where(Security.company_id == company.id))
+        .scalars()
+        .all()
+    )
+    assert len(securities) == 1
+    tickers = (
+        db_session.execute(
+            select(SecurityIdentifier.id_value)
+            .where(SecurityIdentifier.security_id == securities[0].id)
+            .order_by(SecurityIdentifier.id_value)
+        )
+        .scalars()
+        .all()
+    )
+    assert tickers == ["GOOG", "GOOGL"]
+    assert company.fiscal_year_end == 12

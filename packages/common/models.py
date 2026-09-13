@@ -506,6 +506,39 @@ class StatementLineItem(Base):
 
 
 # ---------------------------------------------------------------------------
+# §2.4 Market data (P2.3, migration 0012)
+# ---------------------------------------------------------------------------
+
+
+class PriceHistory(Base):
+    """One daily bar, as traded. `docs/08` §2.4 as corrected 2026-08-30.
+
+    No adjusted column: adjusted prices are computed on read from `adjustment_factors`
+    whose `known_as_of` is on or before the decision date (TG2). `known_as_of` is in the
+    key so a restated bar is a second row, never an overwrite; migration 0002's `no_update`
+    trigger guards the table.
+    """
+
+    __tablename__ = "price_history"
+    __table_args__ = (CheckConstraint("known_as_of >= date", name="price_history_pit_sanity"),)
+
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), primary_key=True)
+    date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    known_as_of: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    open_raw: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    high_raw: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    low_raw: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    close_raw: Mapped[Decimal] = mapped_column(Numeric, nullable=False)  # AS TRADED
+    volume: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    vwap: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    halted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    data_source_id: Mapped[int] = mapped_column(ForeignKey("data_sources.id"), nullable=False)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+
+
+# ---------------------------------------------------------------------------
 # §2.12 Compliance and identity
 # ---------------------------------------------------------------------------
 

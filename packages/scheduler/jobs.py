@@ -27,9 +27,41 @@ from packages.ingestion.nigeria_data_portal import (
     NigeriaDataPortalCpiConnector,
     NigeriaDataPortalGdpConnector,
 )
+from packages.ingestion.yahoo import YahooChartConnector
 from packages.scheduler.runner import ScheduledJob
 
-__all__ = ["FRED_JOB_PARAMS", "build_jobs", "expected_run_names"]
+__all__ = ["FRED_JOB_PARAMS", "US_UNIVERSE", "build_jobs", "expected_run_names", "price_job"]
+
+#: The US names P2 covers. `docs/UNIVERSE.md` keeps the US side "separate and unconstrained"
+#: - EDGAR is free and structured, so breadth costs almost nothing here. Two banks (JPM,
+#: BAC) are included on purpose: they exercise the `financial` template, whose income keys
+#: have no XBRL mapping yet and resolve to NULL, which is the honest state of chart v0.1.
+#: Statements come from EDGAR (`scripts/ingest_edgar.py --universe`, run when filings land);
+#: prices from Yahoo, daily, through the jobs below.
+US_UNIVERSE: tuple[str, ...] = (
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "JPM", "BAC", "XOM", "CVX",
+    "JNJ", "PFE", "PG", "KO", "WMT", "HD", "DIS", "CAT", "IBM", "INTC", "CSCO", "ORCL", "UNH",
+)  # fmt: skip
+
+#: A daily bar is final at the close; thirty days of look-back covers a long weekend, a
+#: holiday week and Yahoo's late corrections, and the writer refuses unchanged bars anyway.
+PRICE_LOOKBACK_DAYS = 30
+
+
+def price_job(ticker: str, *, lookback_days: int | None = PRICE_LOOKBACK_DAYS) -> ScheduledJob:
+    """One Yahoo price load. US markets close 21:00 UTC; the bars are settled by 22:30."""
+    params: dict[str, object] = {"symbol": ticker}
+    if lookback_days is not None:
+        params["lookback_days"] = lookback_days
+    minute = 30 + (US_UNIVERSE.index(ticker) if ticker in US_UNIVERSE else 0)
+    return ScheduledJob(
+        connector=YahooChartConnector(),
+        params=params,
+        hour=22 + minute // 60,
+        minute=minute % 60,
+        job_id=f"yahoo:{ticker}",
+    )
+
 
 #: Per-series overrides of the FRED request window. Only a series that FRED refuses in full
 #: needs one. Three years of a daily series is ~760 vintage dates, well under the 2,000 cap
@@ -116,6 +148,8 @@ def build_jobs() -> list[ScheduledJob]:
                 job_id=f"fred:{series_id}",
             )
         )
+    # US prices after the close, one job per name, a minute apart.
+    jobs.extend(price_job(ticker) for ticker in US_UNIVERSE)
     return jobs
 
 

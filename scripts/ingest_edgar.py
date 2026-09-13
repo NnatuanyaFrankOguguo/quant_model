@@ -1,10 +1,11 @@
-r"""Ingest one US company from SEC EDGAR: identity, then every filed statement. P2.1.
+r"""Ingest US companies from SEC EDGAR: identity, then every filed statement. P2.1.
 
     .venv\Scripts\python.exe scripts\ingest_edgar.py --ticker AAPL
     .venv\Scripts\python.exe scripts\ingest_edgar.py --cik 320193
+    .venv\Scripts\python.exe scripts\ingest_edgar.py --universe      # every name in US_UNIVERSE
 
-Two connectors run in order, each as its own numbered step with the pipeline's fetch /
-store raw / parse / write / record stages beneath it:
+Two connectors run in order for each company, each as its own numbered step with the
+pipeline's fetch / store raw / parse / write / record stages beneath it:
 
 1. **submissions** - who the company is: legal name, tickers, exchanges, fiscal year-end
    month, SIC code. Registers `companies`, `securities`, `security_identifiers`,
@@ -30,9 +31,32 @@ from packages.ingestion.base import register
 from packages.ingestion.edgar import (
     EdgarCompanyFactsConnector,
     EdgarSubmissionsConnector,
+    load_ticker_map,
     resolve_cik,
     zero_pad_cik,
 )
+from packages.scheduler.jobs import US_UNIVERSE
+
+
+def ingest_one(cik: str, *, label: str) -> bool:
+    """Identity, then statements, for one company. True on success."""
+    submissions = EdgarSubmissionsConnector()
+    facts = EdgarCompanyFactsConnector()
+    with get_session() as session:
+        with step(f"Ingest {label}: submissions (identity)", cik=cik) as identity:
+            first = submissions.run(session, run_name=f"edgar_submissions:{cik}", cik=cik)
+            if first.status != "ok":
+                identity.fail("submissions failed", error=first.error)
+                return False
+            identity.result(rows_inserted=first.rows_written)
+
+        with step(f"Ingest {label}: company facts (statements)", cik=cik) as statements:
+            second = facts.run(session, run_name=f"edgar_companyfacts:{cik}", cik=cik)
+            if second.status != "ok":
+                statements.fail("companyfacts failed", error=second.error)
+                return False
+            statements.result(facts_parsed=second.records_parsed, rows_inserted=second.rows_written)
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -40,54 +64,33 @@ def main(argv: list[str] | None = None) -> int:
     who = parser.add_mutually_exclusive_group(required=True)
     who.add_argument("--ticker", help="Exchange ticker, resolved through EDGAR's own list")
     who.add_argument("--cik", help="SEC Central Index Key, with or without zero-padding")
+    who.add_argument("--universe", action="store_true", help="Every ticker in US_UNIVERSE")
     args = parser.parse_args(argv)
     configure_logging()
 
-    submissions = EdgarSubmissionsConnector()
-    facts = EdgarCompanyFactsConnector()
-
+    resolver = EdgarSubmissionsConnector()
     with get_session() as session:
         with step("Register the SEC EDGAR licence") as registering:
-            data_source_id = register(session, submissions)
+            data_source_id = register(session, resolver)
             registering.result(data_source_id=data_source_id)
 
-        with step("Resolve the company") as resolving:
+        with step("Resolve the companies") as resolving:
+            targets: list[tuple[str, str]] = []  # (cik, label)
             if args.cik:
-                cik = zero_pad_cik(args.cik)
+                targets.append((zero_pad_cik(args.cik), f"CIK {zero_pad_cik(args.cik)}"))
             else:
-                cik = resolve_cik(session, submissions, args.ticker)
-            resolving.result(cik=cik, ticker=args.ticker or "-")
+                tickers = list(US_UNIVERSE) if args.universe else [args.ticker]
+                ticker_map = load_ticker_map(session, resolver)
+                for ticker in tickers:
+                    cik = resolve_cik(session, resolver, ticker, ticker_map=ticker_map)
+                    targets.append((cik, ticker.upper()))
+            resolving.result(companies=len(targets))
 
-        with step("Ingest submissions (identity)") as identity:
-            first = submissions.run(session, run_name=f"edgar_submissions:{cik}", cik=cik)
-            if first.status != "ok":
-                identity.fail("submissions failed", error=first.error)
-            else:
-                identity.result(rows_inserted=first.rows_written)
-
-        if first.status != "ok":
-            error("stopped: without identity there is no company to attach statements to")
-            return 1
-
-        with step("Ingest company facts (statements)") as statements:
-            second = facts.run(session, run_name=f"edgar_companyfacts:{cik}", cik=cik)
-            if second.status != "ok":
-                statements.fail("companyfacts failed", error=second.error)
-            else:
-                statements.result(
-                    facts_parsed=second.records_parsed, rows_inserted=second.rows_written
-                )
-
-    if second.status != "ok":
-        error("companyfacts ingest failed; the connector_runs row records the attempt")
+    failed = [label for cik, label in targets if not ingest_one(cik, label=label)]
+    if failed:
+        error("ingest failed for some companies", failed=len(failed), of=len(targets), which=failed)
         return 1
-    success(
-        "ingested",
-        cik=cik,
-        identity_rows=first.rows_written,
-        facts_parsed=second.records_parsed,
-        statement_rows=second.rows_written,
-    )
+    success("ingested", companies=len(targets))
     return 0
 
 

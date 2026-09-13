@@ -88,9 +88,9 @@ USER_SCOPED_VIA_PARENT: dict[str, str] = {
 FIGURE_TABLES: set[str] = {
     "macro_observations",
     "statement_line_items",  # P2, migration 0011
+    "price_history",  # P2, migration 0012 - business date is `date`
     # --- later phases ---
-    # "price_history", "corporate_actions", "fx_rates", "adjustment_factors",
-    # "shares_outstanding"
+    # "corporate_actions", "fx_rates", "adjustment_factors", "shares_outstanding"
 }
 
 #: The subset of FIGURE_TABLES that must also carry `page`.
@@ -112,8 +112,9 @@ MODEL_READABLE_TABLES: set[str] = {
     "statement_line_items",  # P2
     "statements",  # P2
     "filings",  # P2 - a filing date is an event a model may read; known_as_of + period_end
+    "price_history",  # P2
     # --- later phases ---
-    # "price_history", "indicators", "ml_features", "news_sentiment"
+    # "indicators", "ml_features", "news_sentiment"
 }
 
 #: The business-date column names a model-readable table may use. A table needs at least

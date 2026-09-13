@@ -72,6 +72,7 @@ __all__ = [
     "EdgarSubmissionsConnector",
     "MissingUserAgentError",
     "XbrlFact",
+    "load_ticker_map",
     "resolve_cik",
     "zero_pad_cik",
 ]
@@ -221,22 +222,38 @@ class EdgarConnector(Connector[object]):
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 
 
-def resolve_cik(session: Session, connector: EdgarConnector, ticker: str) -> str:
-    """Ticker → zero-padded CIK, from EDGAR's own `company_tickers.json`.
+def load_ticker_map(session: Session, connector: EdgarConnector) -> dict[str, str]:
+    """Ticker → zero-padded CIK, from EDGAR's own `company_tickers.json`, fetched once.
 
     The file is stored as a source document like any other response: it is the mapping
     the rest of the run relied on, and six months from now "why did AAPL resolve to this
     CIK" deserves an answer with a hash on it.
     """
-    wanted = ticker.strip().upper()
     raw = connector._get(_TICKERS_URL)
     store_raw(session, raw, connector=connector)
     payload = json.loads(raw.data.decode("utf-8"))
     rows = payload.values() if isinstance(payload, dict) else payload
+    mapping: dict[str, str] = {}
     for row in rows:
-        if isinstance(row, dict) and str(row.get("ticker", "")).upper() == wanted:
-            return zero_pad_cik(str(row["cik_str"]))
-    raise LookupError(f"ticker {wanted!r} is not in EDGAR's company_tickers.json")
+        if isinstance(row, dict) and row.get("ticker") and row.get("cik_str") is not None:
+            mapping[str(row["ticker"]).upper()] = zero_pad_cik(str(row["cik_str"]))
+    return mapping
+
+
+def resolve_cik(
+    session: Session,
+    connector: EdgarConnector,
+    ticker: str,
+    *,
+    ticker_map: dict[str, str] | None = None,
+) -> str:
+    """One ticker → CIK; pass `ticker_map` from `load_ticker_map` to resolve many."""
+    wanted = ticker.strip().upper()
+    mapping = ticker_map if ticker_map is not None else load_ticker_map(session, connector)
+    try:
+        return mapping[wanted]
+    except KeyError:
+        raise LookupError(f"ticker {wanted!r} is not in EDGAR's company_tickers.json") from None
 
 
 # ---------------------------------------------------------------------------------------
@@ -333,49 +350,69 @@ class EdgarSubmissionsConnector(EdgarConnector):
                 )
 
             observed_on = utcnow().date()
-            for exchange_name in record.exchanges:
+            # EDGAR's `tickers` and `exchanges` are parallel lists, one entry per ticker:
+            # Alphabet is tickers ["GOOGL", "GOOG"], exchanges ["Nasdaq", "Nasdaq"]. Each
+            # ticker attaches to the security on its own exchange, and a security is
+            # created once per exchange however many tickers it carries.
+            securities_by_code: dict[str, Security] = {}
+            for ticker, exchange_name in _ticker_exchange_pairs(record):
                 code = _EXCHANGE_CODES.get(exchange_name)
                 if code is None:
                     _log.warning("unknown_edgar_exchange", cik=record.cik, exchange=exchange_name)
                     continue
-                exchange = session.execute(
-                    select(Exchange).where(Exchange.code == code)
-                ).scalar_one()
-                security = session.execute(
-                    select(Security)
-                    .where(Security.company_id == company.id)
-                    .where(Security.exchange_id == exchange.id)
-                ).scalar_one_or_none()
+                security = securities_by_code.get(code)
                 if security is None:
-                    security = Security(
-                        company_id=company.id, exchange_id=exchange.id, currency="USD"
+                    exchange = session.execute(
+                        select(Exchange).where(Exchange.code == code)
+                    ).scalar_one()
+                    security = session.execute(
+                        select(Security)
+                        .where(Security.company_id == company.id)
+                        .where(Security.exchange_id == exchange.id)
+                    ).scalar_one_or_none()
+                    if security is None:
+                        security = Security(
+                            company_id=company.id, exchange_id=exchange.id, currency="USD"
+                        )
+                        session.add(security)
+                        session.flush()
+                        inserted += 1
+                    securities_by_code[code] = security
+                current = session.execute(
+                    select(SecurityIdentifier)
+                    .where(SecurityIdentifier.id_type == "ticker")
+                    .where(SecurityIdentifier.id_value == ticker)
+                    .where(SecurityIdentifier.valid_to.is_(None))
+                ).scalar_one_or_none()
+                if current is None:
+                    # valid_from is the day we first observed the ticker - a lower bound on
+                    # its validity, never a claim about when it began. Submissions do not
+                    # say; TG2 (P3) is where identifier history gets real dates.
+                    session.add(
+                        SecurityIdentifier(
+                            security_id=security.id,
+                            id_type="ticker",
+                            id_value=ticker,
+                            valid_from=observed_on,
+                            valid_to=None,
+                        )
                     )
-                    session.add(security)
                     session.flush()
                     inserted += 1
-                for ticker in record.tickers:
-                    current = session.execute(
-                        select(SecurityIdentifier)
-                        .where(SecurityIdentifier.id_type == "ticker")
-                        .where(SecurityIdentifier.id_value == ticker)
-                        .where(SecurityIdentifier.valid_to.is_(None))
-                    ).scalar_one_or_none()
-                    if current is None:
-                        # valid_from is the day we first observed the ticker - a lower bound
-                        # on its validity, never a claim about when it began. Submissions do
-                        # not say; TG2 (P3) is where identifier history gets real dates.
-                        session.add(
-                            SecurityIdentifier(
-                                security_id=security.id,
-                                id_type="ticker",
-                                id_value=ticker,
-                                valid_from=observed_on,
-                                valid_to=None,
-                            )
-                        )
-                        inserted += 1
         session.flush()
         return inserted
+
+
+def _ticker_exchange_pairs(record: CompanyRecord) -> list[tuple[str, str]]:
+    """(ticker, exchange) pairs from EDGAR's parallel lists, tolerating a short exchange list."""
+    if not record.tickers:
+        return []
+    exchanges = list(record.exchanges) or [""]
+    pairs = []
+    for index, ticker in enumerate(record.tickers):
+        exchange = exchanges[index] if index < len(exchanges) else exchanges[-1]
+        pairs.append((ticker, exchange))
+    return pairs
 
 
 def _fiscal_year_end_month(value: object) -> int | None:
