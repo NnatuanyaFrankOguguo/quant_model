@@ -546,6 +546,17 @@ class EdgarCompanyFactsConnector(EdgarConnector):
         if not records:
             return 0
         cik = records[0].cik
+        records, unknowable = _split_unknowable(records)
+        if unknowable:
+            _log.warning(
+                "facts_ending_after_their_filing_dropped",
+                cik=cik,
+                count=len(unknowable),
+                facts=[
+                    f"{f.tag} end={f.end} filed={f.filed} {f.form} {f.accession_no}"
+                    for f in unknowable[:5]
+                ],
+            )
         company = session.execute(select(Company).where(Company.cik == cik)).scalar_one_or_none()
         if company is None:
             raise LookupError(
@@ -666,8 +677,25 @@ class EdgarCompanyFactsConnector(EdgarConnector):
             statements_stale=outcome.statements_stale,
             line_items_inserted=outcome.line_items_inserted,
             share_counts_inserted=shares_inserted,
+            facts_unknowable_dropped=len(unknowable),
         )
         return outcome.line_items_inserted + filings_inserted + shares_inserted
+
+
+def _split_unknowable(facts: list[XbrlFact]) -> tuple[list[XbrlFact], list[XbrlFact]]:
+    """Keep the facts a filing could have known; set aside those it could not.
+
+    A fact whose period ends *after* the filing that reported it cannot have been known on
+    the filing date. It is a filer context error - Walmart's FY2011 and FY2012 10-Ks carry
+    three, a cash balance "at 2012-12-31" filed 2012-03-27 among them - and every figure
+    table's `pit_sanity` check (`known_as_of >= period_end`) refuses it, which aborted a
+    whole company's load before this filter existed. The fact is dropped and logged, never
+    date-corrected: the right date is not knowable from the filing, and the raw document
+    keeps the fact as filed (`docs/08` §2.3).
+    """
+    kept = [f for f in facts if f.end <= f.filed]
+    dropped = [f for f in facts if f.end > f.filed]
+    return kept, dropped
 
 
 def _write_share_counts(

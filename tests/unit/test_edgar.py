@@ -708,3 +708,70 @@ def test_a_rerun_after_a_restatement_is_quiet_and_a_true_stale_report_is_refused
     (outcome,) = outcomes
     assert outcome.statements_stale == 1
     assert outcome.statements_restated == 0
+
+
+@pytest.mark.invariant
+def test_a_fact_ending_after_its_own_filing_is_dropped_not_dated(
+    db_session: Session, apple: Company
+) -> None:
+    """Walmart's FY2012 10-K, filed 2012-03-27, carries a cash balance 'at 2012-12-31'.
+
+    Nothing filed in March can be known of December. The database's `pit_sanity` checks
+    refuse such a row, and one refused row used to abort the whole company. The connector
+    now drops the fact, says so, and never guesses the date it should have carried.
+    """
+    import structlog
+
+    payload = json.loads(_facts_raw().data)
+    cash = payload["facts"]["us-gaap"]["CashAndCashEquivalentsAtCarryingValue"]["units"]["USD"]
+    cash.append(
+        {
+            "end": "2026-12-31",  # nine months after the filing that reports it
+            "val": 6600000000,
+            "accn": "0000320193-25-000079",
+            "fy": 2025,
+            "fp": "FY",
+            "form": "10-K",
+            "filed": "2025-10-31",
+        }
+    )
+    raw = RawResponse(
+        data=json.dumps(payload).encode(), media_type="application/json", url="w", http_status=200
+    )
+    with structlog.testing.capture_logs() as logs:
+        result = _facts_connector(raw).run(db_session, cik=APPLE_CIK)
+    assert result.status == "ok", result.error
+    assert result.records_parsed == 621, "parse is pure: the fact is kept as filed"
+
+    dropped = [e for e in logs if e["event"] == "facts_ending_after_their_filing_dropped"]
+    assert len(dropped) == 1 and dropped[0]["count"] == 1
+    assert (
+        "CashAndCashEquivalentsAtCarryingValue end=2026-12-31 filed=2025-10-31"
+        in (dropped[0]["facts"][0])
+    )
+
+    future = db_session.execute(
+        select(func.count())
+        .select_from(Statement)
+        .where(Statement.company_id == apple.id)
+        .where(Statement.period_end > Statement.known_as_of)
+    ).scalar_one()
+    assert future == 0
+    assert (
+        db_session.execute(
+            select(func.count())
+            .select_from(Statement)
+            .where(Statement.company_id == apple.id)
+            .where(Statement.period_end == dt.date(2026, 12, 31))
+        ).scalar_one()
+        == 0
+    ), "the impossible period was neither written nor re-dated"
+    # And everything the filing could have known landed as before.
+    fy2025_balance = db_session.execute(
+        select(Statement)
+        .where(Statement.company_id == apple.id)
+        .where(Statement.statement_type == "balance")
+        .where(Statement.period_type == "FY")
+        .where(Statement.period_end == dt.date(2025, 9, 27))
+    ).scalar_one()
+    assert fy2025_balance.known_as_of == dt.date(2025, 10, 31)

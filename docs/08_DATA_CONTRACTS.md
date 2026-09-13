@@ -610,6 +610,16 @@ CREATE TABLE account_mappings (
 > happened. Apple's 10-Q comparatives produced six false restatements of cash before a single
 > real one. A company that reports only the excluded tag gets a NULL, which is honest.
 
+> **A fact a filing could not have known is dropped, never re-dated** (added 2026-09-13, from
+> the first universe load). Walmart's FY2012 10-K, filed 2012-03-27, carries a cash balance
+> "at 2012-12-31", and its FY2011 and FY2012 10-Ks each carry a rent-expense fact for the year
+> *after* the one reported — three filer context errors in 21,874 facts. `pit_sanity`
+> (`known_as_of >= period_end`) refuses such a row, as it should, and one refused row aborted
+> the whole company. The EDGAR connector now sets aside every fact whose `end` is after its
+> `filed` before anything is written, logs the tag, dates and accession as a warning, and
+> loads the rest. The right date is not knowable from the filing, so it is not guessed; the
+> raw document keeps the fact as filed.
+
 ### 2.4 Market data tables
 
 ```sql
