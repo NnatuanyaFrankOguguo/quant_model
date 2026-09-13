@@ -623,3 +623,88 @@ def test_cover_page_share_counts_land_in_shares_outstanding(
     assert all(r.known_as_of >= r.as_of_date for r in rows)
     # Re-running writes nothing: same dates, same counts, same vintages.
     assert _facts_connector(_facts_raw()).run(db_session, cik=APPLE_CIK).rows_written == 0
+
+
+@pytest.mark.invariant
+def test_a_rerun_after_a_restatement_is_quiet_and_a_true_stale_report_is_refused(
+    db_session: Session, apple: Company
+) -> None:
+    """Re-running the loader re-reports every old filing's original figures. Those are older
+    vintages, not disagreements - and the writer must know the difference."""
+    from packages.normalize.statements import StatementWriter
+
+    assert _facts_connector(_facts_raw()).run(db_session, cik=APPLE_CIK).status == "ok"
+    # A later 10-K restates FY2024 revenue (as in the restatement test above).
+    payload = json.loads(_facts_raw().data)
+    tag = "RevenueFromContractWithCustomerExcludingAssessedTax"
+    payload["facts"]["us-gaap"] = {tag: payload["facts"]["us-gaap"][tag]}
+    payload["facts"]["dei"] = {}
+    payload["facts"]["us-gaap"][tag]["units"]["USD"] = [
+        {
+            "start": "2023-10-01",
+            "end": "2024-09-28",
+            "val": 391035000001,
+            "accn": "0000320193-26-999999",
+            "fy": 2026,
+            "fp": "FY",
+            "form": "10-K",
+            "filed": "2026-10-30",
+        }
+    ]
+    restating = RawResponse(
+        data=json.dumps(payload).encode(), media_type="application/json", url="y", http_status=200
+    )
+    assert _facts_connector(restating).run(db_session, cik=APPLE_CIK).status == "ok"
+
+    # Re-run the original fixture: the FY2024 10-K reports the ORIGINAL revenue again,
+    # filed before the restatement. That is the vintage in force on its date - unchanged.
+    connector = _facts_connector(_facts_raw())
+    original_writer_class = StatementWriter
+
+    outcomes = []
+
+    class RecordingWriter(original_writer_class):  # type: ignore[valid-type, misc]
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            outcomes.append(self.outcome)
+
+    import packages.ingestion.edgar as edgar_module
+
+    edgar_module.StatementWriter = RecordingWriter  # type: ignore[attr-defined]
+    try:
+        result = connector.run(db_session, cik=APPLE_CIK)
+    finally:
+        edgar_module.StatementWriter = original_writer_class  # type: ignore[attr-defined]
+    assert result.status == "ok", result.error
+    assert result.rows_written == 0
+    (outcome,) = outcomes
+    assert outcome.statements_stale == 0, "an older vintage re-reported is not stale"
+    assert outcome.statements_restated == 0
+    assert outcome.statements_unchanged > 0
+
+    # But an old filing carrying figures that match NO version known on its date is stale.
+    payload["facts"]["us-gaap"][tag]["units"]["USD"] = [
+        {
+            "start": "2023-10-01",
+            "end": "2024-09-28",
+            "val": 123,
+            "accn": "0000320193-24-777777",
+            "fy": 2024,
+            "fp": "FY",
+            "form": "10-K/A",
+            "filed": "2024-12-01",
+        }
+    ]
+    stale = RawResponse(
+        data=json.dumps(payload).encode(), media_type="application/json", url="z", http_status=200
+    )
+    outcomes.clear()
+    edgar_module.StatementWriter = RecordingWriter  # type: ignore[attr-defined]
+    try:
+        result = _facts_connector(stale).run(db_session, cik=APPLE_CIK)
+    finally:
+        edgar_module.StatementWriter = original_writer_class  # type: ignore[attr-defined]
+    assert result.status == "ok"
+    (outcome,) = outcomes
+    assert outcome.statements_stale == 1
+    assert outcome.statements_restated == 0

@@ -18,9 +18,13 @@ Three cases, and each is a different write:
    the whole statement, not only the lines that moved. Then set `superseded_by` on the old
    statement and each of its line items — the one write the update trigger allows.
 
-A filing older than the current version that disagrees with it is refused as **stale**
-rather than written as a newer version, because its `known_as_of` would be earlier than
-the version it claims to supersede; it is logged, and the caller decides.
+A filing older than the current version is judged against the version that was in force
+on its own filing date, not against today's. Re-run the loader and every old filing
+re-reports the figures that were current when it was filed - the pre-restatement ones -
+and those are an **unchanged** re-report of an older vintage, not a disagreement. Only a
+filing older than the current version whose figures match *no* version known on its date
+is refused as **stale**: its `known_as_of` would be earlier than the version it claims to
+supersede. It is logged, and the caller decides.
 
 **Written per filing, not per row.** The database is Neon, a few hundred milliseconds
 away; one round trip per statement made a trimmed Apple fixture take a minute. The writer
@@ -124,6 +128,8 @@ class StatementWriter:
         self._extraction_job_id = extraction_job_id
         self._extraction_method = extraction_method
         self.outcome = WriteOutcome()
+        #: period -> [(known_as_of, version, values)] for every superseded version
+        self._history: dict[PeriodKey, list[tuple[dt.date, int, dict[str, Decimal | None]]]] = {}
         self._current = self._load_current()
 
     def write_filing(self, reported: list[ReportedStatement], *, filing_id: int) -> dict[str, int]:
@@ -146,6 +152,16 @@ class StatementWriter:
                 counts[UNCHANGED] += 1
                 continue
             if statement.filed < current.known_as_of:
+                in_force = self._version_in_force(statement.key, statement.filed)
+                if in_force is not None and not any(
+                    value is not None and in_force.get(key) != value
+                    for key, value in statement.values.items()
+                    if key in keys
+                ):
+                    # The figures that were current on the filing's date: an older
+                    # vintage re-reported, which a re-run produces for every old filing.
+                    counts[UNCHANGED] += 1
+                    continue
                 _log.warning(
                     "stale_restatement_refused",
                     statement_type=statement.statement_type,
@@ -170,9 +186,14 @@ class StatementWriter:
     # -- internals ---------------------------------------------------------------------
 
     def _load_current(self) -> dict[PeriodKey, _Current]:
-        """Every un-superseded version for the company, with its line items, in two queries."""
+        """Every version for the company, with its line items, in two queries.
+
+        Un-superseded versions become the working index; superseded ones are kept as
+        history so an older filing can be judged against what was in force on its date.
+        """
         current: dict[PeriodKey, _Current] = {}
         by_id: dict[int, _Current] = {}
+        history_keys: dict[int, tuple[PeriodKey, dt.date, int]] = {}
         rows = self._session.execute(
             select(
                 Statement.id,
@@ -181,15 +202,19 @@ class StatementWriter:
                 Statement.period_end,
                 Statement.version,
                 Statement.known_as_of,
+                Statement.superseded_by,
             )
             .where(Statement.company_id == self._company_id)
             .where(Statement.is_consolidated.is_(True))
-            .where(Statement.superseded_by.is_(None))
         ).all()
-        for statement_id, statement_type, period_type, period_end, version, known_as_of in rows:
-            entry = _Current(statement_id, version, known_as_of, {})
-            current[(statement_type, period_type, period_end)] = entry
+        for statement_id, statement_type, period_type, period_end, version, known, by in rows:
+            key = (statement_type, period_type, period_end)
+            entry = _Current(statement_id, version, known, {})
             by_id[statement_id] = entry
+            if by is None:
+                current[key] = entry
+            else:
+                history_keys[statement_id] = (key, known, version)
         if by_id:
             items = self._session.execute(
                 select(
@@ -197,14 +222,27 @@ class StatementWriter:
                     StatementLineItem.id,
                     StatementLineItem.canonical_key,
                     StatementLineItem.value,
-                )
-                .where(StatementLineItem.statement_id.in_(list(by_id)))
-                .where(StatementLineItem.superseded_by.is_(None))
+                ).where(StatementLineItem.statement_id.in_(list(by_id)))
             ).all()
             for statement_id, item_id, canonical_key, value in items:
                 by_id[statement_id].values[canonical_key] = value
                 by_id[statement_id].line_item_ids[canonical_key] = item_id
+        for statement_id, (key, known, version) in history_keys.items():
+            self._history.setdefault(key, []).append((known, version, by_id[statement_id].values))
+        for versions in self._history.values():
+            versions.sort()
         return current
+
+    def _version_in_force(self, key: PeriodKey, on: dt.date) -> dict[str, Decimal | None] | None:
+        """The values of the newest version whose `known_as_of` is on or before `on`."""
+        candidates = [v for v in self._history.get(key, []) if v[0] <= on]
+        current = self._current.get(key)
+        if current is not None and current.known_as_of <= on:
+            candidates.append((current.known_as_of, current.version, current.values))
+        if not candidates:
+            return None
+        candidates.sort()
+        return candidates[-1][2]
 
     def _insert_versions(
         self,
@@ -328,4 +366,10 @@ class StatementWriter:
             # synchronisation needed because the writer keeps its own index.
             self._session.execute(update(Statement), statement_pointers)
             self._session.execute(update(StatementLineItem), item_pointers)
+        for statement, previous, _changed in planned:
+            if previous is not None:
+                self._history.setdefault(statement.key, []).append(
+                    (previous.known_as_of, previous.version, previous.values)
+                )
+                self._history[statement.key].sort()
         self._current.update(new_entries)
