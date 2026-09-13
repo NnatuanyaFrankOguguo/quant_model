@@ -32,7 +32,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any
+from typing import Any, Generic, TypeVar, cast
 
 import structlog
 from sqlalchemy import select
@@ -58,12 +58,18 @@ __all__ = [
     "LicenceNotDeclaredError",
     "MacroRecord",
     "RawResponse",
+    "RecordT",
     "record_run",
     "register",
     "store_raw",
+    "write_macro_records",
 ]
 
 _log = structlog.get_logger(__name__)
+
+#: The record type a connector's `parse()` produces. `MacroRecord` for every P1 source;
+#: P2 introduces its own.
+RecordT = TypeVar("RecordT")
 
 #: Rows per INSERT. PostgreSQL's wire protocol caps a single statement at 65,535 bound
 #: parameters, and a `macro_observations` row binds six — so one statement tops out near
@@ -157,8 +163,15 @@ class ConnectorRunResult:
     error: str | None = None
 
 
-class Connector(ABC):
-    """Base class for every data source, in every phase."""
+class Connector(ABC, Generic[RecordT]):
+    """Base class for every data source, in every phase.
+
+    Generic in the record type `parse()` produces. The P1 connectors produce `MacroRecord`s
+    and use the `write()` below unchanged; a P2 connector produces its own record type and
+    overrides `write()` to put it where it belongs. What is *not* negotiable is the shape of
+    `run()` — fetch, store raw, parse, write, record the run — which is the same for every
+    record type there will ever be.
+    """
 
     #: Stable identifier, used as `connector_runs.connector_name`.
     name: str = ""
@@ -177,7 +190,7 @@ class Connector(ABC):
         """Return raw bytes. Never parses, never writes to the domain tables."""
 
     @abstractmethod
-    def parse(self, raw: RawResponse) -> list[MacroRecord]:
+    def parse(self, raw: RawResponse) -> list[RecordT]:
         """Pure and deterministic. Given the same bytes, returns the same records."""
 
     def run(
@@ -264,59 +277,79 @@ class Connector(ABC):
             )
         return result
 
-    def write(
-        self, session: Session, records: list[MacroRecord], *, source_document_id: int
-    ) -> int:
-        """Insert observations, skipping ones already present. Returns rows inserted.
+    def write(self, session: Session, records: list[RecordT], *, source_document_id: int) -> int:
+        """Write parsed records. Returns rows inserted.
 
-        `ON CONFLICT DO NOTHING` rather than an upsert, deliberately: the primary key is
-        `(series_id, as_of_date, known_as_of)`, so a *revision* is a new row with a later
-        `known_as_of`, and a re-fetch of an unchanged vintage is a no-op. There is no
-        reachable path here that updates an existing observation — migration 0002 puts a
-        `no_update` trigger on the table so the rule holds even outside this code.
-
-        **A record whose value equals the latest earlier vintage of the same period is not
-        a revision, and is not written.** A vintage is a *change* in what was known; a
-        figure republished unchanged on a later date is the same vintage continuing. This
-        was learned from ALFRED, which clips `realtime_start` to the start of the requested
-        real-time window: every observation that was already known before the window comes
-        back dated *at* the window start, and the four-window DGS10 backfill stored 43,952
-        such rows as if they were new vintages — 1990-01-02's yield of 7.94 four times over.
-        The rule is stated generally because it is true generally: no point-in-time query
-        can distinguish a period whose value was reconfirmed from one that was left alone.
+        The default handles `MacroRecord`s — every P1 connector — and refuses anything else,
+        so a connector with a new record type that forgets to override this fails loudly on
+        its first record rather than writing nothing and reporting `rows_written=0`, which
+        is the signature this whole pipeline treats as "the source went quiet".
         """
         if not records:
             return 0
-        series_ids = _resolve_series_ids(session, {r.series_code for r in records})
-        rows = [
-            {
-                "series_id": series_ids[r.series_code],
-                "as_of_date": r.as_of_date,
-                "known_as_of": r.known_as_of,
-                "value": r.value,
-                "revision": r.revision,
-                "source_document_id": source_document_id,
-            }
-            for r in records
-            if r.series_code in series_ids
-        ]
-        if not rows:
-            return 0
-        rows, unchanged = _drop_unchanged_vintages(session, rows)
-        if unchanged:
-            _log.info("unchanged_vintages_skipped", count=unchanged)
-        if not rows:
-            return 0
-        inserted = 0
-        for batch in _batched(rows, INSERT_BATCH_ROWS):
-            statement = (
-                pg_insert(MacroObservation)
-                .values(batch)
-                .on_conflict_do_nothing(index_elements=["series_id", "as_of_date", "known_as_of"])
-                .returning(MacroObservation.as_of_date)
+        if not all(isinstance(r, MacroRecord) for r in records):
+            raise TypeError(
+                f"{self.name}: the default write() handles MacroRecord only; "
+                f"got {type(records[0]).__name__}. Override write() for this record type."
             )
-            inserted += len(session.execute(statement).fetchall())
-        return inserted
+        return write_macro_records(
+            session, cast("list[MacroRecord]", records), source_document_id=source_document_id
+        )
+
+
+def write_macro_records(
+    session: Session, records: list[MacroRecord], *, source_document_id: int
+) -> int:
+    """Insert observations, skipping ones already present. Returns rows inserted.
+
+    `ON CONFLICT DO NOTHING` rather than an upsert, deliberately: the primary key is
+    `(series_id, as_of_date, known_as_of)`, so a *revision* is a new row with a later
+    `known_as_of`, and a re-fetch of an unchanged vintage is a no-op. There is no
+    reachable path here that updates an existing observation — migration 0002 puts a
+    `no_update` trigger on the table so the rule holds even outside this code.
+
+    **A record whose value equals the latest earlier vintage of the same period is not
+    a revision, and is not written.** A vintage is a *change* in what was known; a
+    figure republished unchanged on a later date is the same vintage continuing. This
+    was learned from ALFRED, which clips `realtime_start` to the start of the requested
+    real-time window: every observation that was already known before the window comes
+    back dated *at* the window start, and the four-window DGS10 backfill stored 43,952
+    such rows as if they were new vintages — 1990-01-02's yield of 7.94 four times over.
+    The rule is stated generally because it is true generally: no point-in-time query
+    can distinguish a period whose value was reconfirmed from one that was left alone.
+    """
+    if not records:
+        return 0
+    series_ids = _resolve_series_ids(session, {r.series_code for r in records})
+    rows = [
+        {
+            "series_id": series_ids[r.series_code],
+            "as_of_date": r.as_of_date,
+            "known_as_of": r.known_as_of,
+            "value": r.value,
+            "revision": r.revision,
+            "source_document_id": source_document_id,
+        }
+        for r in records
+        if r.series_code in series_ids
+    ]
+    if not rows:
+        return 0
+    rows, unchanged = _drop_unchanged_vintages(session, rows)
+    if unchanged:
+        _log.info("unchanged_vintages_skipped", count=unchanged)
+    if not rows:
+        return 0
+    inserted = 0
+    for batch in _batched(rows, INSERT_BATCH_ROWS):
+        statement = (
+            pg_insert(MacroObservation)
+            .values(batch)
+            .on_conflict_do_nothing(index_elements=["series_id", "as_of_date", "known_as_of"])
+            .returning(MacroObservation.as_of_date)
+        )
+        inserted += len(session.execute(statement).fetchall())
+    return inserted
 
 
 def _drop_unchanged_vintages(

@@ -83,12 +83,14 @@ USER_SCOPED_VIA_PARENT: dict[str, str] = {
 }
 
 #: Tables holding an observed or extracted figure. MUST carry `source_document_id NOT
-#: NULL` and a business `as_of_date`. `CLAUDE.md`: provenance on every figure.
+#: NULL` and a business date (`as_of_date` for an observation, `period_end` for a statement
+#: figure - `docs/08` §2.3). `CLAUDE.md`: provenance on every figure.
 FIGURE_TABLES: set[str] = {
     "macro_observations",
+    "statement_line_items",  # P2, migration 0011
     # --- later phases ---
-    # "statement_line_items", "price_history", "corporate_actions", "fx_rates",
-    # "adjustment_factors", "shares_outstanding"
+    # "price_history", "corporate_actions", "fx_rates", "adjustment_factors",
+    # "shares_outstanding"
 }
 
 #: The subset of FIGURE_TABLES that must also carry `page`.
@@ -98,8 +100,7 @@ FIGURE_TABLES: set[str] = {
 #: a FRED series value has no page. `statement_line_items` (P2) is where `page` becomes
 #: mandatory, enforced there by `page_required_unless_structured`.
 PAGE_REQUIRED_TABLES: set[str] = {
-    # --- later phases ---
-    # "statement_line_items"
+    "statement_line_items",  # P2; `page_required_unless_structured` makes it NOT NULL for PDFs
 }
 
 #: Tables a model, feature or backtest will read. MUST carry `known_as_of` AND a business
@@ -108,9 +109,11 @@ PAGE_REQUIRED_TABLES: set[str] = {
 #: never raises — it just makes you rich on paper.
 MODEL_READABLE_TABLES: set[str] = {
     "macro_observations",
+    "statement_line_items",  # P2
+    "statements",  # P2
+    "filings",  # P2 - a filing date is an event a model may read; known_as_of + period_end
     # --- later phases ---
-    # "statement_line_items", "statements", "price_history", "indicators",
-    # "ml_features", "news_sentiment"
+    # "price_history", "indicators", "ml_features", "news_sentiment"
 }
 
 #: The business-date column names a model-readable table may use. A table needs at least
@@ -143,6 +146,14 @@ STRUCTURAL_ONLY: dict[str, str] = {
     "industries": "reference data",
     "companies": "reference data (entity identity)",
     "securities": "reference data (instrument identity)",
+    # --- P2, migration 0011 ---
+    "security_identifiers": (
+        "dated identifier history (ticker, ISIN); reference data whose own valid_from/"
+        "valid_to window is its time dimension (TG2)"
+    ),
+    "extraction_jobs": "operational record of how a document was processed; holds no figure",
+    "chart_of_accounts": "the canonical vocabulary, versioned; reference data (TG7)",
+    "account_mappings": "source label -> canonical key, versioned; reference data (TG7)",
 }
 
 
@@ -258,7 +269,12 @@ def test_figure_tables_carry_provenance(
             f"{table}.source_document_id is nullable. Optional provenance is no provenance: "
             "the rows without it are exactly the ones nobody can check."
         )
-        assert "as_of_date" in columns, f"{table} holds figures but has no as_of_date"
+        business = sorted(set(columns) & BUSINESS_DATE_COLUMNS - {"known_as_of"})
+        assert business, (
+            f"{table} holds figures but has no business date column "
+            f"(one of {sorted(BUSINESS_DATE_COLUMNS)}). `docs/08` §2.3 names period_end as "
+            "the as-of date of a statement figure; §2.5 names as_of_date for an observation."
+        )
         if table in PAGE_REQUIRED_TABLES:
             assert "page" in columns, f"{table} is page-provenanced but has no page column"
 

@@ -171,6 +171,11 @@ class Settings(BaseSettings):
     # needs no key at all — which is the point of having it.
     fred_api_key: str | None = None
 
+    # P2.1. EDGAR refuses requests without a descriptive User-Agent carrying a real name
+    # and email (`DATA_FOUNDATION.md` §C). Absent is a legitimate state: the EDGAR
+    # connectors refuse to run rather than send an anonymous request and be blocked.
+    sec_user_agent: str | None = None
+
     def __repr__(self) -> str:
         """Credential-free repr. See the module docstring for why this is not optional."""
         return (

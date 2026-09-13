@@ -584,8 +584,12 @@ CREATE TABLE account_mappings (
   source_label  TEXT NOT NULL,
   canonical_key TEXT NOT NULL,
   template      TEXT NOT NULL,
+  priority      SMALLINT NOT NULL DEFAULT 100, -- added P2.1: resolution order among
+                                               -- alternate labels for one key; lowest wins
   confidence    NUMERIC NOT NULL DEFAULT 1.0,
   added_by      TEXT NOT NULL,
+  FOREIGN KEY (canonical_key, chart_version)
+    REFERENCES chart_of_accounts (canonical_key, chart_version),
   UNIQUE (chart_version, source_system, source_label, template)
 );
 ```
@@ -594,6 +598,17 @@ CREATE TABLE account_mappings (
 > gives versioning, an audit trail, and the ability to see what changed — for free. TG7's real
 > danger is that changing the chart after the extractor has run over 200 company-years means
 > **re-extracting all of them**. `chart_version` turns that catastrophe into a migration.
+
+> **An alternate label must name the *same* measure** (added 2026-09-13, from P2.1). XBRL offers
+> several tags for one concept and a filer uses one, so `revenue` maps from `Revenues`,
+> `RevenueFromContractWithCustomerExcludingAssessedTax` and `SalesRevenueNet` in `priority`
+> order. What must **not** be admitted is an alternate whose value can legitimately differ from
+> the primary's — `CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents` beside
+> `CashAndCashEquivalentsAtCarryingValue`, `ProfitLoss` beside `NetIncomeLoss`, `LongTermDebt`
+> beside `LongTermDebtNoncurrent`. A later filing that carries only the alternate then resolves
+> the same period to a different number, and the writer records a restatement that never
+> happened. Apple's 10-Q comparatives produced six false restatements of cash before a single
+> real one. A company that reports only the excluded tag gets a NULL, which is honest.
 
 ### 2.4 Market data tables
 

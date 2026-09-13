@@ -31,10 +31,12 @@ from sqlalchemy import (
     CHAR,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Computed,
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -141,6 +143,29 @@ class Security(Base):
     exchange: Mapped[Exchange] = relationship()
 
 
+class SecurityIdentifier(Base):
+    """A ticker, ISIN, CUSIP or SEDOL, dated. `docs/08` §2.1, TG2.
+
+    Tickers get reused and companies rename; GUARANTY became GTCO on 2021-08-01 and both
+    rows point at the same security, so the price history never splits.
+    """
+
+    __tablename__ = "security_identifiers"
+    __table_args__ = (
+        UniqueConstraint("id_type", "id_value", "valid_from"),
+        Index("ix_security_identifiers_lookup", "id_type", "id_value", "valid_from", "valid_to"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), nullable=False)
+    id_type: Mapped[str] = mapped_column(Text, nullable=False)  # 'ticker'|'isin'|'cusip'|'sedol'
+    id_value: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_from: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    valid_to: Mapped[dt.date | None] = mapped_column(Date, nullable=True)  # NULL = current
+
+    security: Mapped[Security] = relationship()
+
+
 # ---------------------------------------------------------------------------
 # §2.2 Source and provenance
 # ---------------------------------------------------------------------------
@@ -241,6 +266,243 @@ class MacroObservation(Base):
     )
 
     series: Mapped[MacroSeries] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# §2.2–2.3 Extraction, filings and financial statements (P2, migration 0011)
+# ---------------------------------------------------------------------------
+
+
+class ExtractionJob(Base):
+    """How a document was turned into figures: `'xbrl'`, `'manual'` or `'llm_hybrid'`."""
+
+    __tablename__ = "extraction_jobs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+    method: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 'pending'|'stored'|'needs_review'|'corrected'|'failed'
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    validation_failures: Mapped[list[object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    token_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    started_at: Mapped[dt.datetime] = mapped_column(TZDateTime, nullable=False)
+    finished_at: Mapped[dt.datetime | None] = mapped_column(TZDateTime, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[dt.datetime | None] = mapped_column(TZDateTime, nullable=True)
+
+
+class Filing(Base):
+    """One regulator submission. `filing_date` is the `known_as_of` of everything in it."""
+
+    __tablename__ = "filings"
+    __table_args__ = (UniqueConstraint("company_id", "filing_type", "period_end", "filing_date"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), nullable=False)
+    filing_type: Mapped[str] = mapped_column(Text, nullable=False)  # '10-K'|'10-Q'|...
+    filing_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    accession_no: Mapped[str | None] = mapped_column(Text, nullable=True)  # EDGAR only
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+    known_as_of: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        TZDateTime, nullable=False, server_default=func.now()
+    )
+
+
+class ChartAccount(Base):
+    """One canonical key in one chart version. The vocabulary, versioned (TG7)."""
+
+    __tablename__ = "chart_of_accounts"
+
+    canonical_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    chart_version: Mapped[str] = mapped_column(Text, primary_key=True)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)  # 'income'|'balance'|'cashflow'
+    # 'financial'|'non_financial'|'both'
+    template: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    sign_convention: Mapped[str] = mapped_column(Text, nullable=False)
+    is_required: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+
+
+class AccountMapping(Base):
+    """Source label → canonical key, as data. `priority` orders alternates for one key."""
+
+    __tablename__ = "account_mappings"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["canonical_key", "chart_version"],
+            ["chart_of_accounts.canonical_key", "chart_of_accounts.chart_version"],
+        ),
+        UniqueConstraint("chart_version", "source_system", "source_label", "template"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chart_version: Mapped[str] = mapped_column(Text, nullable=False)
+    source_system: Mapped[str] = mapped_column(Text, nullable=False)  # 'us_gaap_xbrl'|...
+    source_label: Mapped[str] = mapped_column(Text, nullable=False)
+    canonical_key: Mapped[str] = mapped_column(Text, nullable=False)
+    template: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default=text("100"))
+    confidence: Mapped[Decimal] = mapped_column(Numeric, nullable=False, server_default=text("1.0"))
+    added_by: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class Statement(Base):
+    """One statement for one period, versioned. `docs/10` §2.3.
+
+    `period_type` is what keeps Q4 and FY apart when both end on the same date. A
+    restatement is a new row with `version + 1`; the old row's `superseded_by` points at it,
+    and that pointer is the only column the update trigger lets anyone write.
+    """
+
+    __tablename__ = "statements"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id",
+            "statement_type",
+            "period_type",
+            "period_end",
+            "is_consolidated",
+            "version",
+        ),
+        CheckConstraint("known_as_of >= period_end", name="statements_pit_sanity"),
+        Index(
+            "ix_statements_company_period",
+            "company_id",
+            "statement_type",
+            "period_type",
+            "period_end",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    filing_id: Mapped[int | None] = mapped_column(ForeignKey("filings.id"), nullable=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), nullable=False)
+    statement_type: Mapped[str] = mapped_column(Text, nullable=False)
+    period_type: Mapped[str] = mapped_column(Text, nullable=False)
+    period_start: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    calendar_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    period_label: Mapped[str] = mapped_column(Text, nullable=False)
+    presentation_currency: Mapped[str] = mapped_column(CHAR(3), nullable=False)
+    presentation_multiplier: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
+    is_audited: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    is_consolidated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    statement_template: Mapped[str] = mapped_column(Text, nullable=False)
+    chart_version: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    superseded_by: Mapped[int | None] = mapped_column(ForeignKey("statements.id"), nullable=True)
+    restatement_flag: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    known_as_of: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+    created_at: Mapped[dt.datetime] = mapped_column(
+        TZDateTime, nullable=False, server_default=func.now()
+    )
+
+    line_items: Mapped[list[StatementLineItem]] = relationship(back_populates="statement")
+
+
+class StatementLineItem(Base):
+    """One figure. `value` NULL means the company did not report it — never 0 (`SPEC` §4.1).
+
+    Four rules in one table (`docs/08` §2.3): `value` nullable; `source_document_id` NOT NULL
+    and `page` required unless the source is structured; `known_as_of` separate from
+    `period_end`; `version` + `superseded_by` instead of any update.
+    """
+
+    __tablename__ = "statement_line_items"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["canonical_key", "chart_version"],
+            ["chart_of_accounts.canonical_key", "chart_of_accounts.chart_version"],
+        ),
+        CheckConstraint(
+            "extraction_method = 'xbrl' OR page IS NOT NULL",
+            name="page_required_unless_structured",
+        ),
+        CheckConstraint("known_as_of >= period_end", name="line_items_pit_sanity"),
+        Index(
+            "ix_line_items_pit",
+            "security_id",
+            "canonical_key",
+            text("known_as_of DESC"),
+            text("version DESC"),
+        ),
+        Index(
+            "one_current_version",
+            "statement_id",
+            "canonical_key",
+            unique=True,
+            postgresql_where=text("superseded_by IS NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    statement_id: Mapped[int] = mapped_column(ForeignKey("statements.id"), nullable=False)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), nullable=False)
+    canonical_key: Mapped[str] = mapped_column(Text, nullable=False)
+    chart_version: Mapped[str] = mapped_column(Text, nullable=False)
+    as_printed_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    as_printed_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    as_printed_scale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    needs_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    value: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    currency: Mapped[str] = mapped_column(CHAR(3), nullable=False)
+    unit_multiplier: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    period_start: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    known_as_of: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    superseded_by: Mapped[int | None] = mapped_column(
+        ForeignKey("statement_line_items.id"), nullable=True
+    )
+    restatement_flag: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    # docs/10 §2.10: 'none'|'restatement'|'transcription'|'extraction'
+    correction_type: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'none'")
+    )
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bbox: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    extraction_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("extraction_jobs.id"), nullable=True
+    )
+    extraction_method: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    corrected_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    corrected_at: Mapped[dt.datetime | None] = mapped_column(TZDateTime, nullable=True)
+    correction_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        TZDateTime, nullable=False, server_default=func.now()
+    )
+
+    statement: Mapped[Statement] = relationship(back_populates="line_items")
 
 
 # ---------------------------------------------------------------------------

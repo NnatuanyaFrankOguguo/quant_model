@@ -1,0 +1,740 @@
+"""SEC EDGAR connectors: who a company is (submissions) and what it reported (companyfacts).
+
+🟢 `docs/03` P2.1 rates this SOLID, with one hard operational rule set from
+`DATA_FOUNDATION.md` §C, each of which is code here rather than memory:
+
+* **Zero-pad the CIK to ten digits.** `320193` → `CIK0000320193`. `zero_pad_cik()`.
+* **A descriptive `User-Agent` with a name and an email.** Requests without one are refused.
+  It comes from `SEC_USER_AGENT`; with it unset the connector refuses to run at all rather
+  than send an anonymous request and earn a block.
+* **At most 10 requests a second.** Exceeding it returns 403/429 and blocks the IP for about
+  ten minutes. `_Throttle` spaces requests 0.12 s apart across every connector instance in
+  the process, and a 403 or 429 is raised as `EdgarRefusedError` and **never retried** —
+  retrying is how a ten-minute block becomes a longer one.
+
+## Two connectors, two record types
+
+`EdgarSubmissionsConnector` reads `/submissions/CIK##########.json` — name, tickers,
+exchanges, fiscal-year-end month, SIC code — and registers the company, its securities,
+its tickers and its industry. It runs first, once per company.
+
+`EdgarCompanyFactsConnector` reads `/api/xbrl/companyfacts/CIK##########.json` — every
+XBRL fact the company has ever filed, by tag and unit — and writes statements and line items
+through the chart of accounts (`packages.normalize`). Its `parse()` is pure: it turns the
+JSON into `XbrlFact`s and nothing else. Everything that needs the database — which tags map
+to which key, which company this is, what was already stored — happens in `write()`.
+
+## The two dates, again
+
+`filed` is `known_as_of`; `end` is the period. They differ by weeks and the difference is
+the whole point (`docs/03` P2 "Expected inputs"). The fact's `fy`/`fp` describe the *filing*
+and are not used to date the period — see `packages.normalize.periods`.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import re
+import threading
+import time
+from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+
+import httpx
+import structlog
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from packages.common.config import get_settings
+from packages.common.models import (
+    Company,
+    Exchange,
+    ExtractionJob,
+    Filing,
+    Industry,
+    Security,
+    SecurityIdentifier,
+)
+from packages.common.timez import utcnow
+from packages.ingestion.base import Connector, DataSourceLicence, RawResponse, store_raw
+from packages.normalize.chart import load_chart, resolve
+from packages.normalize.periods import fiscal_year_of, period_label, period_type_of
+from packages.normalize.statements import ReportedStatement, StatementWriter
+
+__all__ = [
+    "CHART_VERSION",
+    "CompanyRecord",
+    "EdgarCompanyFactsConnector",
+    "EdgarRefusedError",
+    "EdgarSubmissionsConnector",
+    "MissingUserAgentError",
+    "XbrlFact",
+    "resolve_cik",
+    "zero_pad_cik",
+]
+
+_log = structlog.get_logger(__name__)
+
+_BASE = "https://data.sec.gov"
+SOURCE_NAME = "SEC EDGAR"
+SOURCE_SYSTEM = "us_gaap_xbrl"
+CHART_VERSION = "v0.1"
+
+#: 0.12 s between requests is ~8 per second, under EDGAR's ceiling of 10 with room for
+#: the jitter of a laptop's clock. The ceiling is per IP, so the spacing is process-wide.
+MIN_INTERVAL_SEC = 0.12
+
+#: EDGAR's exchange names → our `exchanges.code`.
+_EXCHANGE_CODES = {"Nasdaq": "NASDAQ", "NYSE": "NYSE"}
+
+
+class MissingUserAgentError(Exception):
+    """`SEC_USER_AGENT` is not set. The connector refuses to run rather than be blocked."""
+
+
+class EdgarRefusedError(Exception):
+    """EDGAR answered 403 or 429. Stop; do not retry; wait out the block."""
+
+
+def zero_pad_cik(cik: int | str) -> str:
+    """`320193` → `'0000320193'`. Ten digits, always."""
+    digits = str(cik).strip()
+    if digits.upper().startswith("CIK"):
+        digits = digits[3:]
+    if not digits.isdigit() or len(digits) > 10:
+        raise ValueError(f"not a CIK: {cik!r}")
+    return digits.zfill(10)
+
+
+class _Throttle:
+    """Process-wide spacing between EDGAR requests. Injectable clock and sleep for tests."""
+
+    def __init__(
+        self,
+        interval_sec: float = MIN_INTERVAL_SEC,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._interval = interval_sec
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._last: float | None = None
+
+    def wait(self) -> float:
+        """Block until a request may be sent. Returns the seconds slept."""
+        with self._lock:
+            now = self._clock()
+            slept = 0.0
+            if self._last is not None:
+                due = self._last + self._interval
+                if now < due:
+                    slept = due - now
+                    self._sleep(slept)
+                    now = self._clock()
+            self._last = now
+            return slept
+
+
+_SHARED_THROTTLE = _Throttle()
+
+
+class EdgarConnector(Connector[object]):
+    """Shared licence, User-Agent and manners for every EDGAR endpoint."""
+
+    rate_limit_per_sec = 8.0
+    politeness_delay_sec = MIN_INTERVAL_SEC
+
+    def __init__(
+        self,
+        *,
+        user_agent: str | None = None,
+        timeout_sec: float = 60.0,
+        throttle: _Throttle | None = None,
+    ) -> None:
+        self._user_agent = user_agent
+        self._timeout = timeout_sec
+        self._throttle = throttle or _SHARED_THROTTLE
+
+    @property
+    def user_agent(self) -> str:
+        agent = self._user_agent or get_settings().sec_user_agent
+        if not agent or "@" not in agent:
+            raise MissingUserAgentError(
+                "SEC_USER_AGENT is not set, or carries no email. EDGAR requires a descriptive "
+                "User-Agent with a real name and email and refuses requests without one. Put "
+                'SEC_USER_AGENT="Your Name you@example.com" in .env.'
+            )
+        return agent
+
+    def declare_licence(self) -> DataSourceLicence:
+        """Matches the reviewed `data_sources` row seeded in migration 0004.
+
+        `redistribution_allowed=False`, as reviewed: EDGAR permits automated *access*
+        (`DATA_FOUNDATION.md` §6.4) and that says nothing about re-serving. Almost certainly
+        the most permissive source in the register — US federal works — but no reviewed
+        determination exists, and `register()` refuses a connector that claims otherwise.
+        """
+        return DataSourceLicence(
+            source_name=SOURCE_NAME,
+            base_url=_BASE,
+            licence_type="us_federal_public",
+            redistribution_allowed=False,
+            attribution_required=True,
+            attribution_text="Source: U.S. Securities and Exchange Commission (EDGAR)",
+            terms_url=None,
+            terms_reviewed_on=dt.date(2026, 9, 1),
+            reviewed_by="nnatuanyafrankoguguo",
+            rate_limit_per_sec=10,
+            notes="See migration 0004: access permitted, redistribution not asserted.",
+        )
+
+    def _get(self, url: str) -> RawResponse:
+        """One throttled request with the mandatory headers. 403/429 stops everything."""
+        self._throttle.wait()
+        response = httpx.get(
+            url,
+            headers={"User-Agent": self.user_agent, "Accept-Encoding": "gzip, deflate"},
+            timeout=self._timeout,
+            follow_redirects=False,
+        )
+        if response.status_code in (403, 429):
+            raise EdgarRefusedError(
+                f"EDGAR refused {url} with HTTP {response.status_code}. This is the rate limit "
+                f"or a missing User-Agent, and it comes with a ~10-minute IP block. Not retried."
+            )
+        response.raise_for_status()
+        return RawResponse(
+            data=response.content,
+            media_type="application/json",
+            url=url,
+            http_status=response.status_code,
+            etag=response.headers.get("etag"),
+            last_modified=_parse_http_date(response.headers.get("last-modified")),
+        )
+
+
+_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+
+
+def resolve_cik(session: Session, connector: EdgarConnector, ticker: str) -> str:
+    """Ticker → zero-padded CIK, from EDGAR's own `company_tickers.json`.
+
+    The file is stored as a source document like any other response: it is the mapping
+    the rest of the run relied on, and six months from now "why did AAPL resolve to this
+    CIK" deserves an answer with a hash on it.
+    """
+    wanted = ticker.strip().upper()
+    raw = connector._get(_TICKERS_URL)
+    store_raw(session, raw, connector=connector)
+    payload = json.loads(raw.data.decode("utf-8"))
+    rows = payload.values() if isinstance(payload, dict) else payload
+    for row in rows:
+        if isinstance(row, dict) and str(row.get("ticker", "")).upper() == wanted:
+            return zero_pad_cik(str(row["cik_str"]))
+    raise LookupError(f"ticker {wanted!r} is not in EDGAR's company_tickers.json")
+
+
+# ---------------------------------------------------------------------------------------
+# Submissions: who the company is
+# ---------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CompanyRecord:
+    cik: str
+    name: str
+    tickers: tuple[str, ...]
+    exchanges: tuple[str, ...]
+    fiscal_year_end_month: int | None
+    sic: str | None
+    sic_description: str | None
+    entity_type: str | None
+    state_of_incorporation: str | None
+
+
+class EdgarSubmissionsConnector(EdgarConnector):
+    """`/submissions/CIK##########.json` → companies, securities, tickers, industry."""
+
+    name = "edgar_submissions"
+
+    def fetch(self, **params: object) -> RawResponse:
+        cik = zero_pad_cik(str(params["cik"]))
+        return self._get(f"{_BASE}/submissions/CIK{cik}.json")
+
+    def parse(self, raw: RawResponse) -> list[CompanyRecord]:  # type: ignore[override]
+        payload = json.loads(raw.data.decode("utf-8"))
+        fye_month = _fiscal_year_end_month(payload.get("fiscalYearEnd"))
+        return [
+            CompanyRecord(
+                cik=zero_pad_cik(str(payload["cik"])),
+                name=str(payload.get("name") or "").strip(),
+                tickers=tuple(str(t).strip().upper() for t in payload.get("tickers") or [] if t),
+                exchanges=tuple(str(e).strip() for e in payload.get("exchanges") or [] if e),
+                fiscal_year_end_month=fye_month,
+                sic=str(payload["sic"]).strip() if payload.get("sic") else None,
+                sic_description=(
+                    str(payload["sicDescription"]).strip()
+                    if payload.get("sicDescription")
+                    else None
+                ),
+                entity_type=str(payload["entityType"]) if payload.get("entityType") else None,
+                state_of_incorporation=(
+                    str(payload["stateOfIncorporation"])
+                    if payload.get("stateOfIncorporation")
+                    else None
+                ),
+            )
+        ]
+
+    def write(  # type: ignore[override]
+        self, session: Session, records: list[CompanyRecord], *, source_document_id: int
+    ) -> int:
+        """Register the company. Reference data is inserted when absent, never overwritten.
+
+        A company already present keeps its row: a changed legal name is logged, not
+        applied (`CLAUDE.md`: no silent overwrites), and identity history is P3's TG2 work.
+        Returns the number of rows inserted across the four tables.
+        """
+        inserted = 0
+        for record in records:
+            if record.fiscal_year_end_month is None:
+                raise ValueError(
+                    f"CIK {record.cik}: submissions carry no fiscalYearEnd; "
+                    "companies.fiscal_year_end is NOT NULL and must not be guessed"
+                )
+            industry_id, added = _upsert_industry(session, record)
+            inserted += added
+            company = session.execute(
+                select(Company).where(Company.cik == record.cik)
+            ).scalar_one_or_none()
+            if company is None:
+                company = Company(
+                    legal_name=record.name,
+                    country="US",
+                    industry_id=industry_id,
+                    statement_template=_template_for_sic(record.sic),
+                    fiscal_year_end=record.fiscal_year_end_month,
+                    cik=record.cik,
+                )
+                session.add(company)
+                session.flush()
+                inserted += 1
+            elif company.legal_name != record.name:
+                _log.warning(
+                    "company_name_differs_from_submissions",
+                    cik=record.cik,
+                    stored=company.legal_name,
+                    submissions=record.name,
+                )
+
+            observed_on = utcnow().date()
+            for exchange_name in record.exchanges:
+                code = _EXCHANGE_CODES.get(exchange_name)
+                if code is None:
+                    _log.warning("unknown_edgar_exchange", cik=record.cik, exchange=exchange_name)
+                    continue
+                exchange = session.execute(
+                    select(Exchange).where(Exchange.code == code)
+                ).scalar_one()
+                security = session.execute(
+                    select(Security)
+                    .where(Security.company_id == company.id)
+                    .where(Security.exchange_id == exchange.id)
+                ).scalar_one_or_none()
+                if security is None:
+                    security = Security(
+                        company_id=company.id, exchange_id=exchange.id, currency="USD"
+                    )
+                    session.add(security)
+                    session.flush()
+                    inserted += 1
+                for ticker in record.tickers:
+                    current = session.execute(
+                        select(SecurityIdentifier)
+                        .where(SecurityIdentifier.id_type == "ticker")
+                        .where(SecurityIdentifier.id_value == ticker)
+                        .where(SecurityIdentifier.valid_to.is_(None))
+                    ).scalar_one_or_none()
+                    if current is None:
+                        # valid_from is the day we first observed the ticker - a lower bound
+                        # on its validity, never a claim about when it began. Submissions do
+                        # not say; TG2 (P3) is where identifier history gets real dates.
+                        session.add(
+                            SecurityIdentifier(
+                                security_id=security.id,
+                                id_type="ticker",
+                                id_value=ticker,
+                                valid_from=observed_on,
+                                valid_to=None,
+                            )
+                        )
+                        inserted += 1
+        session.flush()
+        return inserted
+
+
+def _fiscal_year_end_month(value: object) -> int | None:
+    """EDGAR's `fiscalYearEnd` is 'MMDD' ('0926' for Apple). The month, or None if absent."""
+    text = str(value or "").strip()
+    if len(text) != 4 or not text.isdigit():
+        return None
+    month = int(text[:2])
+    return month if 1 <= month <= 12 else None
+
+
+def _template_for_sic(sic: str | None) -> str:
+    """`companies.statement_template` from the SIC division. Editable, and a default only."""
+    if sic and sic.isdigit():
+        code = int(sic)
+        if 6000 <= code <= 6299 or 6700 <= code <= 6799:
+            return "bank"
+        if 6300 <= code <= 6499:
+            return "insurance"
+    return "non_financial"
+
+
+def _upsert_industry(session: Session, record: CompanyRecord) -> tuple[int | None, int]:
+    if not record.sic:
+        return None, 0
+    row = session.execute(
+        select(Industry).where(Industry.scheme == "sic").where(Industry.code == record.sic)
+    ).scalar_one_or_none()
+    if row is not None:
+        return row.id, 0
+    row = Industry(
+        scheme="sic",
+        code=record.sic,
+        name=record.sic_description or f"SIC {record.sic}",
+        statement_template=_template_for_sic(record.sic),
+    )
+    session.add(row)
+    session.flush()
+    return row.id, 1
+
+
+# ---------------------------------------------------------------------------------------
+# Company facts: what the company reported
+# ---------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class XbrlFact:
+    """One XBRL fact as EDGAR carries it. `filed` is `known_as_of`; `end` is the period."""
+
+    cik: str
+    taxonomy: str  # 'us-gaap'|'dei'|...
+    tag: str
+    unit: str
+    start: dt.date | None  # None for an instant (balance-sheet) fact
+    end: dt.date
+    value: Decimal | None
+    accession_no: str
+    form: str
+    filed: dt.date
+    #: The filing's reporting context. NOT the fact's period - see normalize.periods.
+    fy: int | None
+    fp: str | None
+    frame: str | None
+
+
+class EdgarCompanyFactsConnector(EdgarConnector):
+    """`/api/xbrl/companyfacts/CIK##########.json` → statements and line items."""
+
+    name = "edgar_companyfacts"
+
+    def __init__(
+        self,
+        *,
+        user_agent: str | None = None,
+        timeout_sec: float = 120.0,
+        throttle: _Throttle | None = None,
+        chart_version: str = CHART_VERSION,
+        units: frozenset[str] = frozenset({"USD"}),
+    ) -> None:
+        super().__init__(user_agent=user_agent, timeout_sec=timeout_sec, throttle=throttle)
+        self._chart_version = chart_version
+        self._units = units
+
+    def fetch(self, **params: object) -> RawResponse:
+        cik = zero_pad_cik(str(params["cik"]))
+        return self._get(f"{_BASE}/api/xbrl/companyfacts/CIK{cik}.json")
+
+    def parse(self, raw: RawResponse) -> list[XbrlFact]:  # type: ignore[override]
+        """Pure. Every us-gaap fact in a monetary unit, in a deterministic order.
+
+        Nothing here knows the chart: which tags matter is a database question and belongs
+        in `write()`. Keeping every monetary fact also means a mapping added next month is
+        served by the raw document already stored, without a re-fetch.
+        """
+        payload = json.loads(raw.data.decode("utf-8"))
+        cik = zero_pad_cik(str(payload["cik"]))
+        facts: list[XbrlFact] = []
+        for taxonomy, tags in (payload.get("facts") or {}).items():
+            if taxonomy != "us-gaap":
+                continue
+            for tag, body in tags.items():
+                for unit, entries in (body.get("units") or {}).items():
+                    if unit not in self._units:
+                        continue
+                    for entry in entries:
+                        fact = _fact_from(cik, taxonomy, tag, unit, entry)
+                        if fact is not None:
+                            facts.append(fact)
+        facts.sort(key=_fact_order)
+        return facts
+
+    def write(  # type: ignore[override]
+        self, session: Session, records: list[XbrlFact], *, source_document_id: int
+    ) -> int:
+        """Facts → filings → statements → line items, through the chart. Returns rows inserted.
+
+        Filings are applied in the order they were filed, so a period's first report is
+        version 1 and every later filing is judged against what was known before it.
+        """
+        if not records:
+            return 0
+        cik = records[0].cik
+        company = session.execute(select(Company).where(Company.cik == cik)).scalar_one_or_none()
+        if company is None:
+            raise LookupError(
+                f"CIK {cik} is not registered. Run EdgarSubmissionsConnector first: a statement "
+                "needs a company, a security and a fiscal year end, and none of those is guessed."
+            )
+        security = _primary_security(session, company)
+        chart = load_chart(session, version=self._chart_version, source_system=SOURCE_SYSTEM)
+        template = _chart_template(company.statement_template)
+        tag_to_key = {m.source_label: key for key, group in chart.mappings.items() for m in group}
+
+        job = ExtractionJob(
+            source_document_id=source_document_id,
+            method="xbrl",
+            status="stored",
+            started_at=utcnow(),
+        )
+        session.add(job)
+        session.flush()
+
+        # (accession) -> (statement_type, period_type, start, end) -> tag -> fact
+        by_filing: dict[str, dict[tuple[str, str, dt.date | None, dt.date], dict[str, XbrlFact]]]
+        by_filing = defaultdict(lambda: defaultdict(dict))
+        filing_meta: dict[str, tuple[str, dt.date, dt.date]] = {}  # accn -> (form, filed, max end)
+        skipped_period = 0
+        for fact in records:
+            key = tag_to_key.get(fact.tag)
+            if key is None:
+                continue
+            period_type = period_type_of(fact.start, fact.end, company.fiscal_year_end)
+            if period_type is None:
+                skipped_period += 1
+                continue
+            statement_type = chart.statement_of(key)
+            slot = by_filing[fact.accession_no][(statement_type, period_type, fact.start, fact.end)]
+            existing = slot.get(fact.tag)
+            # Prefer the entry EDGAR marks with a calendar frame - its canonical one.
+            if existing is None or (existing.frame is None and fact.frame is not None):
+                slot[fact.tag] = fact
+            form, filed, latest_end = filing_meta.get(
+                fact.accession_no, (fact.form, fact.filed, fact.end)
+            )
+            filing_meta[fact.accession_no] = (form, filed, max(latest_end, fact.end))
+        if skipped_period:
+            _log.info("facts_with_unnamed_periods_skipped", cik=cik, count=skipped_period)
+
+        writer = StatementWriter(
+            session,
+            company_id=company.id,
+            security_id=security.id,
+            chart=chart,
+            template=template,
+            currency="USD",
+            source_document_id=source_document_id,
+            extraction_job_id=job.id,
+        )
+        filings_inserted = 0
+        for accession in sorted(by_filing, key=lambda a: (filing_meta[a][1], a)):
+            form, filed, latest_end = filing_meta[accession]
+            filing, added = _upsert_filing(
+                session,
+                company_id=company.id,
+                form=form,
+                filed=filed,
+                period_end=latest_end,
+                accession=accession,
+                source_document_id=source_document_id,
+            )
+            filings_inserted += added
+            reported: list[ReportedStatement] = []
+            for (statement_type, period_type, start, end), facts_by_tag in sorted(
+                by_filing[accession].items(), key=lambda item: (item[0][3], item[0][0], item[0][1])
+            ):
+                keys = chart.keys_for(statement_type, template)
+                reported_by_tag = {tag: f.value for tag, f in facts_by_tag.items()}
+                values = resolve(reported_by_tag, chart, keys)
+                # Keys none of whose tags were in this filing are absent, not reported-as-NULL.
+                present = {
+                    key: value
+                    for key, value in values.items()
+                    if any(m.source_label in reported_by_tag for m in chart.mappings.get(key, ()))
+                }
+                fiscal_year = fiscal_year_of(end, company.fiscal_year_end)
+                reported.append(
+                    ReportedStatement(
+                        statement_type=statement_type,
+                        period_type=period_type,
+                        period_start=start,
+                        period_end=end,
+                        fiscal_year=fiscal_year,
+                        period_label=period_label(period_type, fiscal_year),
+                        values=present,
+                        accession_no=accession,
+                        form=form,
+                        filed=filed,
+                    )
+                )
+            writer.write_filing(reported, filing_id=filing.id)
+        job.finished_at = utcnow()
+        session.flush()
+        outcome = writer.outcome
+        _log.info(
+            "edgar_statements_written",
+            cik=cik,
+            filings=len(by_filing),
+            filings_inserted=filings_inserted,
+            statements_inserted=outcome.statements_inserted,
+            statements_restated=outcome.statements_restated,
+            statements_unchanged=outcome.statements_unchanged,
+            statements_stale=outcome.statements_stale,
+            line_items_inserted=outcome.line_items_inserted,
+        )
+        return outcome.line_items_inserted + filings_inserted
+
+
+def _chart_template(company_template: str) -> str:
+    """`companies.statement_template` vocabulary → the chart's. Insurers are banks here until
+    the chart grows a third shape (`docs/08` §2.1 says it must, in P3)."""
+    return {"bank": "financial", "insurance": "financial", "both": "both"}.get(
+        company_template, "non_financial"
+    )
+
+
+def _primary_security(session: Session, company: Company) -> Security:
+    securities = (
+        session.execute(
+            select(Security).where(Security.company_id == company.id).order_by(Security.id)
+        )
+        .scalars()
+        .all()
+    )
+    if not securities:
+        raise LookupError(f"company {company.id} ({company.cik}) has no security")
+    return securities[0]
+
+
+def _upsert_filing(
+    session: Session,
+    *,
+    company_id: int,
+    form: str,
+    filed: dt.date,
+    period_end: dt.date,
+    accession: str,
+    source_document_id: int,
+) -> tuple[Filing, int]:
+    row = session.execute(
+        select(Filing)
+        .where(Filing.company_id == company_id)
+        .where(Filing.filing_type == form)
+        .where(Filing.period_end == period_end)
+        .where(Filing.filing_date == filed)
+    ).scalar_one_or_none()
+    if row is not None:
+        return row, 0
+    row = Filing(
+        company_id=company_id,
+        filing_type=form,
+        filing_date=filed,
+        period_end=period_end,
+        accession_no=accession,
+        source_document_id=source_document_id,
+        known_as_of=filed,
+    )
+    session.add(row)
+    session.flush()
+    return row, 1
+
+
+_ACCESSION = re.compile(r"^\d{10}-\d{2}-\d{6}$")
+
+
+def _fact_from(cik: str, taxonomy: str, tag: str, unit: str, entry: object) -> XbrlFact | None:
+    if not isinstance(entry, dict):
+        return None
+    end = _parse_date(entry.get("end"))
+    filed = _parse_date(entry.get("filed"))
+    accession = str(entry.get("accn") or "")
+    form = str(entry.get("form") or "")
+    if end is None or filed is None or not _ACCESSION.match(accession) or not form:
+        return None
+    start = _parse_date(entry.get("start"))
+    fy = entry.get("fy")
+    return XbrlFact(
+        cik=cik,
+        taxonomy=taxonomy,
+        tag=tag,
+        unit=unit,
+        start=start,
+        end=end,
+        value=_parse_decimal(entry.get("val")),
+        accession_no=accession,
+        form=form,
+        filed=filed,
+        fy=int(fy) if isinstance(fy, int) else None,
+        fp=str(entry["fp"]) if entry.get("fp") else None,
+        frame=str(entry["frame"]) if entry.get("frame") else None,
+    )
+
+
+def _fact_order(fact: XbrlFact) -> tuple[dt.date, str, str, dt.date, str, str]:
+    return (
+        fact.filed,
+        fact.accession_no,
+        fact.tag,
+        fact.end,
+        fact.start.isoformat() if fact.start else "",
+        fact.frame or "",
+    )
+
+
+def _parse_date(value: object) -> dt.date | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return dt.date.fromisoformat(value[:10])
+    except ValueError:
+        return None
+
+
+def _parse_http_date(value: str | None) -> dt.datetime | None:
+    if not value:
+        return None
+    try:
+        from email.utils import parsedate_to_datetime
+
+        return parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_decimal(value: object) -> Decimal | None:
+    """Absent stays absent. XBRL values are numbers; anything else is not a figure."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return None
