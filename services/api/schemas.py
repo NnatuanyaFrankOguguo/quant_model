@@ -15,6 +15,7 @@ build breaks rather than the gate.
 
 from __future__ import annotations
 
+import datetime as dt
 from datetime import date
 from decimal import Decimal
 
@@ -24,7 +25,14 @@ from packages.compliance.mode import Mode
 from packages.compliance.response_types import register_public_type
 
 __all__ = [
+    "CompanyDcf",
+    "CompanyInfo",
+    "CompanyList",
+    "CompanyRatios",
+    "CompanyStatements",
+    "DcfAssumptionsUsed",
     "ErrorBody",
+    "Figure",
     "Health",
     "MacroObservationPoint",
     "MacroObservations",
@@ -32,7 +40,10 @@ __all__ = [
     "MacroSeriesList",
     "PersonalPing",
     "PersonalSignal",
+    "PriceUsed",
     "PublicPing",
+    "SharesUsed",
+    "StatementPeriod",
 ]
 
 
@@ -192,4 +203,174 @@ class ErrorBody(BaseModel):
     fields: list[str] | None = Field(
         default=None,
         description="Names of the request fields that failed validation. Never their values.",
+    )
+
+
+# ---------------------------------------------------------------------------------------
+# P2 - companies, statements, ratios, DCF. Facts and arithmetic on the caller's inputs;
+# no field here is a verdict, and the registry refuses any that is named like one.
+# ---------------------------------------------------------------------------------------
+
+
+class CompanyInfo(BaseModel):
+    """One registered company under its primary ticker, and how much of it is loaded."""
+
+    ticker: str
+    legal_name: str
+    cik: str | None = None
+    exchange: str
+    statement_periods: int = Field(description="Distinct periods with a current statement")
+    latest_period_end: date | None = None
+    latest_filing_date: date | None = Field(
+        default=None, description="known_as_of of the newest statement - when it was filed"
+    )
+
+
+@register_public_type
+class CompanyList(BaseModel):
+    companies: list[CompanyInfo]
+
+
+class Figure(BaseModel):
+    """One line item at the vintage visible on the decision date."""
+
+    value: Decimal | None = Field(
+        default=None,
+        description="null means the company did not report it. It is never zero-filled.",
+    )
+    known_as_of: date = Field(description="The filing date that made this figure public")
+    version: int = Field(description="1 for the first report; higher after a restatement")
+
+
+class StatementPeriod(BaseModel):
+    """One period - income, balance sheet and cash flow together - with its provenance."""
+
+    period_type: str = Field(description="'FY'|'Q1'|'Q2'|'Q3'|'H1'|'YTD'")
+    period_end: date
+    fiscal_year: int
+    period_label: str = Field(description="'FY2025', 'Q1-FY2026' - the company's convention")
+    currency: str
+    known_as_of: date = Field(description="Newest vintage among the period's figures")
+    filing_type: str | None = Field(default=None, description="'10-K' or '10-Q'")
+    filing_date: date | None = None
+    accession_no: str | None = Field(default=None, description="EDGAR accession number")
+    source_document_id: int | None = None
+    items: dict[str, Figure] = Field(description="canonical key -> figure")
+
+
+@register_public_type
+class CompanyStatements(BaseModel):
+    """A company's statements as known on a date. Restatements filed after it are unseen."""
+
+    ticker: str
+    legal_name: str
+    cik: str | None = None
+    exchange: str
+    fiscal_year_end_month: int
+    chart_version: str
+    as_known_on: date = Field(description="The point-in-time date every figure respects")
+    attribution: str
+    periods: list[StatementPeriod]
+
+
+class PriceUsed(BaseModel):
+    # `dt.date`, not `date`: the field is named `date` and would shadow the type.
+    date: dt.date
+    close_raw: Decimal = Field(description="As traded. Never an adjusted price.")
+    known_as_of: dt.date
+    age_days: int = Field(
+        description=(
+            "Days between the bar and the decision date. A multiple on an old price is a "
+            "different number from a multiple on today's; this says which you have."
+        )
+    )
+    source_document_id: int
+    attribution: str
+
+
+class SharesUsed(BaseModel):
+    as_of_date: date = Field(description="The date the count was true of - never today's")
+    shares: Decimal
+    basic_or_diluted: str
+    known_as_of: date
+    source_document_id: int
+
+
+@register_public_type
+class CompanyRatios(BaseModel):
+    """Ratios for one period, with the price and share count the multiples used.
+
+    A ratio is a fact and ships in every mode. Any ratio with a missing input is null -
+    never 0, never infinity - and every key is always present, so 'not applicable' can be
+    told from 'no price was available'.
+    """
+
+    ticker: str
+    legal_name: str
+    as_known_on: date
+    period_label: str
+    period_end: date
+    known_as_of: date
+    filing_type: str | None = None
+    accession_no: str | None = None
+    source_document_id: int | None = None
+    currency: str
+    attribution: str
+    price: PriceUsed | None = Field(
+        default=None, description="null when no price on or before the date was known"
+    )
+    shares: SharesUsed | None = Field(
+        default=None, description="null when no share count on or before the date was known"
+    )
+    inputs: dict[str, Decimal | None] = Field(description="The line items the ratios used")
+    ratios: dict[str, Decimal | None]
+
+
+class DcfAssumptionsUsed(BaseModel):
+    """Every input the model ran on. The user's assumptions, and the facts they were joined to."""
+
+    base_free_cash_flow: Decimal
+    base_free_cash_flow_source: str = Field(
+        description="'user' when supplied; otherwise the statement period it was read from"
+    )
+    growth_rates: list[Decimal]
+    discount_rate: Decimal
+    terminal_growth: Decimal
+    net_debt: Decimal
+    net_debt_source: str
+    shares: Decimal | None = None
+    shares_source: str | None = None
+    mid_year: bool
+
+
+@register_public_type
+class CompanyDcf(BaseModel):
+    """A discounted-cash-flow result computed from the caller's own assumptions.
+
+    The growth, discount and terminal rates are the caller's; the model never chooses them.
+    The base cash flow, net debt and share count default to the company's stored figures
+    as known on the date and are echoed back so the arithmetic can be checked line by
+    line. This is arithmetic on stated inputs, not an opinion about the company.
+    """
+
+    ticker: str
+    legal_name: str
+    as_known_on: date
+    currency: str
+    assumptions: DcfAssumptionsUsed
+    projected_free_cash_flow: list[Decimal]
+    discount_factors: list[Decimal]
+    present_values: list[Decimal]
+    sum_of_present_values: Decimal
+    terminal_value: Decimal
+    present_value_of_terminal: Decimal
+    enterprise_value: Decimal
+    equity_value: Decimal
+    value_per_share: Decimal | None = None
+    terminal_share_of_value: Decimal | None = Field(
+        default=None,
+        description=(
+            "PV of the terminal value over enterprise value. If a 100 bp change in the "
+            "discount rate barely moves the answer, look here first."
+        ),
     )
