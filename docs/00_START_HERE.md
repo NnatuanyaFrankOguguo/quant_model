@@ -227,7 +227,7 @@ operator's to close; see "the immediate next actions" below.
 |---|---|---|---|---|---|
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
 | P1 Macro Backdrop | 🧪 Built | 2026-09-03 | — | 12½/13 | 10 of 13 series live · 28,053 rows · check 11 by eye |
-| P2 US Company Data | ⬜ Not started | — | — | — | |
+| P2 US Company Data | 🔨 In progress | 2026-09-13 | — | 9½/15 | P2.1 live: Apple, 72 filings, 333 statement versions |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
 | P5 News & Daily Brief | ⬜ Not started | — | — | — | |
@@ -388,6 +388,38 @@ print, so a revised quarter sits under a `known_as_of` bounded at its first rele
 are the size of the publisher's revisions, both need a source that publishes vintages or our
 own daily snapshots — P3/P7 work — and both belong in P7's pre-registration.
 
+**P2, stated precisely.** Started 2026-09-13 on branch `p2-us-company-data`, with P1 at 🧪
+and P0 at 🧪 for reasons that are the operator's, not code's. **P2.1 is built and live:**
+migration 0011 (seven statement tables, chart of accounts v0.1, exchanges), the EDGAR
+submissions and companyfacts connectors, `packages/normalize` (periods, chart, the versioned
+statement writer), and `packages/common/pit.py` with the mandatory decision date. Apple is
+ingested end to end — 72 filings, 333 statement versions, 2,369 line items — and FY2025
+revenue reads 416,161m, known 2025-10-31, as the roadmap's own example expects.
+
+**Point-in-time is proven on a real restatement.** Apple's retrospective adoption of the new
+revenue-recognition standards in January 2010 lifted FY2009 revenue from 36,537m to
+42,905m. Both vintages are held; as known on 2009-12-31 the accessor returns the first, from
+2010-01-25 the second. That is P2 check 15 on live data.
+
+**What the first live run taught.** Six of the chart's alternate XBRL tags could
+legitimately differ from their primaries (restricted-cash-inclusive cash, `ProfitLoss`
+beside `NetIncomeLoss`, `LongTermDebt` beside the non-current one …). A later 10-Q that
+carried only the alternate then resolved the same period to a different number, and the
+writer recorded six restatements of cash that never happened. Those alternates are out,
+and `docs/08` §2.3 now states the rule: an alternate must name the *same* measure. The 45
+restatements that remain were each read; all are the filer's — the 2010 one above, Apple
+re-tagging its cash-flow D&A in the FY2018 10-K, explicit zeros in later comparatives —
+or v0.1 coverage gaps that resolve as NULL and then a value, which is honest.
+
+**P2 checkpoint so far: 1, 2, 3, 4, 8, 10, 11, 12, 15 in code; 13 half by eye** (the FY2025
+figures are printed for the operator to hold against the 10-K — `interest_expense` is NULL
+because Apple no longer discloses it separately, which is the "one you expect to be
+missing"). 5, 6, 7, 14 are P2.4's; 9 is P2.3's. Not yet done: ≥20 companies (one so far),
+`price_history` (P2.3), ratios and DCF (P2.4), `shares_outstanding` and the entity-graph
+tables, and a scheduled refresh. One recorded limitation: XBRL begins in mid-2009, so a
+pre-2009 period's `known_as_of` is its first XBRL appearance — later than the truth, never
+earlier.
+
 ### What exists right now
 
 | Thing | Status |
@@ -402,11 +434,11 @@ own daily snapshots — P3/P7 work — and both belong in P7's pre-registration.
 | Docker | ✅ 29.6.1 (Desktop must be *running* for backup/restore) |
 | Node (needed at P9) | ✅ v24.14.0 |
 | Monorepo scaffold | ✅ 4 packages (`common`, `compliance`, `ingestion`, `scheduler`), the rest reserved — `packages/README.md` |
-| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 17 spine tables + `alembic_version`, at migration 0010 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The other ~35 tables are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
+| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 24 tables + `alembic_version`, at migration 0011 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The other ~35 tables are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
 | FastAPI service | ✅ `/health`, `/v1/public/ping`, `/v1/personal/ping` — mode gate, bearer auth, audit row per request |
 | Any application code | ✅ The spine. No financial logic, by design |
 | CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed — no remote** |
-| Test suite | ✅ 333 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
+| Test suite | ✅ 367 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
 | Backup | ✅ Dumped, verified, copied, **and restored** 2026-09-02 — [REVIEW_CADENCE](REVIEW_CADENCE.md) row 2. Off-site: still zero |
 | ADR log | ✅ [0001–0008](adr/README.md) |
 
