@@ -538,6 +538,29 @@ class PriceHistory(Base):
     )
 
 
+class SharesOutstanding(Base):
+    """The share count as of a date. `docs/08` §2.14 #49: no P/E is correct without it."""
+
+    __tablename__ = "shares_outstanding"
+    __table_args__ = (
+        CheckConstraint("known_as_of >= as_of_date", name="shares_pit_sanity"),
+        CheckConstraint("shares > 0", name="shares_positive"),
+    )
+
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), primary_key=True)
+    as_of_date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    share_class: Mapped[str] = mapped_column(
+        Text, primary_key=True, server_default=text("'ordinary'")
+    )
+    basic_or_diluted: Mapped[str] = mapped_column(Text, primary_key=True)  # 'basic'|'diluted'
+    known_as_of: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    shares: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 # ---------------------------------------------------------------------------
 # §2.12 Compliance and identity
 # ---------------------------------------------------------------------------

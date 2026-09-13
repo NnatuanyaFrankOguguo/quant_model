@@ -89,8 +89,9 @@ FIGURE_TABLES: set[str] = {
     "macro_observations",
     "statement_line_items",  # P2, migration 0011
     "price_history",  # P2, migration 0012 - business date is `date`
+    "shares_outstanding",  # P2, migration 0013
     # --- later phases ---
-    # "corporate_actions", "fx_rates", "adjustment_factors", "shares_outstanding"
+    # "corporate_actions", "fx_rates", "adjustment_factors"
 }
 
 #: The subset of FIGURE_TABLES that must also carry `page`.
@@ -113,6 +114,7 @@ MODEL_READABLE_TABLES: set[str] = {
     "statements",  # P2
     "filings",  # P2 - a filing date is an event a model may read; known_as_of + period_end
     "price_history",  # P2
+    "shares_outstanding",  # P2
     # --- later phases ---
     # "indicators", "ml_features", "news_sentiment"
 }

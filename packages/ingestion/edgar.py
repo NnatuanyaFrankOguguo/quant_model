@@ -46,6 +46,7 @@ from decimal import Decimal, InvalidOperation
 import httpx
 import structlog
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from packages.common.config import get_settings
@@ -57,6 +58,7 @@ from packages.common.models import (
     Industry,
     Security,
     SecurityIdentifier,
+    SharesOutstanding,
 )
 from packages.common.timez import utcnow
 from packages.ingestion.base import Connector, DataSourceLicence, RawResponse, store_raw
@@ -479,8 +481,13 @@ class XbrlFact:
     frame: str | None
 
 
+#: The cover-page share count every 10-K and 10-Q carries: an instant fact whose `end` is
+#: the date the count was true of. It feeds `shares_outstanding` (`docs/08` §2.14 #49).
+SHARES_OUTSTANDING_FACT = ("dei", "EntityCommonStockSharesOutstanding", "shares")
+
+
 class EdgarCompanyFactsConnector(EdgarConnector):
-    """`/api/xbrl/companyfacts/CIK##########.json` → statements and line items."""
+    """`/api/xbrl/companyfacts/CIK##########.json` → statements, line items, share counts."""
 
     name = "edgar_companyfacts"
 
@@ -502,7 +509,7 @@ class EdgarCompanyFactsConnector(EdgarConnector):
         return self._get(f"{_BASE}/api/xbrl/companyfacts/CIK{cik}.json")
 
     def parse(self, raw: RawResponse) -> list[XbrlFact]:  # type: ignore[override]
-        """Pure. Every us-gaap fact in a monetary unit, in a deterministic order.
+        """Pure. Every us-gaap fact in a monetary unit, plus the cover-page share count.
 
         Nothing here knows the chart: which tags matter is a database question and belongs
         in `write()`. Keeping every monetary fact also means a mapping added next month is
@@ -512,11 +519,9 @@ class EdgarCompanyFactsConnector(EdgarConnector):
         cik = zero_pad_cik(str(payload["cik"]))
         facts: list[XbrlFact] = []
         for taxonomy, tags in (payload.get("facts") or {}).items():
-            if taxonomy != "us-gaap":
-                continue
             for tag, body in tags.items():
                 for unit, entries in (body.get("units") or {}).items():
-                    if unit not in self._units:
+                    if not self._keeps(taxonomy, tag, unit):
                         continue
                     for entry in entries:
                         fact = _fact_from(cik, taxonomy, tag, unit, entry)
@@ -524,6 +529,11 @@ class EdgarCompanyFactsConnector(EdgarConnector):
                             facts.append(fact)
         facts.sort(key=_fact_order)
         return facts
+
+    def _keeps(self, taxonomy: str, tag: str, unit: str) -> bool:
+        if taxonomy == "us-gaap" and unit in self._units:
+            return True
+        return (taxonomy, tag, unit) == SHARES_OUTSTANDING_FACT
 
     def write(  # type: ignore[override]
         self, session: Session, records: list[XbrlFact], *, source_document_id: int
@@ -543,6 +553,14 @@ class EdgarCompanyFactsConnector(EdgarConnector):
                 "needs a company, a security and a fiscal year end, and none of those is guessed."
             )
         security = _primary_security(session, company)
+        share_facts = [f for f in records if (f.taxonomy, f.tag, f.unit) == SHARES_OUTSTANDING_FACT]
+        records = [f for f in records if (f.taxonomy, f.tag, f.unit) != SHARES_OUTSTANDING_FACT]
+        shares_inserted = _write_share_counts(
+            session,
+            share_facts,
+            security_id=security.id,
+            source_document_id=source_document_id,
+        )
         chart = load_chart(session, version=self._chart_version, source_system=SOURCE_SYSTEM)
         template = _chart_template(company.statement_template)
         tag_to_key = {m.source_label: key for key, group in chart.mappings.items() for m in group}
@@ -647,8 +665,77 @@ class EdgarCompanyFactsConnector(EdgarConnector):
             statements_unchanged=outcome.statements_unchanged,
             statements_stale=outcome.statements_stale,
             line_items_inserted=outcome.line_items_inserted,
+            share_counts_inserted=shares_inserted,
         )
-        return outcome.line_items_inserted + filings_inserted
+        return outcome.line_items_inserted + filings_inserted + shares_inserted
+
+
+def _write_share_counts(
+    session: Session, facts: list[XbrlFact], *, security_id: int, source_document_id: int
+) -> int:
+    """Cover-page share counts → `shares_outstanding`. A count is a vintage of its as-of date.
+
+    The same as-of date re-reported with the same count in a later filing is the same
+    vintage and is skipped; a different count for the same date is a second row with the
+    later filing date as `known_as_of` - the rule every figure table here follows.
+    """
+    if not facts:
+        return 0
+    counts: dict[dt.date, list[tuple[dt.date, Decimal]]] = {}
+    stored = session.execute(
+        select(
+            SharesOutstanding.as_of_date, SharesOutstanding.known_as_of, SharesOutstanding.shares
+        )
+        .where(SharesOutstanding.security_id == security_id)
+        .where(SharesOutstanding.basic_or_diluted == "basic")
+        .where(SharesOutstanding.share_class == "ordinary")
+    ).all()
+    for as_of_date, known_as_of, shares in stored:
+        counts.setdefault(as_of_date, []).append((known_as_of, shares))
+    for history in counts.values():
+        history.sort()
+
+    rows: list[dict[str, object]] = []
+    for fact in sorted(facts, key=lambda f: (f.end, f.filed)):
+        if fact.value is None or fact.value <= 0 or fact.start is not None:
+            continue
+        history = counts.get(fact.end, [])
+        earlier = [v for v in history if v[0] < fact.filed]
+        if earlier and earlier[-1][1] == fact.value:
+            continue
+        if any(v[0] == fact.filed for v in history):
+            continue
+        rows.append(
+            {
+                "security_id": security_id,
+                "as_of_date": fact.end,
+                "shares": fact.value,
+                "share_class": "ordinary",
+                "basic_or_diluted": "basic",
+                "known_as_of": fact.filed,
+                "source_document_id": source_document_id,
+                "page": None,
+            }
+        )
+        counts.setdefault(fact.end, []).append((fact.filed, fact.value))
+        counts[fact.end].sort()
+    if not rows:
+        return 0
+    statement = (
+        pg_insert(SharesOutstanding)
+        .values(rows)
+        .on_conflict_do_nothing(
+            index_elements=[
+                "security_id",
+                "as_of_date",
+                "share_class",
+                "basic_or_diluted",
+                "known_as_of",
+            ]
+        )
+        .returning(SharesOutstanding.as_of_date)
+    )
+    return len(session.execute(statement).fetchall())
 
 
 def _chart_template(company_template: str) -> str:

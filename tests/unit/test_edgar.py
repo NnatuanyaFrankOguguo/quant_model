@@ -267,7 +267,7 @@ def test_parse_is_pure_and_keeps_filed_apart_from_end() -> None:
     connector = EdgarCompanyFactsConnector(user_agent=UA)
     facts = connector.parse(_facts_raw())
     assert facts == connector.parse(_facts_raw())
-    assert len(facts) == 670
+    assert len(facts) == 620  # 605 monetary us-gaap facts + 15 cover-page share counts
     fy2024_revenue = [
         f
         for f in facts
@@ -282,10 +282,12 @@ def test_parse_is_pure_and_keeps_filed_apart_from_end() -> None:
     assert fy2024_revenue[1].fy == 2025
 
 
-def test_parse_keeps_only_monetary_us_gaap_facts() -> None:
+def test_parse_keeps_monetary_us_gaap_facts_and_the_cover_page_share_count() -> None:
     facts = EdgarCompanyFactsConnector(user_agent=UA).parse(_facts_raw())
-    assert {f.unit for f in facts} == {"USD"}
-    assert {f.taxonomy for f in facts} == {"us-gaap"}
+    assert {(f.taxonomy, f.unit) for f in facts} == {("us-gaap", "USD"), ("dei", "shares")}
+    shares = [f for f in facts if f.taxonomy == "dei"]
+    assert {f.tag for f in shares} == {"EntityCommonStockSharesOutstanding"}
+    assert all(f.start is None for f in shares), "a share count is an instant"
 
 
 def test_submissions_parse() -> None:
@@ -361,7 +363,7 @@ def test_companyfacts_write_statements_with_the_filing_date_as_known_as_of(
     """Checks 8 and 11, and the unchanged-re-report rule, on real Apple data."""
     result = _facts_connector(_facts_raw()).run(db_session, cik=APPLE_CIK)
     assert result.status == "ok", result.error
-    assert result.records_parsed == 670
+    assert result.records_parsed == 620
     assert result.rows_written > 0
 
     statements = (
@@ -591,3 +593,33 @@ def test_two_tickers_on_one_exchange_share_one_security(
     )
     assert tickers == ["GOOG", "GOOGL"]
     assert company.fiscal_year_end == 12
+
+
+def test_cover_page_share_counts_land_in_shares_outstanding(
+    db_session: Session, apple: Company
+) -> None:
+    """`docs/08` §2.14 #49: the count as of a date, dated by the filing that carried it."""
+    from packages.common.models import SharesOutstanding
+
+    assert _facts_connector(_facts_raw()).run(db_session, cik=APPLE_CIK).status == "ok"
+    security_id = db_session.execute(
+        select(Security.id).where(Security.company_id == apple.id)
+    ).scalar_one()
+    rows = (
+        db_session.execute(
+            select(SharesOutstanding)
+            .where(SharesOutstanding.security_id == security_id)
+            .order_by(SharesOutstanding.as_of_date)
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 15
+    latest = rows[-1]
+    assert latest.as_of_date == dt.date(2026, 7, 17)
+    assert latest.known_as_of == dt.date(2026, 7, 31)
+    assert latest.shares == Decimal("14594180000")
+    assert latest.basic_or_diluted == "basic" and latest.share_class == "ordinary"
+    assert all(r.known_as_of >= r.as_of_date for r in rows)
+    # Re-running writes nothing: same dates, same counts, same vintages.
+    assert _facts_connector(_facts_raw()).run(db_session, cik=APPLE_CIK).rows_written == 0
