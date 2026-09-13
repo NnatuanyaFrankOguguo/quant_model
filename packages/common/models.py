@@ -562,6 +562,117 @@ class SharesOutstanding(Base):
 
 
 # ---------------------------------------------------------------------------
+# §2.14 #50–54 The entity graph (P2, migration 0014; populated from P3/P4)
+# ---------------------------------------------------------------------------
+
+
+class Person(Base):
+    """A director or officer. `normalised_name` is what matching joins on."""
+
+    __tablename__ = "persons"
+    __table_args__ = (Index("ix_persons_normalised_name", "normalised_name"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    full_name: Mapped[str] = mapped_column(Text, nullable=False)
+    normalised_name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        TZDateTime, nullable=False, server_default=func.now()
+    )
+
+
+class EntityRole(Base):
+    """A board seat or executive role, dated: who sat where when the decision was made."""
+
+    __tablename__ = "entity_roles"
+    __table_args__ = (Index("ix_entity_roles_company", "company_id", "valid_from"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey("persons.id"), nullable=False)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_from: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    valid_to: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    known_as_of: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    needs_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
+
+class Shareholding(Base):
+    """A substantial holder. `holder_company_id` makes cross-holdings queryable."""
+
+    __tablename__ = "shareholdings"
+    __table_args__ = (Index("ix_shareholdings_company", "company_id", "as_of_date"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), nullable=False)
+    holder_name: Mapped[str] = mapped_column(Text, nullable=False)
+    holder_type: Mapped[str] = mapped_column(Text, nullable=False)
+    holder_person_id: Mapped[int | None] = mapped_column(ForeignKey("persons.id"), nullable=True)
+    holder_company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), nullable=True)
+    units: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    pct_held: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    as_of_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    known_as_of: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    needs_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
+
+class CompanyRelationship(Base):
+    """One generic edge: parent, subsidiary, auditor, related party, customer, supplier."""
+
+    __tablename__ = "company_relationships"
+    __table_args__ = (
+        CheckConstraint(
+            "to_company_id IS NOT NULL OR to_name IS NOT NULL", name="relationship_has_a_target"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    from_company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), nullable=False)
+    to_company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), nullable=True)
+    to_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    relation: Mapped[str] = mapped_column(Text, nullable=False)
+    ownership_pct: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    valid_from: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    valid_to: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    known_as_of: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    needs_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+
+
+class IndexMembership(Base):
+    """Point-in-time index constituents: 'the NGX 30 as of 2020' must be answerable (P7)."""
+
+    __tablename__ = "index_membership"
+
+    index_code: Mapped[str] = mapped_column(Text, primary_key=True)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), primary_key=True)
+    valid_from: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    known_as_of: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    valid_to: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    weight: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+
+
+# ---------------------------------------------------------------------------
 # §2.12 Compliance and identity
 # ---------------------------------------------------------------------------
 

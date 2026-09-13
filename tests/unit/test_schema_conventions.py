@@ -90,6 +90,7 @@ FIGURE_TABLES: set[str] = {
     "statement_line_items",  # P2, migration 0011
     "price_history",  # P2, migration 0012 - business date is `date`
     "shares_outstanding",  # P2, migration 0013
+    "shareholdings",  # P2, migration 0014 - units and pct_held are figures off a page
     # --- later phases ---
     # "corporate_actions", "fx_rates", "adjustment_factors"
 }
@@ -102,6 +103,7 @@ FIGURE_TABLES: set[str] = {
 #: mandatory, enforced there by `page_required_unless_structured`.
 PAGE_REQUIRED_TABLES: set[str] = {
     "statement_line_items",  # P2; `page_required_unless_structured` makes it NOT NULL for PDFs
+    "shareholdings",  # P2 schema, P4 extraction target: read off the shareholders schedule
 }
 
 #: Tables a model, feature or backtest will read. MUST carry `known_as_of` AND a business
@@ -115,6 +117,11 @@ MODEL_READABLE_TABLES: set[str] = {
     "filings",  # P2 - a filing date is an event a model may read; known_as_of + period_end
     "price_history",  # P2
     "shares_outstanding",  # P2
+    # --- the entity graph, P2 migration 0014, populated from P3/P4 ---
+    "entity_roles",
+    "shareholdings",
+    "company_relationships",
+    "index_membership",
     # --- later phases ---
     # "indicators", "ml_features", "news_sentiment"
 }
@@ -122,7 +129,17 @@ MODEL_READABLE_TABLES: set[str] = {
 #: The business-date column names a model-readable table may use. A table needs at least
 #: one of these alongside `known_as_of`.
 BUSINESS_DATE_COLUMNS: frozenset[str] = frozenset(
-    {"as_of_date", "date", "period_end", "ts", "trade_date", "effective_from", "action_date"}
+    {
+        "as_of_date",
+        "date",
+        "period_end",
+        "ts",
+        "trade_date",
+        "effective_from",
+        "action_date",
+        # `docs/08` uses valid_from for dated validity: identifiers, roles, index membership.
+        "valid_from",
+    }
 )
 
 #: Tables that are none of the above: reference data, config, identity, operational logs.
@@ -155,6 +172,7 @@ STRUCTURAL_ONLY: dict[str, str] = {
         "valid_to window is its time dimension (TG2)"
     ),
     "extraction_jobs": "operational record of how a document was processed; holds no figure",
+    "persons": "identity of a director or officer; the dated facts about them are in entity_roles",
     "chart_of_accounts": "the canonical vocabulary, versioned; reference data (TG7)",
     "account_mappings": "source label -> canonical key, versioned; reference data (TG7)",
 }
