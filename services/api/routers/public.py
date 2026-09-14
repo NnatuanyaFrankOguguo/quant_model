@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from packages.common.db import get_session
+from packages.common.sec import filing_index_url
 from packages.common.timez import utctoday
 from packages.compliance.mode import Mode
 from packages.ingestion import macro
@@ -233,6 +234,7 @@ async def company_statements(
                 filing_type=p.filing_type,
                 filing_date=p.filing_date,
                 accession_no=p.accession_no,
+                filing_url=filing_index_url(ref.cik, p.accession_no),
                 source_document_id=p.source_document_id,
                 items={
                     key: Figure(

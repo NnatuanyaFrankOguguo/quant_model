@@ -176,7 +176,13 @@ def main() -> None:
     ticker = left.selectbox(
         "Ticker", tickers, index=tickers.index("AAPL") if "AAPL" in tickers else 0
     )
-    as_known_on = middle.date_input("As known on", value=dt.date.today())
+    as_known_on = middle.date_input(
+        "As known on",
+        value=dt.date.today(),
+        help="What a reader on this date could have seen. Filings made after it - "
+        "restatements included - are hidden, so the figures are the ones a decision "
+        "on that day actually had.",
+    )
     period_type = right.selectbox("Periods", ["FY", "Q1", "Q2", "Q3", "H1", "YTD"], index=0)
     company = next(c for c in companies if c["ticker"] == ticker)
     st.write(
@@ -215,6 +221,7 @@ def main() -> None:
                 "filed": p["filing_date"],
                 "form": p["filing_type"],
                 "accession": p["accession_no"],
+                "filing": p["filing_url"],
                 "known as of": p["known_as_of"],
                 "document": p["source_document_id"],
             }
@@ -222,7 +229,14 @@ def main() -> None:
         ]
     ).set_index("period")
     with st.expander("Provenance — the filing behind each column"):
-        st.table(provenance)
+        st.dataframe(
+            provenance,
+            column_config={
+                "filing": st.column_config.LinkColumn(
+                    "filing", help="The filing's folder on sec.gov", display_text="open on EDGAR"
+                )
+            },
+        )
     st.caption(statements["attribution"])
 
     st.subheader("Ratios")

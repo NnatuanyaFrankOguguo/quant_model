@@ -1689,10 +1689,10 @@ owed by P3/P4.
 
 | # | The question, as asked | Owed by | Status 2026-09-14 |
 |---|---|---|---|
-| Q20 | Where did this number come from — show me the page. | US-005 · US-040 | ✅ US: filing, form, accession, `known_as_of` under every column (`page` is NULL for XBRL by design). ⬜ P4: the PDF page image itself |
+| Q20 | Where did this number come from — show me the page. | US-005 · US-040 | ✅ US: filing, form, accession, `known_as_of` under every column, and since **2026-09-14** `filing_url` — the filing's folder on sec.gov, a link on the page (`page` is NULL for XBRL by design). ⬜ P4: the PDF page image itself |
 | Q21 | Is this the company's figure or your estimate? | US-021 · US-041 | ✅ **2026-09-14.** Never estimated, and every blank now says whose silence it is: `absent_because` is `not_in_filing` (the company's — Apple's interest expense) or `no_mapping` (ours — `fx_loss_net` under chart v0.1). The page prints the two differently. Nigeria: P4 adds the extractor's reasons |
 | Q22 | How stale is this? | US-010 · US-013 | 🟡 Macro: as-of and overdue flag ✅. Companies: the latest filing date is shown; no *overdue* flag (see Q12) |
-| Q23 | What did you know on the day I decided? | US-024 | 🟡 The control is on the page and works; nothing on the page says why it exists |
+| Q23 | What did you know on the day I decided? | US-024 | ✅ **2026-09-14.** The control on the page now says what it does: filings after the date, restatements included, are hidden — the figures a decision on that day actually had |
 | Q24 | Did a person check this, or did a model read it? | US-042 | 🟡 `extraction_method` is on every figure (`xbrl` for US). Reviewer and confidence: ⬜ P4 |
 
 **"Tell me what to do"** — personal mode only, until the SEC licence (§5)
@@ -1732,7 +1732,7 @@ phase schedules it, and until then it is tracked here.
 ### 11.3 The first five to pick
 
 Each is a 🟡 that is under a day, and each closes a distance between what the database knows
-and what the screen admits: ~~**Q21** (say *which* kind of blank)~~ done 2026-09-14, **Q20** (make the accession a
-link to the filing on EDGAR), **Q23** (one sentence beside the point-in-time control),
+and what the screen admits: ~~**Q21** (say *which* kind of blank)~~, ~~**Q20** (make the accession a
+link to the filing on EDGAR)~~, ~~**Q23** (one sentence beside the point-in-time control)~~ — all three done 2026-09-14;
 **Q22/Q12** (an overdue flag on companies, as macro already has), **Q10** (show a cell's
 previous vintage when one exists — the writer already records it).

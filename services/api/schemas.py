@@ -263,6 +263,10 @@ class StatementPeriod(BaseModel):
     filing_type: str | None = Field(default=None, description="'10-K' or '10-Q'")
     filing_date: date | None = None
     accession_no: str | None = Field(default=None, description="EDGAR accession number")
+    filing_url: str | None = Field(
+        default=None,
+        description="The filing's folder in the SEC archive - open it to see the source",
+    )
     source_document_id: int | None = None
     items: dict[str, Figure] = Field(description="canonical key -> figure")
 

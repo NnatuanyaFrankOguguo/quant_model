@@ -121,6 +121,10 @@ def test_statements_carry_provenance_and_the_filing_date(client, apple_loaded) -
     assert fy2025["known_as_of"] == "2025-10-31"
     assert fy2025["filing_type"] == "10-K"
     assert fy2025["accession_no"] == "0000320193-25-000079"
+    # docs/05 §11 Q20: the accession is a door, not a label - the filing's folder on sec.gov.
+    assert (
+        fy2025["filing_url"] == "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/"
+    )
     assert fy2025["source_document_id"] is not None
     revenue = fy2025["items"]["revenue"]
     assert Decimal(revenue["value"]) == Decimal("416161000000")
