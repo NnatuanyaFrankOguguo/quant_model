@@ -46,6 +46,8 @@ class LineItemAsKnown:
     source_document_id: int
     chart_version: str
     extraction_method: str
+    #: True when this version changed the figure - not when it carried it forward.
+    restatement_flag: bool
 
 
 def line_items_as_known_on(
@@ -82,6 +84,7 @@ def line_items_as_known_on(
             StatementLineItem.source_document_id,
             StatementLineItem.chart_version,
             StatementLineItem.extraction_method,
+            StatementLineItem.restatement_flag,
         )
         .join(Statement, Statement.id == StatementLineItem.statement_id)
         .where(StatementLineItem.security_id == security_id)

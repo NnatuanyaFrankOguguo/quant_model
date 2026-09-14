@@ -263,6 +263,17 @@ class Figure(BaseModel):
             "the blank is ours, not the company's."
         ),
     )
+    restated: bool = Field(
+        default=False,
+        description="True when the version in view changed this figure (not a carry-forward)",
+    )
+    previous_value: Decimal | None = Field(
+        default=None, description="When restated: the figure this version replaced"
+    )
+    previous_known_as_of: date | None = Field(
+        default=None,
+        description="When restated: the filing date that had made the old figure public",
+    )
 
 
 class StatementPeriod(BaseModel):

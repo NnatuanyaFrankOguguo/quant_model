@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.orm import Session
 
 from packages.common.models import (
@@ -29,6 +29,7 @@ from packages.common.models import (
     SecurityIdentifier,
     SharesOutstanding,
     Statement,
+    StatementLineItem,
 )
 from packages.common.pit import LineItemAsKnown, line_items_as_known_on
 from packages.normalize.chart import SOURCE_SYSTEM_BY_METHOD, ChartVersion, load_chart
@@ -96,6 +97,11 @@ class LineItem:
     #: key and the filing carried none of them) or 'no_mapping' (the chart maps nothing
     #: for this key from this source, so no filing could have filled it). None otherwise.
     absent_because: AbsentBecause | None = None
+    #: True when the version in view changed this figure; then the vintage it replaced,
+    #: so a reader sees what the number was and when it was that (`docs/05` §11, Q10).
+    restated: bool = False
+    previous_value: Decimal | None = None
+    previous_known_as_of: dt.date | None = None
 
 
 @dataclass(frozen=True)
@@ -263,6 +269,11 @@ def statements_as_known_on(
     statement_ids = {item.statement_id for group in grouped.values() for item in group}
     provenance = _filing_provenance(session, statement_ids)
     charts: dict[tuple[str, str], ChartVersion] = {}
+    previous = _previous_vintages(
+        session,
+        security_id=security_id,
+        restated=[i for group in grouped.values() for i in group if i.restatement_flag],
+    )
 
     periods: list[PeriodStatement] = []
     for (ptype, period_end), group in grouped.items():
@@ -283,6 +294,9 @@ def statements_as_known_on(
                         i.known_as_of,
                         i.version,
                         absent_because=_absent_because(session, i, charts),
+                        restated=i.restatement_flag,
+                        previous_value=previous.get(_vintage_key(i), (None, None))[0],
+                        previous_known_as_of=previous.get(_vintage_key(i), (None, None))[1],
                     )
                     for i in group
                 },
@@ -294,6 +308,52 @@ def statements_as_known_on(
         )
     periods.sort(key=lambda p: (p.period_end, p.period_type), reverse=True)
     return periods
+
+
+_VintageKey = tuple[str, str, dt.date, int]  # canonical_key, period_type, period_end, version
+
+
+def _vintage_key(item: LineItemAsKnown) -> _VintageKey:
+    return (item.canonical_key, item.period_type, item.period_end, item.version)
+
+
+def _previous_vintages(
+    session: Session, *, security_id: int, restated: list[LineItemAsKnown]
+) -> dict[_VintageKey, tuple[Decimal | None, dt.date]]:
+    """For each restated cell, the value and date of the version it replaced.
+
+    Keyed by the *restated* item's vintage key, so the caller looks up with the item in
+    hand. One query for every restated cell in the view; versions step by one per period,
+    so version - 1 is the vintage that was in force before this one.
+    """
+    if not restated:
+        return {}
+    wanted = {(i.canonical_key, i.period_type, i.period_end, i.version - 1) for i in restated}
+    rows = session.execute(
+        select(
+            StatementLineItem.canonical_key,
+            Statement.period_type,
+            StatementLineItem.period_end,
+            StatementLineItem.version,
+            StatementLineItem.value,
+            StatementLineItem.known_as_of,
+        )
+        .join(Statement, Statement.id == StatementLineItem.statement_id)
+        .where(StatementLineItem.security_id == security_id)
+        .where(Statement.is_consolidated.is_(True))
+        .where(
+            tuple_(
+                StatementLineItem.canonical_key,
+                Statement.period_type,
+                StatementLineItem.period_end,
+                StatementLineItem.version,
+            ).in_(list(wanted))
+        )
+    ).all()
+    return {
+        (key, ptype, end, version + 1): (value, known)
+        for key, ptype, end, version, value, known in rows
+    }
 
 
 def _absent_because(

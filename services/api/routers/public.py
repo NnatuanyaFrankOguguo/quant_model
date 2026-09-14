@@ -245,6 +245,9 @@ async def company_statements(
                         known_as_of=i.known_as_of,
                         version=i.version,
                         absent_because=i.absent_because,
+                        restated=i.restated,
+                        previous_value=i.previous_value,
+                        previous_known_as_of=i.previous_known_as_of,
                     )
                     for key, i in p.items.items()
                 },

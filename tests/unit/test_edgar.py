@@ -540,6 +540,33 @@ def test_a_restatement_keeps_both_versions_and_point_in_time_returns_the_origina
     assert before[("FY", dt.date(2024, 9, 28))] == Decimal("391035000000")
     assert after[("FY", dt.date(2024, 9, 28))] == Decimal("391035000001")
 
+    # docs/05 §11 Q10: the view names the restated cell and the vintage it replaced.
+    from packages.valuation.snapshot import statements_as_known_on
+
+    def fy2024_revenue(on: dt.date):
+        periods = statements_as_known_on(
+            db_session, security_id=security_id, decision_date=on, period_type="FY"
+        )
+        return next(p for p in periods if p.period_end == dt.date(2024, 9, 28)).items["revenue"]
+
+    now = fy2024_revenue(dt.date(2026, 12, 31))
+    assert now.version == 2 and now.restated is True
+    assert now.value == Decimal("391035000001")
+    assert now.previous_value == Decimal("391035000000")
+    assert now.previous_known_as_of == dt.date(2024, 11, 1)
+    then = fy2024_revenue(dt.date(2026, 6, 1))
+    assert then.version == 1 and then.restated is False
+    assert then.previous_value is None and then.previous_known_as_of is None
+    # A carried-forward figure in the restated version is not marked as restated.
+    rd = next(
+        p
+        for p in statements_as_known_on(
+            db_session, security_id=security_id, decision_date=dt.date(2026, 12, 31)
+        )
+        if p.period_type == "FY" and p.period_end == dt.date(2024, 9, 28)
+    ).items["rd_expense"]
+    assert rd.version == 2 and rd.restated is False and rd.previous_value is None
+
 
 def test_point_in_time_requires_a_decision_date(db_session: Session) -> None:
     with pytest.raises(TypeError):

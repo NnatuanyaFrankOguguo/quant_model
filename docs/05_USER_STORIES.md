@@ -1669,7 +1669,7 @@ owed by P3/P4.
 | # | The question, as asked | Owed by | Status 2026-09-14 |
 |---|---|---|---|
 | Q9 | Did anything new get filed this week? | US-050 · US-102 | 🟡 Every filing is dated in `filings`; no feed. ⬜ P5 for the brief, P10 for the alert |
-| Q10 | Did the numbers I decided on get restated since? | US-024 · US-045 | 🟡 Every vintage is held and the point-in-time query works. The *difference* against what you saw is not shown. **Gap** |
+| Q10 | Did the numbers I decided on get restated since? | US-024 · US-045 | ✅ **2026-09-14.** Every restated figure in view carries the value it replaced and the date that value was public; the page marks the cell ↻ and lists them. Set "as known on" to your decision date and the originals return everywhere — Apple as known 2009-12-31 shows FY2009 revenue 36,537m; a month later 42,905m ↻ with 29 figures listed under the 2010-01-25 filing |
 | Q11 | What's in the news, and is it noise? | US-052 | ⬜ P5 |
 | Q12 | When is the next result due, and are they late? | US-013 (freshness) | ✅ **2026-09-14**, US. `/companies` carries the next report's form and the last day the SEC allows for it (the longest deadline, so a company is called overdue only when every filer category would be), and `filing_overdue` when that day has passed and the report is not held. First run flagged Coca-Cola: its Q2 10-Q is not in our copy. Nigeria: NGX deadlines, P3 |
 | Q13 | What is my position worth in naira today, after FX? | US-100 · `fx_rates` (TG2) | ⬜ P10, on P3's FX table |
@@ -1723,7 +1723,6 @@ phase schedules it, and until then it is tracked here.
 | Q3 debt maturities | A `debt_maturity` schedule in the chart (v1 freeze, P3) | P3 (TG7 freeze) |
 | Q5 cheap against itself / peers | Ratios at every past filing date (prices are held); a peer set per industry | P6 (indicators) |
 | Q6 price reaction to results | Return from the filing date to +1/+5 days, per filing | P6 (indicators) |
-| Q10 restated since I decided | A diff of the vintage in force on a date against today's | P5 (brief) or P10 (alerts) |
 | Q16 real yield vs dividend yield | One route joining a P1 series to a P2/P3 ratio | P6 (indicators) |
 | Q17 is the market expensive | Universe-level P/E and breadth once P4 fills the NGX | P6 (indicators) |
 | Q31 share a dated view | A read-only link to one company as known on one date (export itself is ADR-0010, P12) | P9 (web app) |
@@ -1733,5 +1732,8 @@ phase schedules it, and until then it is tracked here.
 Each is a 🟡 that is under a day, and each closes a distance between what the database knows
 and what the screen admits: ~~**Q21** (say *which* kind of blank)~~, ~~**Q20** (make the accession a
 link to the filing on EDGAR)~~, ~~**Q23** (one sentence beside the point-in-time control)~~,
-~~**Q22/Q12** (an overdue flag on companies, as macro already has)~~ — all four done 2026-09-14;
-**Q10** (show a cell's previous vintage when one exists — the writer already records it) is next.
+~~**Q22/Q12** (an overdue flag on companies, as macro already has)~~,
+~~**Q10** (show a cell's previous vintage when one exists)~~ — all five done 2026-09-14. The
+next five, by the same rule: **Q2** (year-on-year change, server-side), **Q8/Q1** wait for P4,
+so **Q5** (ratios at every past filing date — the prices are held), **Q16** (real T-bill yield
+beside dividend yield), **Q6** (return from the filing date), **Q31** (a dated shareable view).

@@ -136,12 +136,35 @@ def _millions(value: str | None) -> str:
 
 
 def _cell(figure: dict[str, Any] | None) -> str:
-    """One statement cell: the figure in millions, or the reason there is none."""
+    """One statement cell: the figure in millions, or the reason there is none.
+
+    A restated figure carries a mark; the list under the tables says from what and when.
+    """
     if figure is None:
         return "—  not in this period's statement"
     if figure["value"] is None:
         return BLANKS[figure.get("absent_because")]
-    return _millions(figure["value"])
+    mark = "  ↻" if figure.get("restated") else ""
+    return _millions(figure["value"]) + mark
+
+
+def _restatements(periods: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Every restated cell in view: what it was, when that was public, what it is now."""
+    rows = []
+    for p in periods:
+        for key, figure in p["items"].items():
+            if figure.get("restated"):
+                rows.append(
+                    {
+                        "period": p["period_label"],
+                        "line item": key,
+                        "was": _millions(figure.get("previous_value")),
+                        "public since": figure.get("previous_known_as_of") or "—",
+                        "now": _millions(figure["value"]),
+                        "restated on": figure["known_as_of"],
+                    }
+                )
+    return rows
 
 
 def _fraction(value: str | None, places: int = 2, percent: bool = False) -> str:
@@ -179,6 +202,10 @@ def main() -> None:
     as_known_on = middle.date_input(
         "As known on",
         value=dt.date.today(),
+        # Streamlit's default range is ten years back; XBRL history starts in 2009 and the
+        # price history in 1980, so the control must reach every date the data does.
+        min_value=dt.date(1980, 1, 1),
+        max_value=dt.date.today(),
         help="What a reader on this date could have seen. Filings made after it - "
         "restatements included - are hidden, so the figures are the ones a decision "
         "on that day actually had.",
@@ -239,6 +266,15 @@ def main() -> None:
             for p in periods
         ]
     ).set_index("period")
+    restated = _restatements(periods)
+    if restated:
+        with st.expander(f"↻ Restated in what you see — {len(restated)} figure(s)", expanded=True):
+            st.caption(
+                "Each of these was published once and then changed by a later filing. Both "
+                "vintages are held; set 'as known on' before the restatement date to see the "
+                "original everywhere."
+            )
+            st.table(pd.DataFrame(restated).set_index(["period", "line item"]))
     with st.expander("Provenance — the filing behind each column"):
         st.dataframe(
             provenance,
