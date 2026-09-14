@@ -51,6 +51,7 @@ __all__ = [
     "list_companies",
     "ratios_for",
     "statements_as_known_on",
+    "year_on_year",
 ]
 
 
@@ -102,6 +103,12 @@ class LineItem:
     restated: bool = False
     previous_value: Decimal | None = None
     previous_known_as_of: dt.date | None = None
+    #: The same figure one fiscal year earlier, as known on the same date, and the
+    #: change as a fraction of it (`docs/05` §11, Q2). Both None when either side is
+    #: unknown; the fraction is also None when the prior is not positive or the value
+    #: has turned negative, because a change measured across a loss or a zero misleads.
+    prior_value: Decimal | None = None
+    change_yoy: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -275,10 +282,16 @@ def statements_as_known_on(
         restated=[i for group in grouped.values() for i in group if i.restatement_flag],
     )
 
+    # (period_type, fiscal_year) -> key -> value, for the year-on-year comparison.
+    by_year: dict[tuple[str, int], dict[str, Decimal | None]] = {}
+    for (ptype, _period_end), group in sorted(grouped.items(), key=lambda kv: kv[0][1]):
+        by_year[(ptype, group[0].fiscal_year)] = {i.canonical_key: i.value for i in group}
+
     periods: list[PeriodStatement] = []
     for (ptype, period_end), group in grouped.items():
         newest = max(group, key=lambda i: (i.known_as_of, i.version))
         filing = provenance.get(newest.statement_id)
+        prior_year = by_year.get((ptype, newest.fiscal_year - 1), {})
         periods.append(
             PeriodStatement(
                 period_type=ptype,
@@ -297,6 +310,8 @@ def statements_as_known_on(
                         restated=i.restatement_flag,
                         previous_value=previous.get(_vintage_key(i), (None, None))[0],
                         previous_known_as_of=previous.get(_vintage_key(i), (None, None))[1],
+                        prior_value=prior_year.get(i.canonical_key),
+                        change_yoy=year_on_year(i.value, prior_year.get(i.canonical_key)),
                     )
                     for i in group
                 },
@@ -308,6 +323,20 @@ def statements_as_known_on(
         )
     periods.sort(key=lambda p: (p.period_end, p.period_type), reverse=True)
     return periods
+
+
+def year_on_year(value: Decimal | None, prior: Decimal | None) -> Decimal | None:
+    """`(value - prior) / prior`, to four places - or None when it would mislead.
+
+    None when either side is unknown (never zero-filled), None when the prior is zero or
+    negative - a loss that halves is not "-50%", growth from nothing is not infinite - and
+    None when a profit has become a loss: Intel's 2024 swing from 1,689m to -18,756m is not
+    "-1,210%", it is a sign change, and the two figures say so better than a fraction can.
+    The prior itself travels beside the fraction, so a reader always has both numbers.
+    """
+    if value is None or prior is None or prior <= 0 or value < 0:
+        return None
+    return ((value - prior) / prior).quantize(Decimal("0.0001"))
 
 
 _VintageKey = tuple[str, str, dt.date, int]  # canonical_key, period_type, period_end, version

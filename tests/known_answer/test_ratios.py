@@ -143,3 +143,30 @@ def test_decision_date_is_mandatory() -> None:
 def test_no_float_anywhere() -> None:
     r = compute_ratios(APPLE_FY2025, price=PRICE, shares=SHARES, decision_date=DECISION)
     assert all(v is None or isinstance(v, Decimal) for v in r.values())
+
+
+# --- year-on-year change (docs/05 §11, Q2) ------------------------------------------------
+
+
+@pytest.mark.invariant
+@pytest.mark.parametrize(
+    ("value", "prior", "expected"),
+    [
+        (Decimal("416161000000"), Decimal("391035000000"), Decimal("0.0643")),  # Apple FY25/24
+        (Decimal("90"), Decimal("100"), Decimal("-0.1000")),
+        (Decimal("100"), Decimal("100"), Decimal("0.0000")),
+        (Decimal("5"), Decimal("0"), None),  # growth from nothing is not infinite
+        (Decimal("5"), Decimal("-5"), None),  # a loss that reverses is not "-200%"
+        (Decimal("-2"), Decimal("-4"), None),  # a loss that halves is not "-50%"
+        (Decimal("-18756"), Decimal("1689"), None),  # Intel 2024: a sign change, not "-1,210%"
+        (Decimal("0"), Decimal("100"), Decimal("-1.0000")),  # to nothing is -100%, honestly
+        (None, Decimal("1"), None),
+        (Decimal("1"), None, None),
+    ],
+)
+def test_year_on_year_is_a_fraction_of_a_positive_prior_or_nothing(
+    value: Decimal | None, prior: Decimal | None, expected: Decimal | None
+) -> None:
+    from packages.valuation.snapshot import year_on_year
+
+    assert year_on_year(value, prior) == expected

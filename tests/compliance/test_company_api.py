@@ -135,6 +135,13 @@ def test_statements_carry_provenance_and_the_filing_date(client, apple_loaded) -
     revenue = fy2025["items"]["revenue"]
     assert Decimal(revenue["value"]) == Decimal("416161000000")
     assert revenue["known_as_of"] == "2025-10-31" and revenue["version"] == 1
+    # docs/05 §11 Q2: the same figure a year earlier, as known on the same date, beside it.
+    assert Decimal(revenue["prior_value"]) == Decimal("391035000000")
+    assert Decimal(revenue["change_yoy"]) == Decimal("0.0643")
+    assert fy2025["items"]["interest_expense"]["change_yoy"] is None
+    oldest = min(body["periods"], key=lambda p: p["period_end"])
+    assert oldest["items"]["revenue"]["prior_value"] is None, "no earlier year known: nothing"
+    assert oldest["items"]["revenue"]["change_yoy"] is None
     # Apple no longer reports interest expense separately: null, present, never zero.
     assert "interest_expense" in fy2025["items"]
     assert fy2025["items"]["interest_expense"]["value"] is None

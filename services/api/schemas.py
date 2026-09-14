@@ -274,6 +274,18 @@ class Figure(BaseModel):
         default=None,
         description="When restated: the filing date that had made the old figure public",
     )
+    prior_value: Decimal | None = Field(
+        default=None,
+        description="The same figure one fiscal year earlier, as known on the same date",
+    )
+    change_yoy: Decimal | None = Field(
+        default=None,
+        description=(
+            "(value - prior) / prior as a fraction, four places. null when either side is "
+            "unknown, the prior is not positive, or the value has turned negative - a change "
+            "measured across a loss or a zero misleads"
+        ),
+    )
 
 
 class StatementPeriod(BaseModel):

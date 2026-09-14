@@ -1656,7 +1656,7 @@ owed by P3/P4.
 | # | The question, as asked | Owed by | Status 2026-09-14 |
 |---|---|---|---|
 | Q1 | What does this company actually do, and who owns it? | US-020 · entity graph ([08](08_DATA_CONTRACTS.md) §2.14, P4 extraction) | 🟡 US: name, exchange, industry shown. Ownership and board: tables exist (migration 0014), empty until P4 |
-| Q2 | Is it making money, and is that getting better or worse? | US-020 · US-030 · US-040 | 🟡 US: five-plus years of statements, dated, on the page. No year-on-year change, no chart. Nigeria: ⬜ P3 |
+| Q2 | Is it making money, and is that getting better or worse? | US-020 · US-030 · US-040 | ✅ **2026-09-14**, US. Every figure carries the same figure a year earlier (as known on the same date) and the change as a fraction, computed by the server; the page shows it beside each number. The fraction is withheld when either side is unknown, the prior was a loss or zero, or the figure has turned into a loss — Intel's 2024 swing is two numbers, not "-1,210%". No chart yet. Nigeria: ⬜ P3 |
 | Q3 | Is it drowning in debt, and when is the debt due? | US-020 | 🟡 US: debt/equity and interest cover live. Maturity schedule: **gap** — not in chart v0.1, no story |
 | Q4 | Does it pay a dividend, and has it ever cut it? | US-031 (corporate actions, TG2) | 🟡 US: total dividends paid, per year, from the cash flow. Per-share and cuts: ⬜ P3 |
 | Q5 | Is it cheap — and compared with what? | US-020 | 🟡 US: P/E, P/B, EV multiples on today's price. Against its own history or its peers: **gap** — no story |
@@ -1734,6 +1734,7 @@ and what the screen admits: ~~**Q21** (say *which* kind of blank)~~, ~~**Q20** (
 link to the filing on EDGAR)~~, ~~**Q23** (one sentence beside the point-in-time control)~~,
 ~~**Q22/Q12** (an overdue flag on companies, as macro already has)~~,
 ~~**Q10** (show a cell's previous vintage when one exists)~~ — all five done 2026-09-14. The
-next five, by the same rule: **Q2** (year-on-year change, server-side), **Q8/Q1** wait for P4,
-so **Q5** (ratios at every past filing date — the prices are held), **Q16** (real T-bill yield
-beside dividend yield), **Q6** (return from the filing date), **Q31** (a dated shareable view).
+next five, by the same rule: ~~**Q2** (year-on-year change, server-side)~~ done 2026-09-14; **Q8/Q1**
+wait for P4, so **Q5** (ratios at every past filing date — the prices are held), **Q16** (real
+T-bill yield beside dividend yield), **Q6** (return from the filing date), **Q31** (a dated
+shareable view).

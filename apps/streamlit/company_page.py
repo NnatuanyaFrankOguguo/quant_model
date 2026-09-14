@@ -135,17 +135,21 @@ def _millions(value: str | None) -> str:
     return f"{Decimal(value) / Decimal(1_000_000):,.0f}"
 
 
-def _cell(figure: dict[str, Any] | None) -> str:
+def _cell(figure: dict[str, Any] | None, *, with_change: bool) -> str:
     """One statement cell: the figure in millions, or the reason there is none.
 
     A restated figure carries a mark; the list under the tables says from what and when.
+    With `with_change`, the server's year-on-year fraction follows the figure - or nothing,
+    when the server had no honest fraction to give.
     """
     if figure is None:
         return "—  not in this period's statement"
     if figure["value"] is None:
         return BLANKS[figure.get("absent_because")]
-    mark = "  ↻" if figure.get("restated") else ""
-    return _millions(figure["value"]) + mark
+    text = _millions(figure["value"])
+    if with_change and figure.get("change_yoy") is not None:
+        text += f"  ({_fraction(figure['change_yoy'], percent=True, signed=True)})"
+    return text + ("  ↻" if figure.get("restated") else "")
 
 
 def _restatements(periods: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -167,11 +171,14 @@ def _restatements(periods: list[dict[str, Any]]) -> list[dict[str, str]]:
     return rows
 
 
-def _fraction(value: str | None, places: int = 2, percent: bool = False) -> str:
+def _fraction(
+    value: str | None, places: int = 2, percent: bool = False, signed: bool = False
+) -> str:
     if value is None:
         return "—"
     number = Decimal(value)
-    return f"{number * 100:,.{places}f}%" if percent else f"{number:,.{places}f}"
+    sign = "+" if signed else ""
+    return f"{number * 100:{sign},.{places}f}%" if percent else f"{number:{sign},.{places}f}"
 
 
 def main() -> None:
@@ -241,13 +248,22 @@ def main() -> None:
         return
 
     st.subheader(f"Statements as known on {statements['as_known_on']}  (USD millions)")
+    with_change = st.checkbox(
+        "Show change on a year earlier",
+        value=True,
+        help="Against the same period one fiscal year earlier, as known on the same date. "
+        "Blank when either side is unknown, the earlier figure was a loss or zero, or the "
+        "figure has turned into a loss - a sign change is not a percentage.",
+    )
     columns = [p["period_label"] for p in periods]
     for title, keys in STATEMENT_ROWS.items():
         rows = []
         for key in keys:
             if not any(key in p["items"] for p in periods):
                 continue
-            rows.append([key] + [_cell(p["items"].get(key)) for p in periods])
+            rows.append(
+                [key] + [_cell(p["items"].get(key), with_change=with_change) for p in periods]
+            )
         if rows:
             st.markdown(f"**{title}**")
             st.table(pd.DataFrame(rows, columns=["line item"] + columns).set_index("line item"))
