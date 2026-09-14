@@ -191,3 +191,105 @@ def test_an_unknown_ticker_is_refused_not_invented(db_session: Session, local_st
     result = connector.run(db_session, symbol="AAPL")
     assert result.status == "error"
     assert "no current security carries ticker" in (result.error or "")
+
+
+# --- the price around a publication day (docs/05 §11, Q6) ------------------------------
+
+
+def _write_bars(session: Session, security_id: int, closes: dict[str, str]) -> None:
+    """Bars straight into price_history, first sight on their own date, one document."""
+    from packages.common.models import DataSource, SourceDocument
+
+    source_id = session.execute(
+        select(DataSource.id).where(DataSource.source_name == "Yahoo Finance")
+    ).scalar_one()
+    document = SourceDocument(
+        data_source_id=source_id,
+        url="file:///bars.json",
+        storage_key="documents/sha256/" + "d" * 64,
+        sha256="d" * 64,
+        media_type="application/json",
+        retrieved_at=dt.datetime(2026, 9, 1, tzinfo=dt.UTC),
+    )
+    session.add(document)
+    session.flush()
+    for day, close in closes.items():
+        session.add(
+            PriceHistory(
+                security_id=security_id,
+                date=dt.date.fromisoformat(day),
+                known_as_of=dt.date.fromisoformat(day),
+                close_raw=Decimal(close),
+                data_source_id=source_id,
+                source_document_id=document.id,
+            )
+        )
+    session.flush()
+
+
+@pytest.mark.invariant
+def test_the_reaction_runs_from_the_close_before_publication_day(
+    db_session: Session, apple_security: int
+) -> None:
+    from packages.valuation.snapshot import _reactions_around
+
+    # Eight sessions: a Friday publication on the 6th, the split-free case.
+    _write_bars(
+        db_session,
+        apple_security,
+        {
+            "2026-03-04": "100",
+            "2026-03-05": "102",  # the close before
+            "2026-03-06": "101",  # publication day (filed after the bell)
+            "2026-03-09": "108",  # +1
+            "2026-03-10": "107",
+            "2026-03-11": "109",
+            "2026-03-12": "110",
+            "2026-03-13": "112.2",  # +5
+            "2026-03-16": "120",
+        },
+    )
+    on = dt.date(2026, 3, 6)
+    reactions = _reactions_around(
+        db_session, security_id=apple_security, dates=[on], known_by=dt.date(2026, 9, 1)
+    )
+    r = reactions[on]
+    assert (r.before.date, r.on_day.date, r.after_1.date, r.after_5.date) == (
+        dt.date(2026, 3, 5),
+        dt.date(2026, 3, 6),
+        dt.date(2026, 3, 9),
+        dt.date(2026, 3, 13),
+    )
+    assert r.return_1d == Decimal("0.0588"), "108 / 102 - 1"
+    assert r.return_5d == Decimal("0.1000"), "112.2 / 102 - 1"
+
+    # Known only up to the third session after: no fifth bar, no reaction, not a partial one.
+    early = _reactions_around(
+        db_session, security_id=apple_security, dates=[on], known_by=dt.date(2026, 3, 11)
+    )
+    assert on not in early
+    # A day with no bar of its own (a weekend filing) gets nothing.
+    assert dt.date(2026, 3, 7) not in _reactions_around(
+        db_session,
+        security_id=apple_security,
+        dates=[dt.date(2026, 3, 7)],
+        known_by=dt.date(2026, 9, 1),
+    )
+
+
+@pytest.mark.invariant
+def test_a_split_inside_the_window_withholds_the_reaction(
+    db_session: Session, apple_security: int
+) -> None:
+    """As-traded closes: Apple's 4:1 split of 2020-08-31 turns 499.23 into 129.04. Served as
+    a reaction that would be a 74% crash. It is withheld instead."""
+    from packages.valuation.snapshot import _reactions_around
+
+    connector = _prices_connector(_chart_raw())
+    register(db_session, connector)
+    assert connector.run(db_session, symbol="AAPL").status == "ok"
+    on = dt.date(2020, 8, 25)  # +5 sessions reach 2020-09-01, across the split
+    reactions = _reactions_around(
+        db_session, security_id=apple_security, dates=[on], known_by=dt.date(2020, 12, 31)
+    )
+    assert on not in reactions

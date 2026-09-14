@@ -411,6 +411,26 @@ class CompanyRatios(BaseModel):
     )
 
 
+class PriceBar(BaseModel):
+    """One as-traded close, with the vintage it was known at."""
+
+    date: dt.date
+    close_raw: Decimal
+    known_as_of: dt.date
+
+
+class PriceReaction(BaseModel):
+    """What the price did around a publication day. Returns run from the close before the
+    day, because a report filed after the bell moves the next session, not its own."""
+
+    before: PriceBar
+    on_day: PriceBar
+    after_1: PriceBar
+    after_5: PriceBar
+    return_1d: Decimal = Field(description="after_1 / before - 1, a fraction to four places")
+    return_5d: Decimal = Field(description="after_5 / before - 1, a fraction to four places")
+
+
 class RatioHistoryPoint(BaseModel):
     """One period's ratios on the day it was first published, on the figures it published."""
 
@@ -427,6 +447,14 @@ class RatioHistoryPoint(BaseModel):
     )
     ratios: dict[str, Decimal | None] = Field(
         description="Every ratio key, always present; null wherever an input was missing"
+    )
+    reaction: PriceReaction | None = Field(
+        default=None,
+        description=(
+            "The closes around the publication day and the returns from the close before "
+            "it; null unless all four bars exist and were known by the decision date. As "
+            "traded: a window holding an implausible one-day move (a split) is withheld"
+        ),
     )
 
 

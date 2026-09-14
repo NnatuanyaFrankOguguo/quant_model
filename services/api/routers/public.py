@@ -40,6 +40,8 @@ from services.api.schemas import (
     MacroObservations,
     MacroSeriesInfo,
     MacroSeriesList,
+    PriceBar,
+    PriceReaction,
     PriceUsed,
     PublicPing,
     RatioHistoryPoint,
@@ -425,9 +427,27 @@ async def company_ratio_history(
                     else None
                 ),
                 ratios=p.ratios,
+                reaction=_reaction(p.reaction),
             )
             for p in points
         ],
+    )
+
+
+def _bar(ref: snapshot.PriceRef) -> PriceBar:
+    return PriceBar(date=ref.date, close_raw=ref.close_raw, known_as_of=ref.known_as_of)
+
+
+def _reaction(r: snapshot.PriceReaction | None) -> PriceReaction | None:
+    if r is None:
+        return None
+    return PriceReaction(
+        before=_bar(r.before),
+        on_day=_bar(r.on_day),
+        after_1=_bar(r.after_1),
+        after_5=_bar(r.after_5),
+        return_1d=r.return_1d,
+        return_5d=r.return_5d,
     )
 
 

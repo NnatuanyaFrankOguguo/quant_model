@@ -378,7 +378,9 @@ def main() -> None:
     st.caption(
         "Each row is the day that year's report was first published: the figures it published, "
         "the closing price and the share count known that day. Later restatements do not reach "
-        "back into this table. Today's multiple, above, is the last row's descendant."
+        "back into this table. Today's multiple, above, is the last row's descendant. "
+        "'1 day' and '5 days' are the price's move from the close before publication day to "
+        "the first and fifth sessions after it."
     )
     try:
         history = fetch_ratio_history(ticker, as_known_on.isoformat(), period_type)
@@ -395,6 +397,16 @@ def main() -> None:
                         "price": f"{Decimal(pt['price']['close_raw']):,.2f}"
                         if pt["price"]
                         else "—",
+                        "1 day": _fraction(
+                            pt["reaction"]["return_1d"] if pt["reaction"] else None,
+                            percent=True,
+                            signed=True,
+                        ),
+                        "5 days": _fraction(
+                            pt["reaction"]["return_5d"] if pt["reaction"] else None,
+                            percent=True,
+                            signed=True,
+                        ),
                         **{
                             key: _fraction(pt["ratios"].get(key), percent=pct)
                             for key, pct in HISTORY_COLUMNS

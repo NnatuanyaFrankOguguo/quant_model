@@ -165,6 +165,30 @@ class RatioPoint:
     price: PriceRef | None
     shares: SharesRef | None
     ratios: dict[str, Decimal | None]
+    reaction: PriceReaction | None = None
+
+
+@dataclass(frozen=True)
+class PriceReaction:
+    """What the price did around a publication day (`docs/05` §11, Q6).
+
+    Four as-traded closes: the last one before the day, the day's own, and the first
+    and fifth trading days after. The returns run from the close *before* the day,
+    because a report filed after the bell moves the next session, not its own. All
+    four bars must exist, known by the decision date; otherwise there is no reaction,
+    never a partial one.
+
+    As traded means unadjusted: a split inside the window would read as a crash. Until
+    P3 holds corporate actions (`docs/08` §2.4), a window with an implausible one-day
+    move is withheld rather than served wrong - see `_IMPLAUSIBLE_DAY_RATIO`.
+    """
+
+    before: PriceRef
+    on_day: PriceRef
+    after_1: PriceRef
+    after_5: PriceRef
+    return_1d: Decimal  # after_1 / before - 1, four places
+    return_5d: Decimal  # after_5 / before - 1, four places
 
 
 @dataclass(frozen=True)
@@ -573,6 +597,9 @@ def ratio_history(
     }
     dates = sorted({entry.known for entry in in_season.values()})
     prices = _prices_on(session, security_id=security_id, dates=dates)
+    reactions = _reactions_around(
+        session, security_id=security_id, dates=dates, known_by=decision_date
+    )
     shares = _share_counts_on(session, security_id=security_id, dates=dates)
 
     points: list[RatioPoint] = []
@@ -593,6 +620,7 @@ def ratio_history(
                     shares=count.shares if count else None,
                     decision_date=entry.known,
                 ),
+                reaction=reactions.get(entry.known),
             )
         )
     return points
@@ -637,6 +665,79 @@ def _prices_on(
     for on in dates:
         eligible = [b for b in bars if b.date <= on and b.known_as_of <= on]
         result[on] = max(eligible, key=lambda b: (b.date, b.known_as_of)) if eligible else None
+    return result
+
+
+#: Calendar days after a publication day that surely hold its fifth trading day.
+_REACTION_LOOKAHEAD_DAYS = 12
+#: A close that is this many times its predecessor (or the inverse) within the window is
+#: a corporate action, not a reaction - Apple's 4:1 split of 2020-08-31 turns 499.23 into
+#: 129.04 as traded. The window is withheld, and the reason is this constant's name.
+_IMPLAUSIBLE_DAY_RATIO = Decimal("1.5")
+
+
+def _reactions_around(
+    session: Session, *, security_id: int, dates: list[dt.date], known_by: dt.date
+) -> dict[dt.date, PriceReaction]:
+    """The closes around each publication day, one query, chosen per day in Python.
+
+    Bars are taken at their newest vintage known by `known_by`, the decision date - a bar
+    republished later with a different close is a different vintage, as everywhere here.
+    """
+    if not dates:
+        return {}
+    windows = [
+        PriceHistory.date.between(
+            on - dt.timedelta(days=_PRICE_LOOKBACK_DAYS),
+            on + dt.timedelta(days=_REACTION_LOOKAHEAD_DAYS),
+        )
+        for on in dates
+    ]
+    rows = session.execute(
+        select(
+            PriceHistory.date,
+            PriceHistory.close_raw,
+            PriceHistory.known_as_of,
+            PriceHistory.source_document_id,
+        )
+        .where(PriceHistory.security_id == security_id)
+        .where(PriceHistory.known_as_of <= known_by)
+        .where(or_(*windows))
+        .order_by(PriceHistory.date, PriceHistory.known_as_of)
+    ).all()
+    newest: dict[dt.date, PriceRef] = {}
+    for r in rows:  # ordered by vintage, so the last write per date is the newest known
+        bar = PriceRef(*r)
+        newest[bar.date] = bar
+    trading_days = sorted(newest)
+    result: dict[dt.date, PriceReaction] = {}
+    for on in dates:
+        before = [d for d in trading_days if d < on]
+        on_or_after = [d for d in trading_days if d >= on]
+        if not before or not on_or_after or on_or_after[0] != on:
+            continue  # no bar on the day itself: a report on a holiday is left alone
+        after = [d for d in trading_days if d > on]
+        if len(after) < 5:
+            continue
+        window = [newest[d] for d in [before[-1], on, *after[:5]]]
+        if any(
+            not (
+                1 / _IMPLAUSIBLE_DAY_RATIO
+                <= later.close_raw / earlier.close_raw
+                <= _IMPLAUSIBLE_DAY_RATIO
+            )
+            for earlier, later in zip(window, window[1:], strict=False)
+        ):
+            continue  # a split or similar inside the window: as-traded closes would lie
+        b, d0, d1, d5 = window[0], window[1], window[2], window[6]
+        result[on] = PriceReaction(
+            before=b,
+            on_day=d0,
+            after_1=d1,
+            after_5=d5,
+            return_1d=(d1.close_raw / b.close_raw - 1).quantize(Decimal("0.0001")),
+            return_5d=(d5.close_raw / b.close_raw - 1).quantize(Decimal("0.0001")),
+        )
     return result
 
 
