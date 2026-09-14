@@ -346,6 +346,36 @@ class SharesUsed(BaseModel):
     source_document_id: int
 
 
+class BackdropReading(BaseModel):
+    """One macro reading, as known on the decision date, and the series it came from."""
+
+    code: str
+    name: str
+    unit: str = Field(description="'percent' for every reading served here")
+    value: Decimal
+    as_of_date: date
+    known_as_of: date
+
+
+class Backdrop(BaseModel):
+    """What a yield is read against: the sovereign rate a saver could take instead, and the
+    inflation that erodes both. Percent, as the series carry them; the ratios beside them
+    are fractions. Nothing here is a verdict - the reader makes the comparison."""
+
+    risk_free: BackdropReading | None = None
+    inflation: BackdropReading | None = Field(
+        default=None, description="Year-on-year, in percent; see inflation_basis"
+    )
+    inflation_basis: str = Field(
+        description="How the year-on-year rate was obtained: a published rate, or an index "
+        "against its reading twelve months earlier"
+    )
+    real_risk_free: Decimal | None = Field(
+        default=None,
+        description="risk_free minus inflation, percent - the everyday approximation, not Fisher",
+    )
+
+
 @register_public_type
 class CompanyRatios(BaseModel):
     """Ratios for one period, with the price and share count the multiples used.
@@ -374,6 +404,11 @@ class CompanyRatios(BaseModel):
     )
     inputs: dict[str, Decimal | None] = Field(description="The line items the ratios used")
     ratios: dict[str, Decimal | None]
+    backdrop: Backdrop | None = Field(
+        default=None,
+        description="The risk-free rate and inflation known on the date, for the company's "
+        "currency; null when no series backs that currency",
+    )
 
 
 class RatioHistoryPoint(BaseModel):

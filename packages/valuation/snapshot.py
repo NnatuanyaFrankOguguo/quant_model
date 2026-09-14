@@ -24,6 +24,7 @@ from packages.common.models import (
     DataSource,
     Exchange,
     Filing,
+    MacroSeries,
     PriceHistory,
     Security,
     SecurityIdentifier,
@@ -32,6 +33,7 @@ from packages.common.models import (
     StatementLineItem,
 )
 from packages.common.pit import LineItemAsKnown, line_items_as_known_on
+from packages.ingestion import macro
 from packages.normalize.chart import SOURCE_SYSTEM_BY_METHOD, ChartVersion, load_chart
 from packages.normalize.periods import next_expected_filing
 from packages.valuation.ratios import compute_ratios
@@ -44,6 +46,7 @@ __all__ = [
     "RatioSnapshot",
     "SecurityRef",
     "SharesRef",
+    "backdrop_for",
     "attribution_for",
     "find_security",
     "latest_price",
@@ -162,6 +165,44 @@ class RatioPoint:
     price: PriceRef | None
     shares: SharesRef | None
     ratios: dict[str, Decimal | None]
+
+
+@dataclass(frozen=True)
+class MacroRef:
+    """One macro reading as known on the decision date, with the series it came from."""
+
+    code: str
+    name: str
+    unit: str
+    value: Decimal
+    as_of_date: dt.date
+    known_as_of: dt.date
+
+
+@dataclass(frozen=True)
+class Backdrop:
+    """The risk-free rate and inflation a yield is read against (`docs/05` §11, Q16).
+
+    Values are in percent, as the series carry them. `real_risk_free` is the nominal rate
+    less year-on-year inflation - the everyday approximation, named as such, not the exact
+    Fisher relation. None wherever a series has no reading known on the date.
+    """
+
+    risk_free: MacroRef | None
+    inflation: MacroRef | None
+    inflation_basis: str
+    real_risk_free: Decimal | None
+
+
+#: Which series stand behind a company's yields, by its reporting currency: the sovereign
+#: rate a saver could take instead, and the inflation that erodes both. Nigeria has no
+#: T-bill series loaded yet, so the policy rate stands in and the series name says so.
+BACKDROP_BY_CURRENCY: dict[str, tuple[str, str]] = {
+    "USD": ("US_10Y_TREASURY", "US_CPI_INDEX"),
+    "NGN": ("NG_MPR", "NG_CPI_YOY_CBN"),
+}
+_INDEX_BASIS = "index: value / value twelve months earlier - 1, in percent"
+_SERIES_BASIS = "series: published year-on-year rate"
 
 
 @dataclass(frozen=True)
@@ -625,6 +666,82 @@ def _share_counts_on(
             max(eligible, key=lambda c: (c.as_of_date, c.known_as_of)) if eligible else None
         )
     return result
+
+
+def backdrop_for(session: Session, *, currency: str, decision_date: dt.date) -> Backdrop | None:
+    """The risk-free rate and inflation known on the date, for a company in `currency`.
+
+    Every reading is the newest observation dated on or before the decision date at the
+    newest vintage known by it - the same point-in-time rule the macro routes apply. An
+    index series (US CPI) becomes a year-on-year rate from the reading twelve months
+    earlier, itself as known on the date; a published year-on-year series is used as is.
+    """
+    codes = BACKDROP_BY_CURRENCY.get(currency)
+    if codes is None:
+        return None
+    rate_code, inflation_code = codes
+    risk_free = _macro_reading(session, rate_code, on=decision_date)
+    inflation = _macro_reading(session, inflation_code, on=decision_date)
+    basis = _SERIES_BASIS
+    if inflation is not None and inflation.unit == "index":
+        basis = _INDEX_BASIS
+        a_year_before = _macro_reading(
+            session, inflation_code, on=_a_year_before(inflation.as_of_date), known_by=decision_date
+        )
+        if a_year_before is None or a_year_before.value <= 0:
+            inflation = None
+        elif a_year_before.as_of_date != _a_year_before(inflation.as_of_date):
+            inflation = None  # the month a year earlier is missing: do not stretch the window
+        else:
+            yoy = ((inflation.value / a_year_before.value) - 1) * 100
+            inflation = MacroRef(
+                code=inflation.code,
+                name=f"{inflation.name}, year-on-year",
+                unit="percent",
+                value=yoy.quantize(Decimal("0.01")),
+                as_of_date=inflation.as_of_date,
+                known_as_of=max(inflation.known_as_of, a_year_before.known_as_of),
+            )
+    real = (
+        (risk_free.value - inflation.value).quantize(Decimal("0.01"))
+        if risk_free is not None and inflation is not None
+        else None
+    )
+    return Backdrop(
+        risk_free=risk_free, inflation=inflation, inflation_basis=basis, real_risk_free=real
+    )
+
+
+def _a_year_before(day: dt.date) -> dt.date:
+    try:
+        return day.replace(year=day.year - 1)
+    except ValueError:  # 29 February
+        return day.replace(year=day.year - 1, day=28)
+
+
+def _macro_reading(
+    session: Session, code: str, *, on: dt.date, known_by: dt.date | None = None
+) -> MacroRef | None:
+    """The newest observation dated on or before `on`, as known by `known_by` (default `on`)."""
+    series = session.execute(
+        select(MacroSeries).where(MacroSeries.code == code)
+    ).scalar_one_or_none()
+    if series is None:
+        return None
+    points = macro.observations(session, code, end=on, as_known_on=known_by or on, limit=1)
+    if not points:
+        return None
+    point = points[-1]
+    if point.value is None:
+        return None
+    return MacroRef(
+        code=code,
+        name=series.name,
+        unit=series.unit,
+        value=point.value,
+        as_of_date=point.as_of_date,
+        known_as_of=point.known_as_of,
+    )
 
 
 def ratios_for(

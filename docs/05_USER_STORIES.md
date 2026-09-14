@@ -1680,7 +1680,7 @@ owed by P3/P4.
 | # | The question, as asked | Owed by | Status 2026-09-14 |
 |---|---|---|---|
 | Q15 | What are inflation, the policy rate and the exchange rate doing, and since when? | US-010 · US-011 | ✅ 10 of 13 series live, each with its as-of date and when it was published |
-| Q16 | What is the real T-bill yield right now against this stock's dividend yield? | — | 🟡 Both halves exist for US (P1 series, P2 `dividend_yield`); nothing puts them side by side. **Gap**. Nigerian side ⬜ P3 |
+| Q16 | What is the real T-bill yield right now against this stock's dividend yield? | US-010 · US-020 | ✅ **2026-09-14.** `/ratios` carries a `backdrop`: the sovereign rate and year-on-year inflation for the company's currency, each as known on the decision date, and the real rate (nominal less inflation, named as the approximation it is), beside the dividend and earnings yields. US: 10-year Treasury and CPI (the index turned into a rate from exactly twelve months earlier, never stretched). Nigeria: the MPR stands in until a T-bill series is loaded, and the series name says so |
 | Q17 | Is the NGX as a whole expensive? | US-030 · US-040 | ⬜ P3/P4 universe first; a market aggregate is then a **gap** — no story |
 | Q18 | What did people who bought at this level get, historically — net of costs? | US-070 · US-071 · US-073 | ⬜ P7 |
 | Q19 | If the naira devalues 20%, who wins and who loses among my companies? | US-060 · US-044 | ⬜ P6, on P4's FX-loss line |
@@ -1723,7 +1723,6 @@ phase schedules it, and until then it is tracked here.
 | Q3 debt maturities | A `debt_maturity` schedule in the chart (v1 freeze, P3) | P3 (TG7 freeze) |
 | Q5 cheap against its peers | A peer set per industry (SIC is stored); the same history route across a set | P6 (indicators) |
 | Q6 price reaction to results | Return from the filing date to +1/+5 days, per filing | P6 (indicators) |
-| Q16 real yield vs dividend yield | One route joining a P1 series to a P2/P3 ratio | P6 (indicators) |
 | Q17 is the market expensive | Universe-level P/E and breadth once P4 fills the NGX | P6 (indicators) |
 | Q31 share a dated view | A read-only link to one company as known on one date (export itself is ADR-0010, P12) | P9 (web app) |
 
@@ -1735,5 +1734,5 @@ link to the filing on EDGAR)~~, ~~**Q23** (one sentence beside the point-in-time
 ~~**Q22/Q12** (an overdue flag on companies, as macro already has)~~,
 ~~**Q10** (show a cell's previous vintage when one exists)~~ — all five done 2026-09-14. The
 next five, by the same rule: ~~**Q2** (year-on-year change, server-side)~~, ~~**Q5** (ratios at
-every past filing date)~~ done 2026-09-14; **Q8/Q1** wait for P4, so **Q16** (real T-bill yield
-beside dividend yield), **Q6** (return from the filing date), **Q31** (a dated shareable view).
+every past filing date)~~, ~~**Q16** (real T-bill yield beside dividend yield)~~ done 2026-09-14;
+**Q8/Q1** wait for P4, so **Q6** (return from the filing date), **Q31** (a dated shareable view).

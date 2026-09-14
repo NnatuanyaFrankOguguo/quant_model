@@ -346,6 +346,25 @@ def main() -> None:
         )
     else:
         st.warning("No share count was known on this date, so per-share figures are blank.")
+    backdrop = ratios.get("backdrop")
+    if backdrop and (backdrop["risk_free"] or backdrop["inflation"]):
+        rf, infl = backdrop["risk_free"], backdrop["inflation"]
+        parts = []
+        if rf:
+            parts.append(f"{rf['name']} **{Decimal(rf['value']):.2f}%** ({rf['as_of_date']})")
+        if infl:
+            parts.append(
+                f"inflation **{Decimal(infl['value']):.2f}%** year on year ({infl['as_of_date']})"
+            )
+        if backdrop["real_risk_free"] is not None:
+            parts.append(f"real rate **{Decimal(backdrop['real_risk_free']):.2f}%**")
+        yields = ratios["ratios"]
+        parts.append(
+            "against this stock's dividend yield "
+            f"{_fraction(yields.get('dividend_yield'), percent=True)} and earnings yield "
+            f"{_fraction(yields.get('earnings_yield'), percent=True)}"
+        )
+        st.write("Backdrop, as known on the same date: " + "  ·  ".join(parts))
     ratio_columns = st.columns(len(RATIO_GROUPS))
     for column, (group, keys) in zip(ratio_columns, RATIO_GROUPS.items(), strict=True):
         column.markdown(f"**{group}**")

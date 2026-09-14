@@ -26,6 +26,8 @@ from services.api.deps import get_mode
 from services.api.middleware.assert_response import PublicAPIRoute
 from services.api.routers import API_V1
 from services.api.schemas import (
+    Backdrop,
+    BackdropReading,
     CompanyDcf,
     CompanyInfo,
     CompanyList,
@@ -289,6 +291,9 @@ async def company_ratios(
             raise HTTPException(status_code=404, detail="not_found")
         attribution = snapshot.attribution_for(session, EDGAR_SOURCE)
         price_attribution = snapshot.attribution_for(session, PRICE_SOURCE)
+        backdrop = snapshot.backdrop_for(
+            session, currency=snap.period.currency, decision_date=decision_date
+        )
     price = (
         PriceUsed(
             date=snap.price.date,
@@ -328,6 +333,31 @@ async def company_ratios(
         shares=shares,
         inputs=snap.inputs,
         ratios=snap.ratios,
+        backdrop=_backdrop(backdrop),
+    )
+
+
+def _reading(ref: snapshot.MacroRef | None) -> BackdropReading | None:
+    if ref is None:
+        return None
+    return BackdropReading(
+        code=ref.code,
+        name=ref.name,
+        unit=ref.unit,
+        value=ref.value,
+        as_of_date=ref.as_of_date,
+        known_as_of=ref.known_as_of,
+    )
+
+
+def _backdrop(b: snapshot.Backdrop | None) -> Backdrop | None:
+    if b is None:
+        return None
+    return Backdrop(
+        risk_free=_reading(b.risk_free),
+        inflation=_reading(b.inflation),
+        inflation_basis=b.inflation_basis,
+        real_risk_free=b.real_risk_free,
     )
 
 

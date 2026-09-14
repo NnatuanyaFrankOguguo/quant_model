@@ -205,6 +205,13 @@ def test_ratios_name_the_price_and_share_count_they_used(client, apple_loaded) -
     assert body["ratios"]["interest_coverage"] is None
     assert Decimal(body["ratios"]["gross_margin"]).quantize(Decimal("0.0001")) == Decimal("0.4691")
     assert Decimal(body["inputs"]["revenue"]) == Decimal("416161000000")
+    # docs/05 §11 Q16: the backdrop block is present for a USD company. The test database
+    # holds no macro observations, so every reading is null and says so - never a default.
+    backdrop = body["backdrop"]
+    assert backdrop is not None
+    assert backdrop["risk_free"] is None and backdrop["inflation"] is None
+    assert backdrop["real_risk_free"] is None
+    assert backdrop["inflation_basis"]
 
 
 @pytest.mark.invariant
