@@ -31,6 +31,7 @@ from packages.compliance.mode import Mode
 from services.api.schemas import (
     CompanyDcf,
     CompanyDividends,
+    CompanyFilings,
     CompanyList,
     CompanyRatioHistory,
     CompanyRatios,
@@ -40,6 +41,7 @@ from services.api.schemas import (
     MacroSeriesList,
     PersonalPing,
     PublicPing,
+    RecentFilings,
 )
 
 __all__ = ["MANIFEST", "RouteClass", "RouteSpec", "registered_routes"]
@@ -88,6 +90,10 @@ MANIFEST: dict[str, RouteSpec] = {
     "GET /v1/public/companies/{ticker}/dividends": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyDividends
     ),
+    "GET /v1/public/companies/{ticker}/filings": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyFilings
+    ),
+    "GET /v1/public/filings/recent": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, RecentFilings),
     "GET /v1/public/companies/{ticker}/dcf": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyDcf
     ),

@@ -327,6 +327,37 @@ def test_dividends_say_none_held_rather_than_guessing(client, apple_loaded) -> N
     assert body["dividends"] == [] and body["years"] == [] and body["cuts"] == []
 
 
+def test_filings_are_listed_newest_first_with_a_door_and_a_window(client, apple_loaded) -> None:
+    """docs/05 §11 Q9. What is held, newest first, each with its folder on sec.gov; and the
+    universe-wide window: what was filed since a date, as known on a date."""
+    body = client.get("/v1/public/companies/AAPL/filings").json()
+    filings = body["filings"]
+    assert filings, "the fixture holds Apple's filings"
+    dates = [f["filing_date"] for f in filings]
+    assert dates == sorted(dates, reverse=True), "newest first"
+    newest = filings[0]
+    assert newest["ticker"] == "AAPL" and newest["filing_type"] in ("10-K", "10-Q")
+    assert newest["filing_url"].startswith("https://www.sec.gov/Archives/edgar/data/320193/")
+    assert newest["known_as_of"] == newest["filing_date"]
+    assert all(f["statement_versions"] >= 0 for f in filings)
+    fy2025 = next(f for f in filings if f["accession_no"] == "0000320193-25-000079")
+    assert fy2025["filing_type"] == "10-K" and fy2025["statement_versions"] > 0
+
+    # The week's window: nothing in the last seven days of the fixture's future...
+    week = client.get("/v1/public/filings/recent").json()
+    assert week["filings"] == [] or all(f["ticker"] == "AAPL" for f in week["filings"])
+    # ...and, since the day before the FY2025 10-K, that filing and everything after it.
+    since = client.get("/v1/public/filings/recent", params={"since": "2025-10-30"}).json()
+    assert since["since"] == "2025-10-30"
+    assert "0000320193-25-000079" in {f["accession_no"] for f in since["filings"]}
+    assert all(f["filing_date"] >= "2025-10-30" for f in since["filings"])
+    # As known on the day before it was filed, the 10-K is not there.
+    before = client.get(
+        "/v1/public/filings/recent", params={"since": "2025-10-01", "as_known_on": "2025-10-30"}
+    ).json()
+    assert "0000320193-25-000079" not in {f["accession_no"] for f in before["filings"]}
+
+
 def test_no_company_response_field_is_advice_shaped(client, apple_loaded) -> None:
     for path, params in (
         ("/v1/public/companies", {}),
@@ -334,6 +365,8 @@ def test_no_company_response_field_is_advice_shaped(client, apple_loaded) -> Non
         ("/v1/public/companies/AAPL/ratios", {}),
         ("/v1/public/companies/AAPL/ratios/history", {}),
         ("/v1/public/companies/AAPL/dividends", {}),
+        ("/v1/public/companies/AAPL/filings", {}),
+        ("/v1/public/filings/recent", {"since": "2020-01-01"}),
         (
             "/v1/public/companies/AAPL/dcf",
             {"growth": "0.05", "discount_rate": "0.09", "terminal_growth": "0.02"},

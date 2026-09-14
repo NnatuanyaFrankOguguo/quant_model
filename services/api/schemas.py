@@ -510,6 +510,43 @@ class CompanyDividends(BaseModel):
     cuts: list[DividendYear] = Field(description="Complete years whose total fell")
 
 
+class FilingSeen(BaseModel):
+    """One filing held, with the door into the SEC archive."""
+
+    ticker: str
+    legal_name: str
+    filing_type: str = Field(description="'10-K', '10-Q', ...")
+    filing_date: date
+    period_end: date = Field(description="The newest period the filing reported")
+    accession_no: str | None = None
+    filing_url: str | None = Field(default=None, description="The filing's folder on sec.gov")
+    known_as_of: date
+    statement_versions: int = Field(
+        description="Statements this filing produced; 0 when it reported nothing new"
+    )
+
+
+@register_public_type
+class CompanyFilings(BaseModel):
+    """One company's filings, newest first, as known on the date."""
+
+    ticker: str
+    legal_name: str
+    as_known_on: date
+    attribution: str
+    filings: list[FilingSeen]
+
+
+@register_public_type
+class RecentFilings(BaseModel):
+    """Every filing across the companies held since a date - what is new this week."""
+
+    since: date
+    as_known_on: date
+    attribution: str
+    filings: list[FilingSeen] = Field(description="Newest first")
+
+
 @register_public_type
 class CompanyRatioHistory(BaseModel):
     """Ratios at every past publication date, so today's multiple has its own context.

@@ -1668,7 +1668,7 @@ owed by P3/P4.
 
 | # | The question, as asked | Owed by | Status 2026-09-14 |
 |---|---|---|---|
-| Q9 | Did anything new get filed this week? | US-050 · US-102 | 🟡 Every filing is dated in `filings`; no feed. ⬜ P5 for the brief, P10 for the alert |
+| Q9 | Did anything new get filed this week? | US-050 · US-102 | 🟡 The looking half: ✅ **2026-09-14** — `/filings/recent` lists every filing across the companies held since a date (a week by default), as known on a date, each a door into EDGAR, and the page opens with it; `/companies/{t}/filings` is one company's, newest first. The telling half — a brief that arrives, an alert per holding — ⬜ P5, P10 |
 | Q10 | Did the numbers I decided on get restated since? | US-024 · US-045 | ✅ **2026-09-14.** Every restated figure in view carries the value it replaced and the date that value was public; the page marks the cell ↻ and lists them. Set "as known on" to your decision date and the originals return everywhere — Apple as known 2009-12-31 shows FY2009 revenue 36,537m; a month later 42,905m ↻ with 29 figures listed under the 2010-01-25 filing |
 | Q11 | What's in the news, and is it noise? | US-052 | ⬜ P5 |
 | Q12 | When is the next result due, and are they late? | US-013 (freshness) | ✅ **2026-09-14**, US. `/companies` carries the next report's form and the last day the SEC allows for it (the longest deadline, so a company is called overdue only when every filer category would be), and `filing_overdue` when that day has passed and the report is not held. First run flagged Coca-Cola: its Q2 10-Q is not in our copy. Nigeria: NGX deadlines, P3 |

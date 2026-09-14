@@ -30,6 +30,7 @@ from services.api.schemas import (
     BackdropReading,
     CompanyDcf,
     CompanyDividends,
+    CompanyFilings,
     CompanyInfo,
     CompanyList,
     CompanyRatioHistory,
@@ -39,6 +40,7 @@ from services.api.schemas import (
     DividendPaid,
     DividendYear,
     Figure,
+    FilingSeen,
     MacroObservationPoint,
     MacroObservations,
     MacroSeriesInfo,
@@ -48,6 +50,7 @@ from services.api.schemas import (
     PriceUsed,
     PublicPing,
     RatioHistoryPoint,
+    RecentFilings,
     SharesUsed,
     StatementPeriod,
 )
@@ -364,6 +367,74 @@ def _backdrop(b: snapshot.Backdrop | None) -> Backdrop | None:
         inflation=_reading(b.inflation),
         inflation_basis=b.inflation_basis,
         real_risk_free=b.real_risk_free,
+    )
+
+
+#: A week, for "did anything new get filed this week?" - the default window of /filings/recent.
+RECENT_FILINGS_DAYS = 7
+
+
+def _filing_seen(f: snapshot.FilingSeen) -> FilingSeen:
+    return FilingSeen(
+        ticker=f.ticker,
+        legal_name=f.legal_name,
+        filing_type=f.filing_type,
+        filing_date=f.filing_date,
+        period_end=f.period_end,
+        accession_no=f.accession_no,
+        filing_url=filing_index_url(f.cik, f.accession_no),
+        known_as_of=f.known_as_of,
+        statement_versions=f.statement_versions,
+    )
+
+
+@router.get("/filings/recent", response_model=RecentFilings)
+async def filings_recent(
+    since: dt.date | None = Query(
+        default=None, description="Filings filed on or after this date; default: the last 7 days."
+    ),
+    as_known_on: dt.date | None = Query(
+        default=None, description="Filings known on this date; nothing after it."
+    ),
+) -> RecentFilings:
+    """Every filing across the companies held since a date, newest first (docs/05 §11, Q9)."""
+    decision_date = as_known_on or utctoday()
+    start = since or decision_date - dt.timedelta(days=RECENT_FILINGS_DAYS)
+    with get_session() as session:
+        rows = snapshot.recent_filings(session, since=start, decision_date=decision_date)
+        attribution = snapshot.attribution_for(session, EDGAR_SOURCE)
+    return RecentFilings(
+        since=start,
+        as_known_on=decision_date,
+        attribution=attribution,
+        filings=[_filing_seen(f) for f in rows],
+    )
+
+
+@router.get("/companies/{ticker}/filings", response_model=CompanyFilings)
+async def company_filings(
+    ticker: str,
+    as_known_on: dt.date | None = Query(
+        default=None, description="Filings known on this date; nothing after it."
+    ),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> CompanyFilings:
+    """One company's filings held, newest first, each with its folder on sec.gov."""
+    decision_date = as_known_on or utctoday()
+    with get_session() as session:
+        ref = snapshot.find_security(session, ticker)
+        if ref is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        rows = snapshot.filings_for(
+            session, company_id=ref.company_id, decision_date=decision_date, limit=limit
+        )
+        attribution = snapshot.attribution_for(session, EDGAR_SOURCE)
+    return CompanyFilings(
+        ticker=ref.ticker,
+        legal_name=ref.legal_name,
+        as_known_on=decision_date,
+        attribution=attribution,
+        filings=[_filing_seen(f) for f in rows],
     )
 
 

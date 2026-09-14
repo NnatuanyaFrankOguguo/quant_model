@@ -140,6 +140,16 @@ def fetch_dividends(ticker: str, as_known_on: str) -> dict[str, Any]:
     return _get(f"/v1/public/companies/{ticker}/dividends", {"as_known_on": as_known_on})
 
 
+@st.cache_data(ttl=60)
+def fetch_filings(ticker: str, as_known_on: str) -> dict[str, Any]:
+    return _get(f"/v1/public/companies/{ticker}/filings", {"as_known_on": as_known_on, "limit": 12})
+
+
+@st.cache_data(ttl=60)
+def fetch_recent_filings(as_known_on: str) -> dict[str, Any]:
+    return _get("/v1/public/filings/recent", {"as_known_on": as_known_on})
+
+
 def fetch_dcf(ticker: str, params: dict[str, Any]) -> dict[str, Any]:
     return _get(f"/v1/public/companies/{ticker}/dcf", params)
 
@@ -300,6 +310,41 @@ def main() -> None:
         )
 
     try:
+        recent = fetch_recent_filings(as_known_on.isoformat())
+        recent_rows = recent["filings"]
+        with st.expander(
+            f"Filed across all {len(companies)} companies in the 7 days to {as_known_on}: "
+            f"{len(recent_rows)}",
+            expanded=False,
+        ):
+            if recent_rows:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "ticker": f["ticker"],
+                                "form": f["filing_type"],
+                                "filed": f["filing_date"],
+                                "period": f["period_end"],
+                                "statements": f["statement_versions"],
+                                "filing": f["filing_url"],
+                            }
+                            for f in recent_rows
+                        ]
+                    ).set_index("ticker"),
+                    column_config={
+                        "filing": st.column_config.LinkColumn(
+                            "filing", display_text="open on EDGAR"
+                        )
+                    },
+                )
+            else:
+                st.caption("Nothing new was filed in the window.")
+    except httpx.HTTPError as exc:
+        st.error(f"Could not load recent filings: {type(exc).__name__}")
+        return
+
+    try:
         statements = fetch_statements(ticker, as_known_on.isoformat(), period_type)
     except httpx.HTTPError as exc:
         st.error(f"Could not load {ticker}: {type(exc).__name__}")
@@ -354,6 +399,30 @@ def main() -> None:
                 "original everywhere."
             )
             st.table(pd.DataFrame(restated).set_index(["period", "line item"]))
+    try:
+        held = fetch_filings(ticker, as_known_on.isoformat())["filings"]
+    except httpx.HTTPError as exc:
+        st.error(f"Could not load the filings: {type(exc).__name__}")
+        return
+    with st.expander(f"Filings held for {ticker} — newest {len(held)} of those known"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "form": f["filing_type"],
+                        "filed": f["filing_date"],
+                        "period": f["period_end"],
+                        "statements": f["statement_versions"],
+                        "accession": f["accession_no"],
+                        "filing": f["filing_url"],
+                    }
+                    for f in held
+                ]
+            ).set_index("filed"),
+            column_config={
+                "filing": st.column_config.LinkColumn("filing", display_text="open on EDGAR")
+            },
+        )
     with st.expander("Provenance — the filing behind each column"):
         st.dataframe(
             provenance,

@@ -14,10 +14,11 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
-from sqlalchemy import and_, func, or_, select, tuple_
+from sqlalchemy import Select, and_, func, or_, select, tuple_
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.selectable import Subquery
 
 from packages.common.adjust import cumulative_factor, factors_known
 from packages.common.models import (
@@ -50,6 +51,8 @@ __all__ = [
     "SharesRef",
     "backdrop_for",
     "dividends_for",
+    "filings_for",
+    "recent_filings",
     "attribution_for",
     "find_security",
     "latest_price",
@@ -271,6 +274,21 @@ class DividendHistory:
 
 
 @dataclass(frozen=True)
+class FilingSeen:
+    """One filing held, as known on the decision date (`docs/05` §11, Q9)."""
+
+    ticker: str
+    legal_name: str
+    cik: str | None
+    filing_type: str
+    filing_date: dt.date
+    period_end: dt.date
+    accession_no: str | None
+    known_as_of: dt.date
+    statement_versions: int  # statements this filing produced - 0 for one that reported nothing new
+
+
+@dataclass(frozen=True)
 class RatioSnapshot:
     decision_date: dt.date
     period: PeriodStatement
@@ -310,6 +328,68 @@ def find_security(session: Session, ticker: str) -> SecurityRef | None:
         .where(SecurityIdentifier.valid_to.is_(None))
     ).first()
     return SecurityRef(*row) if row else None
+
+
+def _primary_ticker_ids() -> Subquery:
+    """The lowest current ticker identifier per security: the primary ticker, as in
+    `list_companies` (EDGAR lists notes and preferreds after the common stock)."""
+    return (
+        select(func.min(SecurityIdentifier.id).label("id"))
+        .where(SecurityIdentifier.id_type == "ticker")
+        .where(SecurityIdentifier.valid_to.is_(None))
+        .group_by(SecurityIdentifier.security_id)
+        .subquery()
+    )
+
+
+def _filings_query(decision_date: dt.date) -> Select[tuple[Any, ...]]:
+    versions = (
+        select(Statement.filing_id, func.count().label("versions"))
+        .group_by(Statement.filing_id)
+        .subquery()
+    )
+    primary = _primary_ticker_ids()
+    return (
+        select(
+            SecurityIdentifier.id_value,
+            Company.legal_name,
+            Company.cik,
+            Filing.filing_type,
+            Filing.filing_date,
+            Filing.period_end,
+            Filing.accession_no,
+            Filing.known_as_of,
+            func.coalesce(versions.c.versions, 0),
+        )
+        .join(Company, Company.id == Filing.company_id)
+        .join(Security, Security.company_id == Company.id)
+        .join(SecurityIdentifier, SecurityIdentifier.security_id == Security.id)
+        .outerjoin(versions, versions.c.filing_id == Filing.id)
+        .where(SecurityIdentifier.id.in_(select(primary.c.id)))
+        .where(Filing.known_as_of <= decision_date)
+        .order_by(Filing.filing_date.desc(), Filing.id.desc())
+    )
+
+
+def filings_for(
+    session: Session, *, company_id: int, decision_date: dt.date, limit: int = 50
+) -> list[FilingSeen]:
+    """One company's filings known on the date, newest first."""
+    rows = session.execute(
+        _filings_query(decision_date).where(Filing.company_id == company_id).limit(limit)
+    ).all()
+    return [FilingSeen(*row) for row in rows]
+
+
+def recent_filings(
+    session: Session, *, since: dt.date, decision_date: dt.date, limit: int = 200
+) -> list[FilingSeen]:
+    """Every filing across the companies held, filed on or after `since` and known on the
+    decision date, newest first - "did anything new get filed this week?"."""
+    rows = session.execute(
+        _filings_query(decision_date).where(Filing.filing_date >= since).limit(limit)
+    ).all()
+    return [FilingSeen(*row) for row in rows]
 
 
 def list_companies(session: Session, *, today: dt.date) -> list[CompanySummary]:
