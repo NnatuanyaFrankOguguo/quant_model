@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -30,9 +31,11 @@ from packages.common.models import (
     Statement,
 )
 from packages.common.pit import LineItemAsKnown, line_items_as_known_on
+from packages.normalize.chart import SOURCE_SYSTEM_BY_METHOD, ChartVersion, load_chart
 from packages.valuation.ratios import compute_ratios
 
 __all__ = [
+    "AbsentBecause",
     "CompanySummary",
     "PeriodStatement",
     "PriceRef",
@@ -73,12 +76,19 @@ class CompanySummary:
     latest_filing_date: dt.date | None
 
 
+AbsentBecause = Literal["not_in_filing", "no_mapping"]
+
+
 @dataclass(frozen=True)
 class LineItem:
     canonical_key: str
     value: Decimal | None
     known_as_of: dt.date
     version: int
+    #: Why `value` is None, when it is: 'not_in_filing' (the chart maps labels for this
+    #: key and the filing carried none of them) or 'no_mapping' (the chart maps nothing
+    #: for this key from this source, so no filing could have filled it). None otherwise.
+    absent_because: AbsentBecause | None = None
 
 
 @dataclass(frozen=True)
@@ -233,6 +243,7 @@ def statements_as_known_on(
 
     statement_ids = {item.statement_id for group in grouped.values() for item in group}
     provenance = _filing_provenance(session, statement_ids)
+    charts: dict[tuple[str, str], ChartVersion] = {}
 
     periods: list[PeriodStatement] = []
     for (ptype, period_end), group in grouped.items():
@@ -247,7 +258,13 @@ def statements_as_known_on(
                 currency=newest.currency,
                 known_as_of=newest.known_as_of,
                 items={
-                    i.canonical_key: LineItem(i.canonical_key, i.value, i.known_as_of, i.version)
+                    i.canonical_key: LineItem(
+                        i.canonical_key,
+                        i.value,
+                        i.known_as_of,
+                        i.version,
+                        absent_because=_absent_because(session, i, charts),
+                    )
                     for i in group
                 },
                 filing_type=filing[0] if filing else None,
@@ -258,6 +275,30 @@ def statements_as_known_on(
         )
     periods.sort(key=lambda p: (p.period_end, p.period_type), reverse=True)
     return periods
+
+
+def _absent_because(
+    session: Session, item: LineItemAsKnown, charts: dict[tuple[str, str], ChartVersion]
+) -> AbsentBecause | None:
+    """Which kind of blank a NULL figure is. Two different answers to "why is this empty?".
+
+    'not_in_filing': the chart maps source labels for the key and the filing carried none
+    of them - the company did not report it (Apple's interest expense since FY2023).
+    'no_mapping': the chart version maps nothing for the key from this source, so no filing
+    could have filled it (`fx_loss_net` under chart v0.1 from XBRL). The first is the
+    company's silence; the second is ours, and the screen must not blame the company for it.
+    """
+    if item.value is not None:
+        return None
+    source_system = SOURCE_SYSTEM_BY_METHOD.get(item.extraction_method)
+    if source_system is None:
+        return "not_in_filing"
+    chart_key = (item.chart_version, source_system)
+    if chart_key not in charts:
+        charts[chart_key] = load_chart(
+            session, version=item.chart_version, source_system=source_system
+        )
+    return "not_in_filing" if charts[chart_key].mappings.get(item.canonical_key) else "no_mapping"
 
 
 def _filing_provenance(

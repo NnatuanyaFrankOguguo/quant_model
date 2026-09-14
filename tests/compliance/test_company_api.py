@@ -131,6 +131,30 @@ def test_statements_carry_provenance_and_the_filing_date(client, apple_loaded) -
 
 
 @pytest.mark.invariant
+def test_a_blank_says_whose_silence_it_is(client, apple_loaded) -> None:
+    """docs/05 §11 Q21. Two blanks, two different answers to "why is this empty?".
+
+    `interest_expense`: chart v0.1 maps `InterestExpense`, and Apple's FY2025 10-K carries
+    no such fact - the company's silence. `fx_loss_net`: chart v0.1 maps no XBRL tag at all,
+    so no filing could have filled it - our gap, and the screen must not blame Apple for it.
+    A figure that has a value carries no reason.
+    """
+    response = client.get("/v1/public/companies/AAPL/statements", params={"period_type": "FY"})
+    assert response.status_code == 200
+    fy2025 = next(p for p in response.json()["periods"] if p["period_label"] == "FY2025")
+    items = fy2025["items"]
+    assert items["revenue"]["value"] is not None and items["revenue"]["absent_because"] is None
+    assert items["interest_expense"]["value"] is None
+    assert items["interest_expense"]["absent_because"] == "not_in_filing"
+    assert items["fx_loss_net"]["value"] is None
+    assert items["fx_loss_net"]["absent_because"] == "no_mapping"
+    # Every null names its kind; every value names none.
+    for period in response.json()["periods"]:
+        for key, figure in period["items"].items():
+            assert (figure["value"] is None) == (figure["absent_because"] is not None), key
+
+
+@pytest.mark.invariant
 def test_statements_respect_the_point_in_time_date(client, apple_loaded) -> None:
     before = client.get(
         "/v1/public/companies/AAPL/statements",

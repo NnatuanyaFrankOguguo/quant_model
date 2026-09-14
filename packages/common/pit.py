@@ -44,6 +44,8 @@ class LineItemAsKnown:
     version: int
     statement_id: int
     source_document_id: int
+    chart_version: str
+    extraction_method: str
 
 
 def line_items_as_known_on(
@@ -78,6 +80,8 @@ def line_items_as_known_on(
             StatementLineItem.version,
             StatementLineItem.statement_id,
             StatementLineItem.source_document_id,
+            StatementLineItem.chart_version,
+            StatementLineItem.extraction_method,
         )
         .join(Statement, Statement.id == StatementLineItem.statement_id)
         .where(StatementLineItem.security_id == security_id)

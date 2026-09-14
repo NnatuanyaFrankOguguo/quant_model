@@ -62,7 +62,7 @@ from packages.common.models import (
 )
 from packages.common.timez import utcnow
 from packages.ingestion.base import Connector, DataSourceLicence, RawResponse, store_raw
-from packages.normalize.chart import load_chart, resolve
+from packages.normalize.chart import SOURCE_SYSTEM_BY_METHOD, load_chart, resolve
 from packages.normalize.periods import fiscal_year_of, period_label, period_type_of
 from packages.normalize.statements import ReportedStatement, StatementWriter
 
@@ -83,7 +83,7 @@ _log = structlog.get_logger(__name__)
 
 _BASE = "https://data.sec.gov"
 SOURCE_NAME = "SEC EDGAR"
-SOURCE_SYSTEM = "us_gaap_xbrl"
+SOURCE_SYSTEM = SOURCE_SYSTEM_BY_METHOD["xbrl"]
 CHART_VERSION = "v0.1"
 
 #: 0.12 s between requests is ~8 per second, under EDGAR's ceiling of 10 with room for

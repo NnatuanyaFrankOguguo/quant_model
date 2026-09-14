@@ -235,7 +235,12 @@ async def company_statements(
                 accession_no=p.accession_no,
                 source_document_id=p.source_document_id,
                 items={
-                    key: Figure(value=i.value, known_as_of=i.known_as_of, version=i.version)
+                    key: Figure(
+                        value=i.value,
+                        known_as_of=i.known_as_of,
+                        version=i.version,
+                        absent_because=i.absent_because,
+                    )
                     for key, i in p.items.items()
                 },
             )

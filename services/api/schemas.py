@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime as dt
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -236,10 +237,18 @@ class Figure(BaseModel):
 
     value: Decimal | None = Field(
         default=None,
-        description="null means the company did not report it. It is never zero-filled.",
+        description="null is never zero-filled; absent_because says which kind of null it is",
     )
     known_as_of: date = Field(description="The filing date that made this figure public")
     version: int = Field(description="1 for the first report; higher after a restatement")
+    absent_because: Literal["not_in_filing", "no_mapping"] | None = Field(
+        default=None,
+        description=(
+            "Set only when value is null. 'not_in_filing': the company did not report it. "
+            "'no_mapping': this chart version maps nothing for the key from this source, so "
+            "the blank is ours, not the company's."
+        ),
+    )
 
 
 class StatementPeriod(BaseModel):

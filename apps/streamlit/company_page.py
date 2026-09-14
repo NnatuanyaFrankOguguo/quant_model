@@ -118,11 +118,30 @@ def fetch_dcf(ticker: str, params: dict[str, Any]) -> dict[str, Any]:
     return _get(f"/v1/public/companies/{ticker}/dcf", params)
 
 
+#: What each kind of blank says. The company's silence and our missing mapping are
+#: different answers to "why is this empty?", and the screen must not blame the company
+#: for the second (docs/05 §11, Q21).
+BLANKS: dict[str | None, str] = {
+    "not_in_filing": "—  not reported in the filing",
+    "no_mapping": "—  no XBRL tag mapped for this key yet",
+    None: "—",
+}
+
+
 def _millions(value: str | None) -> str:
     """Display only. The API's Decimal string becomes a millions figure, or a visible blank."""
     if value is None:
-        return "—  (not reported)"
+        return BLANKS[None]
     return f"{Decimal(value) / Decimal(1_000_000):,.0f}"
+
+
+def _cell(figure: dict[str, Any] | None) -> str:
+    """One statement cell: the figure in millions, or the reason there is none."""
+    if figure is None:
+        return "—  not in this period's statement"
+    if figure["value"] is None:
+        return BLANKS[figure.get("absent_because")]
+    return _millions(figure["value"])
 
 
 def _fraction(value: str | None, places: int = 2, percent: bool = False) -> str:
@@ -184,7 +203,7 @@ def main() -> None:
         for key in keys:
             if not any(key in p["items"] for p in periods):
                 continue
-            rows.append([key] + [_millions(p["items"].get(key, {}).get("value")) for p in periods])
+            rows.append([key] + [_cell(p["items"].get(key)) for p in periods])
         if rows:
             st.markdown(f"**{title}**")
             st.table(pd.DataFrame(rows, columns=["line item"] + columns).set_index("line item"))

@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from packages.common.models import AccountMapping, ChartAccount
 
-__all__ = ["ChartVersion", "LabelMapping", "load_chart", "resolve"]
+__all__ = ["SOURCE_SYSTEM_BY_METHOD", "ChartVersion", "LabelMapping", "load_chart", "resolve"]
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,12 @@ class ChartVersion:
 
     def statement_of(self, canonical_key: str) -> str:
         return self.accounts[canonical_key].statement
+
+
+#: `statement_line_items.extraction_method` -> the `account_mappings.source_system` its
+#: labels were resolved through. A reader asking "why is this blank?" needs the chart the
+#: figure went through, and the line item records the method, not the system.
+SOURCE_SYSTEM_BY_METHOD: dict[str, str] = {"xbrl": "us_gaap_xbrl"}
 
 
 def load_chart(session: Session, *, version: str, source_system: str) -> ChartVersion:
