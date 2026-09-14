@@ -353,3 +353,34 @@ def test_the_company_page_is_a_thin_client_and_shows_a_banner_not_a_stack_trace(
     banners = [e.value for e in app.error]
     assert any("Cannot reach the API" in text for text in banners), banners
     assert any("uvicorn" in text for text in banners), "it must say how to start the API"
+
+
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        ({}, ("AAPL", dt.date(2026, 9, 14), "FY")),
+        (
+            {"ticker": "msft", "as_known_on": "2024-03-01", "periods": "q1"},
+            ("MSFT", dt.date(2024, 3, 1), "Q1"),
+        ),
+        (
+            {"ticker": "NOPE", "as_known_on": "not-a-date", "periods": "weekly"},
+            ("AAPL", dt.date(2026, 9, 14), "FY"),
+        ),
+        ({"as_known_on": "2031-01-01"}, ("AAPL", dt.date(2026, 9, 14), "FY")),  # never the future
+        ({"as_known_on": "1970-01-01"}, ("AAPL", dt.date(1980, 1, 1), "FY")),  # never before data
+    ],
+)
+def test_a_shared_address_reproduces_the_view_or_falls_back_to_the_defaults(
+    params: dict[str, str], expected: tuple[str, dt.date, str]
+) -> None:
+    """docs/05 §11 Q31: the page's address carries ticker, date and period type."""
+    import importlib.util
+
+    script = Path(__file__).resolve().parents[2] / "apps" / "streamlit" / "company_page.py"
+    spec = importlib.util.spec_from_file_location("company_page", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    tickers = ["AAPL", "MSFT", "NVDA"]
+    assert module._state_from_query(params, tickers, dt.date(2026, 9, 14)) == expected

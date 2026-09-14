@@ -1710,7 +1710,7 @@ owed by P3/P4.
 |---|---|---|---|
 | Q29 | Can I just get a one-page brief each morning? | US-050 · US-053 | ⬜ P5 |
 | Q30 | Can I ask in plain words and get an answer with sources? | US-090 · US-091 | ⬜ P9, grounded only in stored figures |
-| Q31 | Can I get this into Excel, or send it to my brother? | TG22 · [ADR-0010](adr/0010-bulk-export-via-exportview.md) | ⬜ Design decided (a versioned `ExportView`), built at P12. A dated shareable view has no story: **gap** |
+| Q31 | Can I get this into Excel, or send it to my brother? | TG22 · [ADR-0010](adr/0010-bulk-export-via-exportview.md) | 🟡 Sending: ✅ **2026-09-14** — the page's address carries the ticker, the as-known-on date and the period type, so a copied link reproduces exactly what you saw, as of when you saw it (a bad link falls back to the defaults, never an error). Excel: ⬜ the versioned `ExportView`, P12 |
 | Q32 | Does it work on my phone, on bad data? | US-050 · US-091 | ⬜ Telegram (P5) is the answer until the web app (P9) |
 
 ### 11.2 Gaps this ledger surfaced
@@ -1723,7 +1723,6 @@ phase schedules it, and until then it is tracked here.
 | Q3 debt maturities | A `debt_maturity` schedule in the chart (v1 freeze, P3) | P3 (TG7 freeze) |
 | Q5 cheap against its peers | A peer set per industry (SIC is stored); the same history route across a set | P6 (indicators) |
 | Q17 is the market expensive | Universe-level P/E and breadth once P4 fills the NGX | P6 (indicators) |
-| Q31 share a dated view | A read-only link to one company as known on one date (export itself is ADR-0010, P12) | P9 (web app) |
 
 ### 11.3 The first five to pick
 
@@ -1734,6 +1733,8 @@ link to the filing on EDGAR)~~, ~~**Q23** (one sentence beside the point-in-time
 ~~**Q10** (show a cell's previous vintage when one exists)~~ — all five done 2026-09-14. The
 next five, by the same rule: ~~**Q2** (year-on-year change, server-side)~~, ~~**Q5** (ratios at
 every past filing date)~~, ~~**Q16** (real T-bill yield beside dividend yield)~~,
-~~**Q6** (return from the filing date)~~ done 2026-09-14; **Q8/Q1** wait for P4, so **Q31** (a dated
-shareable view) is next, and after it the ledger's remaining 🟡 rows: **Q1**, **Q3**, **Q4**,
-**Q9**, **Q14**, **Q24**.
+~~**Q6** (return from the filing date)~~, ~~**Q31** (a dated shareable view)~~ done 2026-09-14.
+Ten questions answered in one day by this rule. What remains 🟡 waits on a phase: **Q1**, **Q8**,
+**Q24** on P4's extraction; **Q3** on the chart's v1 freeze in P3; **Q4** on corporate actions
+(TG2, P3); **Q9** and **Q14** on P5's feed. The next Kaizen pick is therefore a P3 entry item,
+not a screen change - which is the ledger doing its job.

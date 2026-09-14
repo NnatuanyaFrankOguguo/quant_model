@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
@@ -191,6 +192,32 @@ def _restatements(periods: list[dict[str, Any]]) -> list[dict[str, str]]:
     return rows
 
 
+PERIOD_TYPES: tuple[str, ...] = ("FY", "Q1", "Q2", "Q3", "H1", "YTD")
+
+
+def _state_from_query(
+    params: Mapping[str, str], tickers: list[str], today: dt.date
+) -> tuple[str, dt.date, str]:
+    """The view a link asks for - ticker, as-known-on date, period type - or the defaults.
+
+    A shared address reproduces a view exactly (`docs/05` §11, Q31): the same company as
+    known on the same date. Anything unparseable or unknown falls back to the default,
+    never to an error, so a stale link still opens the page.
+    """
+    ticker = params.get("ticker", "").upper()
+    if ticker not in tickers:
+        ticker = "AAPL" if "AAPL" in tickers else tickers[0]
+    try:
+        as_known_on = dt.date.fromisoformat(params.get("as_known_on", ""))
+    except ValueError:
+        as_known_on = today
+    as_known_on = min(max(as_known_on, dt.date(1980, 1, 1)), today)
+    period_type = params.get("periods", "FY").upper()
+    if period_type not in PERIOD_TYPES:
+        period_type = "FY"
+    return ticker, as_known_on, period_type
+
+
 def _fraction(
     value: str | None, places: int = 2, percent: bool = False, signed: bool = False
 ) -> str:
@@ -222,13 +249,14 @@ def main() -> None:
         return
 
     tickers = [c["ticker"] for c in companies]
-    left, middle, right = st.columns([1, 1, 1])
-    ticker = left.selectbox(
-        "Ticker", tickers, index=tickers.index("AAPL") if "AAPL" in tickers else 0
+    wanted_ticker, wanted_date, wanted_periods = _state_from_query(
+        st.query_params.to_dict(), tickers, dt.date.today()
     )
+    left, middle, right = st.columns([1, 1, 1])
+    ticker = left.selectbox("Ticker", tickers, index=tickers.index(wanted_ticker))
     as_known_on = middle.date_input(
         "As known on",
-        value=dt.date.today(),
+        value=wanted_date,
         # Streamlit's default range is ten years back; XBRL history starts in 2009 and the
         # price history in 1980, so the control must reach every date the data does.
         min_value=dt.date(1980, 1, 1),
@@ -237,7 +265,17 @@ def main() -> None:
         "restatements included - are hidden, so the figures are the ones a decision "
         "on that day actually had.",
     )
-    period_type = right.selectbox("Periods", ["FY", "Q1", "Q2", "Q3", "H1", "YTD"], index=0)
+    period_type = right.selectbox(
+        "Periods", list(PERIOD_TYPES), index=PERIOD_TYPES.index(wanted_periods)
+    )
+    # The address carries the view, so a copied link reproduces it exactly (Q31).
+    st.query_params.update(
+        {"ticker": ticker, "as_known_on": as_known_on.isoformat(), "periods": period_type}
+    )
+    st.caption(
+        "This page's address carries the ticker, the as-known-on date and the period type - "
+        "copy it to share exactly what you see, as of the date you see it."
+    )
     company = next(c for c in companies if c["ticker"] == ticker)
     st.write(
         f"**{company['legal_name']}**  ·  {company['exchange']}  ·  CIK {company['cik']}  ·  "
