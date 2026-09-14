@@ -269,11 +269,45 @@ def test_dcf_refuses_assumptions_it_cannot_value(client, apple_loaded) -> None:
 
 
 @pytest.mark.invariant
+@pytest.mark.invariant
+def test_ratio_history_is_the_multiple_as_the_market_first_saw_it(client, apple_loaded) -> None:
+    """docs/05 §11 Q5. Each point is the period's first vintage on its own filing date.
+
+    The fixture holds three annual reports (FY2023-FY2025) and prices only for 2020, so
+    every point has its share count and no price: the multiples that need a price are
+    null and say so by being present; the margins that do not are computed.
+    """
+    body = client.get("/v1/public/companies/AAPL/ratios/history").json()
+    assert body["period_type"] == "FY" and body["price_attribution"].startswith("Source:")
+    labels = [p["period_label"] for p in body["points"]]
+    assert labels == ["FY2023", "FY2024", "FY2025"], "oldest first, own season only"
+    published = {p["period_label"]: p["first_published"] for p in body["points"]}
+    assert published == {"FY2023": "2023-11-03", "FY2024": "2024-11-01", "FY2025": "2025-10-31"}
+    for point in body["points"]:
+        gap = dt.date.fromisoformat(point["first_published"]) - dt.date.fromisoformat(
+            point["period_end"]
+        )
+        assert 0 <= gap.days <= 120, "an original report, not a comparative years later"
+        assert point["price"] is None and point["ratios"]["pe"] is None
+        assert point["shares"] is not None
+        assert set(point["ratios"]) == set(body["points"][0]["ratios"]), "every key, always"
+    fy2025 = body["points"][-1]
+    assert Decimal(fy2025["ratios"]["net_margin"]).quantize(Decimal("0.0001")) == Decimal("0.2692")
+    assert fy2025["shares"]["as_of_date"] <= "2025-10-31", "the count known that day, not today's"
+
+    # Point-in-time: a decision date before the FY2024 report sees one point.
+    early = client.get(
+        "/v1/public/companies/AAPL/ratios/history", params={"as_known_on": "2024-01-01"}
+    ).json()
+    assert [p["period_label"] for p in early["points"]] == ["FY2023"]
+
+
 def test_no_company_response_field_is_advice_shaped(client, apple_loaded) -> None:
     for path, params in (
         ("/v1/public/companies", {}),
         ("/v1/public/companies/AAPL/statements", {"period_type": "FY"}),
         ("/v1/public/companies/AAPL/ratios", {}),
+        ("/v1/public/companies/AAPL/ratios/history", {}),
         (
             "/v1/public/companies/AAPL/dcf",
             {"growth": "0.05", "discount_rate": "0.09", "terminal_growth": "0.02"},

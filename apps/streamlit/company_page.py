@@ -60,6 +60,18 @@ STATEMENT_ROWS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+#: The multiples and returns worth a row per year in the history table.
+HISTORY_COLUMNS: tuple[tuple[str, bool], ...] = (
+    ("pe", False),
+    ("pb", False),
+    ("ps", False),
+    ("ev_ebitda", False),
+    ("earnings_yield", True),
+    ("dividend_yield", True),
+    ("net_margin", True),
+    ("roe", True),
+)
+
 RATIO_GROUPS: dict[str, tuple[str, ...]] = {
     "Profitability": ("gross_margin", "operating_margin", "net_margin", "fcf_margin"),
     "Returns": ("roe", "roa"),
@@ -112,6 +124,14 @@ def fetch_ratios(ticker: str, as_known_on: str, period: str | None) -> dict[str,
     if period:
         params["period"] = period
     return _get(f"/v1/public/companies/{ticker}/ratios", params)
+
+
+@st.cache_data(ttl=60)
+def fetch_ratio_history(ticker: str, as_known_on: str, period_type: str) -> dict[str, Any]:
+    return _get(
+        f"/v1/public/companies/{ticker}/ratios/history",
+        {"as_known_on": as_known_on, "period_type": period_type},
+    )
 
 
 def fetch_dcf(ticker: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -334,6 +354,40 @@ def main() -> None:
             value = ratios["ratios"].get(key)
             is_pct = percent or key.endswith("yield")
             column.write(f"{key}: {_fraction(value, percent=is_pct)}")
+
+    st.subheader("Multiples as the market first saw them")
+    st.caption(
+        "Each row is the day that year's report was first published: the figures it published, "
+        "the closing price and the share count known that day. Later restatements do not reach "
+        "back into this table. Today's multiple, above, is the last row's descendant."
+    )
+    try:
+        history = fetch_ratio_history(ticker, as_known_on.isoformat(), period_type)
+    except httpx.HTTPError as exc:
+        st.error(f"Could not load the history: {type(exc).__name__}")
+        return
+    if history["points"]:
+        st.table(
+            pd.DataFrame(
+                [
+                    {
+                        "period": pt["period_label"],
+                        "published": pt["first_published"],
+                        "price": f"{Decimal(pt['price']['close_raw']):,.2f}"
+                        if pt["price"]
+                        else "—",
+                        **{
+                            key: _fraction(pt["ratios"].get(key), percent=pct)
+                            for key, pct in HISTORY_COLUMNS
+                        },
+                    }
+                    for pt in reversed(history["points"])
+                ]
+            ).set_index("period")
+        )
+        st.caption(f"{history['attribution']}  ·  {history['price_attribution']}")
+    else:
+        st.caption("No period of this type was first published in its own season.")
 
     st.subheader("DCF — on your assumptions")
     st.caption(

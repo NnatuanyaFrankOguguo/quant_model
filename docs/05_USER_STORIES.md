@@ -1659,7 +1659,7 @@ owed by P3/P4.
 | Q2 | Is it making money, and is that getting better or worse? | US-020 · US-030 · US-040 | ✅ **2026-09-14**, US. Every figure carries the same figure a year earlier (as known on the same date) and the change as a fraction, computed by the server; the page shows it beside each number. The fraction is withheld when either side is unknown, the prior was a loss or zero, or the figure has turned into a loss — Intel's 2024 swing is two numbers, not "-1,210%". No chart yet. Nigeria: ⬜ P3 |
 | Q3 | Is it drowning in debt, and when is the debt due? | US-020 | 🟡 US: debt/equity and interest cover live. Maturity schedule: **gap** — not in chart v0.1, no story |
 | Q4 | Does it pay a dividend, and has it ever cut it? | US-031 (corporate actions, TG2) | 🟡 US: total dividends paid, per year, from the cash flow. Per-share and cuts: ⬜ P3 |
-| Q5 | Is it cheap — and compared with what? | US-020 | 🟡 US: P/E, P/B, EV multiples on today's price. Against its own history or its peers: **gap** — no story |
+| Q5 | Is it cheap — and compared with what? | US-020 | 🟡 Against itself: ✅ **2026-09-14** — `/ratios/history` gives every year's multiples on the day its report was first published, strictly point-in-time on figures, price and share count (Apple's P/E on 10-K day: 31× in 2009, 13× in 2012, 36× in 2025, beside 43× today). Against its peers: **gap** — no peer sets yet |
 | Q6 | What did the share price do when they last published results? | — | 🟡 Prices and filing dates are both held; nothing joins them. **Gap** — nearest story US-061 |
 | Q7 | Who audits them, and did the auditor say anything unusual? | US-040 · `company_relationships` 'auditor' | ⬜ P4. `is_audited` is set on every US statement; the opinion is not read |
 | Q8 | Is anyone in this company's orbit someone I should worry about? | US-040 · `entity_roles`, `company_relationships` | ⬜ P4 |
@@ -1721,7 +1721,7 @@ phase schedules it, and until then it is tracked here.
 | Question | The smallest answer | Natural home |
 |---|---|---|
 | Q3 debt maturities | A `debt_maturity` schedule in the chart (v1 freeze, P3) | P3 (TG7 freeze) |
-| Q5 cheap against itself / peers | Ratios at every past filing date (prices are held); a peer set per industry | P6 (indicators) |
+| Q5 cheap against its peers | A peer set per industry (SIC is stored); the same history route across a set | P6 (indicators) |
 | Q6 price reaction to results | Return from the filing date to +1/+5 days, per filing | P6 (indicators) |
 | Q16 real yield vs dividend yield | One route joining a P1 series to a P2/P3 ratio | P6 (indicators) |
 | Q17 is the market expensive | Universe-level P/E and breadth once P4 fills the NGX | P6 (indicators) |
@@ -1734,7 +1734,6 @@ and what the screen admits: ~~**Q21** (say *which* kind of blank)~~, ~~**Q20** (
 link to the filing on EDGAR)~~, ~~**Q23** (one sentence beside the point-in-time control)~~,
 ~~**Q22/Q12** (an overdue flag on companies, as macro already has)~~,
 ~~**Q10** (show a cell's previous vintage when one exists)~~ — all five done 2026-09-14. The
-next five, by the same rule: ~~**Q2** (year-on-year change, server-side)~~ done 2026-09-14; **Q8/Q1**
-wait for P4, so **Q5** (ratios at every past filing date — the prices are held), **Q16** (real
-T-bill yield beside dividend yield), **Q6** (return from the filing date), **Q31** (a dated
-shareable view).
+next five, by the same rule: ~~**Q2** (year-on-year change, server-side)~~, ~~**Q5** (ratios at
+every past filing date)~~ done 2026-09-14; **Q8/Q1** wait for P4, so **Q16** (real T-bill yield
+beside dividend yield), **Q6** (return from the filing date), **Q31** (a dated shareable view).

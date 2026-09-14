@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Literal
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import and_, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from packages.common.models import (
@@ -49,6 +49,7 @@ __all__ = [
     "latest_price",
     "latest_share_count",
     "list_companies",
+    "ratio_history",
     "ratios_for",
     "statements_as_known_on",
     "year_on_year",
@@ -144,6 +145,23 @@ class SharesRef:
     basic_or_diluted: str
     known_as_of: dt.date
     source_document_id: int
+
+
+@dataclass(frozen=True)
+class RatioPoint:
+    """One period's ratios on the day it was first published, on the figures it published.
+
+    Strictly point-in-time on every side: version-1 figures (what the market read that
+    day), the price bar and the share count known on that day. A later restatement does
+    not reach back into history here - it is a different vintage, visible in `statements`.
+    """
+
+    period_label: str
+    period_end: dt.date
+    first_published: dt.date  # known_as_of of the period's first vintage
+    price: PriceRef | None
+    shares: SharesRef | None
+    ratios: dict[str, Decimal | None]
 
 
 @dataclass(frozen=True)
@@ -460,6 +478,153 @@ def latest_share_count(
         .limit(1)
     ).first()
     return SharesRef(*row) if row else None
+
+
+#: A period first published this long after it ended is an original report. Later than
+#: that it is a comparative in a later filing - XBRL begins in mid-2009, so FY2006 first
+#: appears in the FY2009 10-K - and a multiple of that day's price on those figures means
+#: nothing. 90 days is the longest 10-K deadline; the rest is slack for late filers.
+OWN_SEASON_DAYS = 120
+
+
+def ratio_history(
+    session: Session,
+    *,
+    security_id: int,
+    decision_date: dt.date,
+    period_type: str = "FY",
+) -> list[RatioPoint]:
+    """Every period's ratios as the market first saw them, oldest first (`docs/05` §11, Q5).
+
+    "Is 43x expensive *for this company*?" needs the multiple on the day each annual
+    report came out. Three queries for the whole history: the version-1 line items of
+    every period of the type, the price bars around each first-publication date, and the
+    share counts. Periods first published out of their own season are left out, because
+    a comparative's first XBRL appearance is not the day the market read it.
+    """
+    rows = session.execute(
+        select(
+            StatementLineItem.period_end,
+            Statement.fiscal_year,
+            Statement.period_label,
+            StatementLineItem.canonical_key,
+            StatementLineItem.value,
+            StatementLineItem.known_as_of,
+        )
+        .join(Statement, Statement.id == StatementLineItem.statement_id)
+        .where(StatementLineItem.security_id == security_id)
+        .where(Statement.is_consolidated.is_(True))
+        .where(Statement.period_type == period_type)
+        .where(StatementLineItem.version == 1)
+        .where(StatementLineItem.known_as_of <= decision_date)
+    ).all()
+    if not rows:
+        return []
+    periods: dict[dt.date, _FirstVintage] = {}
+    for period_end, _fy, label, key, value, known in rows:
+        entry = periods.setdefault(period_end, _FirstVintage(label, known, {}))
+        # The three statements of a period normally share one filing; if not, the day by
+        # which all of them were public is the day the whole set could be read.
+        entry.known = max(entry.known, known)
+        entry.values[key] = value
+    in_season = {
+        end: entry for end, entry in periods.items() if (entry.known - end).days <= OWN_SEASON_DAYS
+    }
+    dates = sorted({entry.known for entry in in_season.values()})
+    prices = _prices_on(session, security_id=security_id, dates=dates)
+    shares = _share_counts_on(session, security_id=security_id, dates=dates)
+
+    points: list[RatioPoint] = []
+    for end in sorted(in_season):
+        entry = in_season[end]
+        price = prices.get(entry.known)
+        count = shares.get(entry.known)
+        points.append(
+            RatioPoint(
+                period_label=entry.label,
+                period_end=end,
+                first_published=entry.known,
+                price=price,
+                shares=count,
+                ratios=compute_ratios(
+                    entry.values,
+                    price=price.close_raw if price else None,
+                    shares=count.shares if count else None,
+                    decision_date=entry.known,
+                ),
+            )
+        )
+    return points
+
+
+@dataclass
+class _FirstVintage:
+    label: str
+    known: dt.date
+    values: dict[str, Decimal | None]
+
+
+#: Enough calendar days back from a date to hold its newest trading day through any holiday.
+_PRICE_LOOKBACK_DAYS = 14
+
+
+def _prices_on(
+    session: Session, *, security_id: int, dates: list[dt.date]
+) -> dict[dt.date, PriceRef | None]:
+    """`latest_price` for many dates in one query - same rule, chosen in Python per date."""
+    if not dates:
+        return {}
+    windows = [
+        and_(
+            PriceHistory.date.between(on - dt.timedelta(days=_PRICE_LOOKBACK_DAYS), on),
+            PriceHistory.known_as_of <= on,
+        )
+        for on in dates
+    ]
+    rows = session.execute(
+        select(
+            PriceHistory.date,
+            PriceHistory.close_raw,
+            PriceHistory.known_as_of,
+            PriceHistory.source_document_id,
+        )
+        .where(PriceHistory.security_id == security_id)
+        .where(or_(*windows))
+    ).all()
+    bars = [PriceRef(*r) for r in rows]
+    result: dict[dt.date, PriceRef | None] = {}
+    for on in dates:
+        eligible = [b for b in bars if b.date <= on and b.known_as_of <= on]
+        result[on] = max(eligible, key=lambda b: (b.date, b.known_as_of)) if eligible else None
+    return result
+
+
+def _share_counts_on(
+    session: Session, *, security_id: int, dates: list[dt.date], basic_or_diluted: str = "basic"
+) -> dict[dt.date, SharesRef | None]:
+    """`latest_share_count` for many dates in one query - same rule, chosen per date."""
+    if not dates:
+        return {}
+    rows = session.execute(
+        select(
+            SharesOutstanding.as_of_date,
+            SharesOutstanding.shares,
+            SharesOutstanding.basic_or_diluted,
+            SharesOutstanding.known_as_of,
+            SharesOutstanding.source_document_id,
+        )
+        .where(SharesOutstanding.security_id == security_id)
+        .where(SharesOutstanding.basic_or_diluted == basic_or_diluted)
+        .where(SharesOutstanding.as_of_date <= max(dates))
+    ).all()
+    counts = [SharesRef(*r) for r in rows]
+    result: dict[dt.date, SharesRef | None] = {}
+    for on in dates:
+        eligible = [c for c in counts if c.as_of_date <= on and c.known_as_of <= on]
+        result[on] = (
+            max(eligible, key=lambda c: (c.as_of_date, c.known_as_of)) if eligible else None
+        )
+    return result
 
 
 def ratios_for(

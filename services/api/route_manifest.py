@@ -31,6 +31,7 @@ from packages.compliance.mode import Mode
 from services.api.schemas import (
     CompanyDcf,
     CompanyList,
+    CompanyRatioHistory,
     CompanyRatios,
     CompanyStatements,
     Health,
@@ -79,6 +80,9 @@ MANIFEST: dict[str, RouteSpec] = {
     ),
     "GET /v1/public/companies/{ticker}/ratios": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyRatios
+    ),
+    "GET /v1/public/companies/{ticker}/ratios/history": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyRatioHistory
     ),
     "GET /v1/public/companies/{ticker}/dcf": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyDcf

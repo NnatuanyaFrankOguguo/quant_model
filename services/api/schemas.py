@@ -376,6 +376,46 @@ class CompanyRatios(BaseModel):
     ratios: dict[str, Decimal | None]
 
 
+class RatioHistoryPoint(BaseModel):
+    """One period's ratios on the day it was first published, on the figures it published."""
+
+    period_label: str
+    period_end: date
+    first_published: date = Field(
+        description="The filing date of the period's first vintage - the day the market read it"
+    )
+    price: PriceUsed | None = Field(
+        default=None, description="The bar known on that day; null when none was"
+    )
+    shares: SharesUsed | None = Field(
+        default=None, description="The count known on that day; null when none was"
+    )
+    ratios: dict[str, Decimal | None] = Field(
+        description="Every ratio key, always present; null wherever an input was missing"
+    )
+
+
+@register_public_type
+class CompanyRatioHistory(BaseModel):
+    """Ratios at every past publication date, so today's multiple has its own context.
+
+    Strictly point-in-time on every side: the figures each report first published, and the
+    price and share count known that day. Later restatements do not reach back into this
+    history. Periods first published out of their own season - comparatives that first
+    appeared in XBRL years after the fact - are left out, because a multiple of that day's
+    price on those figures would mean nothing.
+    """
+
+    ticker: str
+    legal_name: str
+    as_known_on: date
+    period_type: str
+    currency: str
+    attribution: str
+    price_attribution: str
+    points: list[RatioHistoryPoint] = Field(description="Oldest first")
+
+
 class DcfAssumptionsUsed(BaseModel):
     """Every input the model ran on. The user's assumptions, and the facts they were joined to."""
 

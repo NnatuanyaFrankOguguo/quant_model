@@ -29,6 +29,7 @@ from services.api.schemas import (
     CompanyDcf,
     CompanyInfo,
     CompanyList,
+    CompanyRatioHistory,
     CompanyRatios,
     CompanyStatements,
     DcfAssumptionsUsed,
@@ -39,6 +40,7 @@ from services.api.schemas import (
     MacroSeriesList,
     PriceUsed,
     PublicPing,
+    RatioHistoryPoint,
     SharesUsed,
     StatementPeriod,
 )
@@ -326,6 +328,76 @@ async def company_ratios(
         shares=shares,
         inputs=snap.inputs,
         ratios=snap.ratios,
+    )
+
+
+@router.get("/companies/{ticker}/ratios/history", response_model=CompanyRatioHistory)
+async def company_ratio_history(
+    ticker: str,
+    period_type: str = Query(default="FY", description="'FY' or a quarter such as 'Q1'"),
+    as_known_on: dt.date | None = Query(
+        default=None, description="Periods first published after this date are unseen."
+    ),
+) -> CompanyRatioHistory:
+    """Ratios at every past publication date - the multiple as the market first saw it.
+
+    Each point uses the period's first-published figures with the price and share count
+    known on its filing date; nothing later reaches back. Comparatives that first appeared
+    in XBRL long after their period are left out.
+    """
+    decision_date = as_known_on or utctoday()
+    with get_session() as session:
+        ref = snapshot.find_security(session, ticker)
+        if ref is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        points = snapshot.ratio_history(
+            session,
+            security_id=ref.security_id,
+            decision_date=decision_date,
+            period_type=period_type,
+        )
+        attribution = snapshot.attribution_for(session, EDGAR_SOURCE)
+        price_attribution = snapshot.attribution_for(session, PRICE_SOURCE)
+    return CompanyRatioHistory(
+        ticker=ref.ticker,
+        legal_name=ref.legal_name,
+        as_known_on=decision_date,
+        period_type=period_type,
+        currency=ref.currency,
+        attribution=attribution,
+        price_attribution=price_attribution,
+        points=[
+            RatioHistoryPoint(
+                period_label=p.period_label,
+                period_end=p.period_end,
+                first_published=p.first_published,
+                price=(
+                    PriceUsed(
+                        date=p.price.date,
+                        close_raw=p.price.close_raw,
+                        known_as_of=p.price.known_as_of,
+                        age_days=(p.first_published - p.price.date).days,
+                        source_document_id=p.price.source_document_id,
+                        attribution=price_attribution,
+                    )
+                    if p.price
+                    else None
+                ),
+                shares=(
+                    SharesUsed(
+                        as_of_date=p.shares.as_of_date,
+                        shares=p.shares.shares,
+                        basic_or_diluted=p.shares.basic_or_diluted,
+                        known_as_of=p.shares.known_as_of,
+                        source_document_id=p.shares.source_document_id,
+                    )
+                    if p.shares
+                    else None
+                ),
+                ratios=p.ratios,
+            )
+            for p in points
+        ],
     )
 
 
