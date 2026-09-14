@@ -213,8 +213,9 @@ retrofitted.
 > **Update this table at every phase transition.** It is the only place in the document set
 > that claims what is done. Keeping it honest is what stops you from building on sand.
 
-**Current phase: P1 — Macro Backdrop. Status: 🧪 BUILT, 12½ of 13 checks passed. P0 is also
-🧪, for one reason that has not changed.**
+**Current phase: P2 — US Company Data. Status: 🧪 BUILT, 13 of 15 checks in code; 13 and 14
+are the operator's, by eye, on the company page. P1 and P0 are also 🧪, for reasons that
+have not changed.**
 
 The P0 spine from [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §6.1 is built and
 verified on 2026-09-02: 17 tables migrated on Neon PostgreSQL 18.6, the mode gate enforced and
@@ -227,7 +228,7 @@ operator's to close; see "the immediate next actions" below.
 |---|---|---|---|---|---|
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
 | P1 Macro Backdrop | 🧪 Built | 2026-09-03 | — | 12½/13 | 10 of 13 series live · 28,053 rows · check 11 by eye |
-| P2 US Company Data | 🔨 In progress | 2026-09-13 | — | 9½/15 | P2.1 live: Apple, 72 filings, 333 statement versions |
+| P2 US Company Data | 🧪 Built | 2026-09-13 | — | 13/15 | 24 companies · 1,551 filings · 7,418 statement versions · 50,141 line items · 269,192 price bars · checks 13, 14 by eye |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
 | P5 News & Daily Brief | ⬜ Not started | — | — | — | |
@@ -411,14 +412,40 @@ restatements that remain were each read; all are the filer's — the 2010 one ab
 re-tagging its cash-flow D&A in the FY2018 10-K, explicit zeros in later comparatives —
 or v0.1 coverage gaps that resolve as NULL and then a value, which is honest.
 
-**P2 checkpoint so far: 1, 2, 3, 4, 8, 10, 11, 12, 15 in code; 13 half by eye** (the FY2025
-figures are printed for the operator to hold against the 10-K — `interest_expense` is NULL
-because Apple no longer discloses it separately, which is the "one you expect to be
-missing"). 5, 6, 7, 14 are P2.4's; 9 is P2.3's. Not yet done: ≥20 companies (one so far),
-`price_history` (P2.3), ratios and DCF (P2.4), `shares_outstanding` and the entity-graph
-tables, and a scheduled refresh. One recorded limitation: XBRL begins in mid-2009, so a
-pre-2009 period's `known_as_of` is its first XBRL appearance — later than the truth, never
-earlier.
+**P2 is built, 2026-09-14.** The whole of it: P2.3 (`price_history`, migration 0012, the
+Yahoo chart connector storing as-traded closes with the provider's splits multiplied back
+out, verified at Apple's 1987, 2000, 2005, 2014 and 2020 split boundaries), P2.4
+(`packages/valuation` — 26 ratios and a DCF with hand-computed worksheets in
+`tests/known_answer`), `shares_outstanding` (0013), the entity graph created empty (0014),
+the four public company routes and `apps/streamlit/company_page.py` for the by-eye checks,
+and the universe: **24 of 24 US companies loaded end to end**, every price series current
+to 2026-09-11, `pit_sanity` violations zero, orphan line items zero.
+
+**P2 checkpoint: 1–12 and 15 in code; 13 and 14 by eye** — open the company page, hold
+Apple's FY2025 revenue, total assets and `interest_expense` (NULL: Apple no longer discloses
+it separately) against the 10-K, then run the DCF at 9% and 10% and watch the value move.
+Check 9 reads as [08](08_DATA_CONTRACTS.md) §2.4 corrected it: `close_raw` as traded, no
+stored adjusted column.
+
+**What the universe load taught** — three defects, each a filer's data meeting a constraint
+that did its job, each now a rule in [08](08_DATA_CONTRACTS.md) §2.3 with a regression test:
+an alternate XBRL tag must name the same measure (Apple: six false restatements of cash); a
+fact whose period ends after its own filing date is dropped, never re-dated (Walmart: three
+in 21,874, one of which aborted the company); a period a filing reports under two context
+start dates is one statement (Cisco: gross profit under a slipped start date). And a re-run
+of the loader after a restatement now judges each old filing against the version in force
+on its date, so the stale warning means what it says.
+
+**Recorded limitations.** XBRL begins in mid-2009, so a pre-2009 period's `known_as_of` is
+its first XBRL appearance — later than the truth, never earlier. Multi-class companies
+(Alphabet, Meta) carry no cover-page share count in companyfacts, so their per-share figures
+are blank until a class-aware count is sourced. EDGAR maps `XOM` to ExxonMobil's 2025 holding
+company (one filing; the history sits under CIK 34088) and `DIS` to the 2019 one (33 filings;
+CIK 1001039 holds the rest) — a successor-CIK follow-up. Coca-Cola's companyfacts carried
+nothing filed after 2026-04-30 at load time. Every exchange-listed instrument EDGAR names for
+a company (notes, preferreds) is an identifier of its one security; the primary is the lowest
+id. And there is no scheduled EDGAR refresh yet — prices are on the schedule, statements are
+run by hand.
 
 ### What exists right now
 
@@ -434,13 +461,13 @@ earlier.
 | Docker | ✅ 29.6.1 (Desktop must be *running* for backup/restore) |
 | Node (needed at P9) | ✅ v24.14.0 |
 | Monorepo scaffold | ✅ 4 packages (`common`, `compliance`, `ingestion`, `scheduler`), the rest reserved — `packages/README.md` |
-| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 24 tables + `alembic_version`, at migration 0011 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The other ~35 tables are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
-| FastAPI service | ✅ `/health`, `/v1/public/ping`, `/v1/personal/ping` — mode gate, bearer auth, audit row per request |
+| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 31 tables + `alembic_version`, at migration 0014 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The rest are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
+| FastAPI service | ✅ `/health`, ping, the macro series routes, and `/v1/public/companies{,/{t}/statements,/ratios,/dcf}` — mode gate, bearer auth, audit row per request, every response type registered |
 | Any application code | ✅ The spine. No financial logic, by design |
 | CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed — no remote** |
-| Test suite | ✅ 367 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
+| Test suite | ✅ 412 passing, 0 skipped (`tests/unit`, `tests/known_answer`, `tests/compliance`; live-network tests are opt-in) |
 | Backup | ✅ Dumped, verified, copied, **and restored** 2026-09-02 — [REVIEW_CADENCE](REVIEW_CADENCE.md) row 2. Off-site: still zero |
-| ADR log | ✅ [0001–0008](adr/README.md) |
+| ADR log | ✅ [0001–0010](adr/README.md) |
 
 ### The immediate next actions
 
@@ -457,6 +484,11 @@ Ordered. The first four are the difference between P0.4 running and not running.
       §6.4 — GitHub will not let you approve your own PR)
 - [x] ~~Install the pre-commit hooks~~ — installed 2026-09-03 and run over all files:
       gitleaks, ruff, ruff-format, yaml/toml, large files, private keys, `no-commit-to-branch`
+- [ ] **P2 checks 13 and 14, by eye.** Start the API (`.venv\Scripts\python.exe -m uvicorn
+      services.api.main:app`), then `python -m streamlit run apps\streamlit\company_page.py`.
+      Hold Apple's FY2025 revenue (416,161m), total assets and `interest_expense` (NULL) against
+      the 10-K; run the DCF at a 9% and a 10% discount rate. Then P2 is 🧪 for the same reason
+      P0 is — CI has never run — and P3's entry criteria are next
 - [ ] **Create a Backblaze B2 account before P3 collects documents at scale**
       ([ADR-0009](adr/0009-object-storage-and-immutability.md)). ~$0.10/month at this volume.
       It needs a payment method, so the build cannot do it for itself, and P3.1 assumes the
