@@ -354,6 +354,14 @@ CREATE TABLE security_identifiers (
 CREATE INDEX ON security_identifiers (id_type, id_value, valid_from, valid_to);
 ```
 
+> **`id_type = 'cik'`** (added 2026-09-14). A predecessor registrant's CIK, attached to the
+> continuing company's primary security, `valid_to` the successor's 8-K12B date and
+> `valid_from` the earliest filing the payload showed — an interval the data can vouch for.
+> EDGAR's ticker list points at the new registrant after a holding-company reorganisation and
+> the history stays under the old number; `PREDECESSORS` in `packages/ingestion/edgar.py` is
+> the curated map, each entry with its 8-K12B accession, and the old registrant's filings are
+> written under the continuing company so a period has one version across both numbers.
+
 Sample — a rename, correctly modelled:
 
 | id | security_id | id_type | id_value | valid_from | valid_to |

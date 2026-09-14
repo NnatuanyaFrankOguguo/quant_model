@@ -29,6 +29,7 @@ from packages.common.console import configure_logging, error, step, success
 from packages.common.db import get_session
 from packages.ingestion.base import register
 from packages.ingestion.edgar import (
+    PREDECESSORS,
     EdgarCompanyFactsConnector,
     EdgarSubmissionsConnector,
     load_ticker_map,
@@ -56,6 +57,23 @@ def ingest_one(cik: str, *, label: str) -> bool:
                 statements.fail("companyfacts failed", error=second.error)
                 return False
             statements.result(facts_parsed=second.records_parsed, rows_inserted=second.rows_written)
+
+        predecessor = PREDECESSORS.get(cik)
+        if predecessor is not None:
+            with step(
+                f"Ingest {label}: predecessor registrant's filings",
+                cik=predecessor.cik,
+                succeeded_on=predecessor.succeeded_on.isoformat(),
+                evidence=predecessor.evidence,
+            ) as history:
+                for stage, connector in (("submissions", submissions), ("companyfacts", facts)):
+                    run = connector.run(
+                        session, run_name=f"edgar_{stage}:{predecessor.cik}", cik=predecessor.cik
+                    )
+                    if run.status != "ok":
+                        history.fail(f"predecessor {stage} failed", error=run.error)
+                        return False
+                history.result(rows_inserted=run.rows_written)
     return True
 
 

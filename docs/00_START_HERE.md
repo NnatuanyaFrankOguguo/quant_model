@@ -439,9 +439,12 @@ on its date, so the stale warning means what it says.
 **Recorded limitations.** XBRL begins in mid-2009, so a pre-2009 period's `known_as_of` is
 its first XBRL appearance — later than the truth, never earlier. Multi-class companies
 (Alphabet, Meta) carry no cover-page share count in companyfacts, so their per-share figures
-are blank until a class-aware count is sourced. EDGAR maps `XOM` to ExxonMobil's 2025 holding
-company (one filing; the history sits under CIK 34088) and `DIS` to the 2019 one (33 filings;
-CIK 1001039 holds the rest) — a successor-CIK follow-up. Coca-Cola's companyfacts carried
+are blank until a class-aware count is sourced. EDGAR maps `XOM` to ExxonMobil's 2026 holding
+company and `DIS` to the 2019 one, with the history under the old CIKs; since 2026-09-14 the
+successor map in `packages/ingestion/edgar.py` (each entry's evidence is the successor's own
+8-K12B) records the old CIK as a time-bounded identifier of the security and writes its
+filings under the continuing company — Exxon now reads 71 filings from 2006, Disney 74 —
+and the nightly refresh covers both registrants. Coca-Cola's companyfacts carried
 nothing filed after 2026-04-30 at load time. Every exchange-listed instrument EDGAR names for
 a company (notes, preferreds) is an identifier of its one security; the primary is the lowest
 id. Statements refresh nightly since 2026-09-14 — one `edgar:<ticker>` job per name at 03:00

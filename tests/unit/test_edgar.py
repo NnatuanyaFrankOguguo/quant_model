@@ -985,3 +985,115 @@ def test_every_us_name_has_a_nightly_refresh_before_the_cbn_jobs() -> None:
     assert len(set(times)) == len(times), "six minutes apart, never together"
     assert refresh["edgar:AAPL"].params == {"ticker": "AAPL"}
     assert set(refresh) <= expected_run_names()
+
+
+# --------------------------------------------------------------------------------------
+# Successor registrants: the history under the old CIK belongs to the continuing company
+# --------------------------------------------------------------------------------------
+
+OLD_CIK = "0000999999"
+
+
+def _with_predecessor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Apple, for the test, continued a registrant numbered 0000999999 on 2024-01-15."""
+    import packages.ingestion.edgar as edgar_module
+
+    mapping = {
+        APPLE_CIK: edgar_module.Predecessor(OLD_CIK, dt.date(2024, 1, 15), "0000000000-24-000001")
+    }
+    monkeypatch.setattr(edgar_module, "PREDECESSORS", mapping)
+    monkeypatch.setattr(edgar_module, "_SUCCESSOR_BY_PREDECESSOR", {OLD_CIK: APPLE_CIK})
+
+
+def _renumbered(raw: RawResponse, cik: int) -> RawResponse:
+    payload = json.loads(raw.data)
+    payload["cik"] = cik
+    return RawResponse(
+        data=json.dumps(payload).encode(), media_type="application/json", url="p", http_status=200
+    )
+
+
+@pytest.mark.invariant
+def test_a_predecessors_filings_are_written_under_the_continuing_company(
+    db_session: Session, apple: Company, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_predecessor(monkeypatch)
+    from packages.common.models import SharesOutstanding
+
+    # Its submissions register no company: one identifier row, bounded by the succession.
+    submissions = EdgarSubmissionsConnector(user_agent=UA)
+    submissions.fetch = lambda **params: _renumbered(_submissions_raw(), 999999)  # type: ignore[method-assign]
+    result = submissions.run(db_session, cik=OLD_CIK)
+    assert result.status == "ok", result.error
+    assert result.rows_written == 1
+    assert db_session.execute(select(func.count()).select_from(Company)).scalar_one() == 1
+    identifier = db_session.execute(
+        select(SecurityIdentifier)
+        .where(SecurityIdentifier.id_type == "cik")
+        .where(SecurityIdentifier.id_value == OLD_CIK)
+    ).scalar_one()
+    assert identifier.valid_to == dt.date(2024, 1, 15)
+    assert identifier.valid_from <= identifier.valid_to, "an interval, not a contradiction"
+    assert identifier.valid_from == dt.date(2024, 1, 15) or identifier.valid_from < dt.date(
+        2024, 1, 15
+    )
+    security_id = db_session.execute(
+        select(Security.id).where(Security.company_id == apple.id)
+    ).scalar_one()
+    assert identifier.security_id == security_id
+    assert submissions.run(db_session, cik=OLD_CIK).rows_written == 0, "recorded once"
+
+    # Its facts are the continuing company's statements, on the same security.
+    facts = _facts_connector(_renumbered(_facts_raw(), 999999))
+    result = facts.run(db_session, cik=OLD_CIK)
+    assert result.status == "ok", result.error
+    assert result.rows_written > 0
+    assert (
+        db_session.execute(
+            select(func.count()).select_from(Statement).where(Statement.company_id == apple.id)
+        ).scalar_one()
+        > 0
+    )
+    assert (
+        db_session.execute(
+            select(func.count()).select_from(Statement).where(Statement.company_id != apple.id)
+        ).scalar_one()
+        == 0
+    )
+    assert (
+        db_session.execute(
+            select(func.count())
+            .select_from(SharesOutstanding)
+            .where(SharesOutstanding.security_id == security_id)
+        ).scalar_one()
+        > 0
+    )
+    # The successor's own filing of the same periods is then an unchanged re-report, not a
+    # second first report: one version per period across both registrants.
+    again = _facts_connector(_facts_raw()).run(db_session, cik=APPLE_CIK)
+    assert again.status == "ok" and again.rows_written == 0
+
+
+def test_a_predecessor_whose_successor_is_not_registered_is_refused(
+    db_session: Session, local_store: LocalDiskBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _with_predecessor(monkeypatch)
+    submissions = EdgarSubmissionsConnector(user_agent=UA)
+    register(db_session, submissions)
+    submissions.fetch = lambda **params: _renumbered(_submissions_raw(), 999999)  # type: ignore[method-assign]
+    result = submissions.run(db_session, cik=OLD_CIK)
+    assert result.status == "error" and result.error is not None
+    assert "Register the successor first" in result.error
+    assert db_session.execute(select(func.count()).select_from(Company)).scalar_one() == 0
+
+
+def test_the_real_successor_map_names_its_evidence() -> None:
+    """Both entries were read from EDGAR's own filing index, not remembered."""
+    from packages.ingestion.edgar import PREDECESSORS, successor_of
+
+    assert successor_of("34088") == "0002115436" and successor_of("1001039") == "0001744489"
+    assert successor_of("320193") is None
+    for successor, predecessor in PREDECESSORS.items():
+        assert len(successor) == 10 and len(predecessor.cik) == 10
+        assert predecessor.evidence.count("-") == 2, "an accession number, the 8-K12B"
+        assert predecessor.succeeded_on < dt.date.today()

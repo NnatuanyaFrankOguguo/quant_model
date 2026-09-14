@@ -93,6 +93,50 @@ _log = structlog.get_logger(__name__)
 _BASE = "https://data.sec.gov"
 SOURCE_NAME = "SEC EDGAR"
 SOURCE_SYSTEM = SOURCE_SYSTEM_BY_METHOD["xbrl"]
+
+
+@dataclass(frozen=True)
+class Predecessor:
+    """The registrant whose filings carry a company's history before a new CIK took over."""
+
+    cik: str  # zero-padded
+    succeeded_on: dt.date  # the successor's 8-K12B filing date
+    evidence: str  # that 8-K12B's accession number
+
+
+#: Successor registrants. A holding-company reorganisation continues the listed security
+#: under a new CIK: EDGAR's ticker list moves to the new number and every earlier filing
+#: stays under the old one, so a ticker resolves to a company with one year of history
+#: and the rest sits unreachable. This map says which old registrant a new one continued,
+#: with the successor's own 8-K12B as the evidence - read from EDGAR, never inferred.
+#: The predecessor's CIK is recorded as a time-bounded identifier of the security
+#: (`security_identifiers`, id_type 'cik', valid_to the succession date), and its filings
+#: are written under the continuing company.
+PREDECESSORS: dict[str, Predecessor] = {
+    # ExxonMobil Holdings Corp continued Exxon Mobil Corp on 2026-07-01.
+    "0002115436": Predecessor("0000034088", dt.date(2026, 7, 1), "0001193125-26-291990"),
+    # The Walt Disney Company (TWDC Holdco 613 Corp) continued the old Disney on 2019-03-20.
+    "0001744489": Predecessor("0001001039", dt.date(2019, 3, 20), "0000950157-19-000301"),
+}
+_SUCCESSOR_BY_PREDECESSOR: dict[str, str] = {p.cik: s for s, p in PREDECESSORS.items()}
+
+
+def successor_of(cik: str) -> str | None:
+    """The CIK that continued this one, if this one is a known predecessor registrant."""
+    return _SUCCESSOR_BY_PREDECESSOR.get(zero_pad_cik(cik))
+
+
+def _company_for_cik(session: Session, cik: str) -> Company | None:
+    """The company a CIK's filings belong to: its own row, or its successor's."""
+    company = session.execute(select(Company).where(Company.cik == cik)).scalar_one_or_none()
+    if company is not None:
+        return company
+    successor = successor_of(cik)
+    if successor is None:
+        return None
+    return session.execute(select(Company).where(Company.cik == successor)).scalar_one_or_none()
+
+
 CHART_VERSION = "v0.1"
 
 #: 0.12 s between requests is ~8 per second, under EDGAR's ceiling of 10 with room for
@@ -283,6 +327,9 @@ class CompanyRecord:
     sic_description: str | None
     entity_type: str | None
     state_of_incorporation: str | None
+    #: The earliest filing date in the payload's recent list: a day the CIK certainly
+    #: identified the registrant. Not its first day - the list is capped at a thousand.
+    earliest_filing_seen: dt.date | None = None
 
 
 class EdgarSubmissionsConnector(EdgarConnector):
@@ -301,6 +348,7 @@ class EdgarSubmissionsConnector(EdgarConnector):
             CompanyRecord(
                 cik=zero_pad_cik(str(payload["cik"])),
                 name=str(payload.get("name") or "").strip(),
+                earliest_filing_seen=_earliest_filing_seen(payload),
                 tickers=tuple(str(t).strip().upper() for t in payload.get("tickers") or [] if t),
                 exchanges=tuple(str(e).strip() for e in payload.get("exchanges") or [] if e),
                 fiscal_year_end_month=fye_month,
@@ -335,6 +383,13 @@ class EdgarSubmissionsConnector(EdgarConnector):
                     f"CIK {record.cik}: submissions carry no fiscalYearEnd; "
                     "companies.fiscal_year_end is NOT NULL and must not be guessed"
                 )
+            successor = successor_of(record.cik)
+            if successor is not None:
+                # The old registrant of a continuing company: its name, tickers and industry
+                # are history, not identity. Record its CIK against the successor's security,
+                # bounded by the succession date, and register nothing else.
+                inserted += _record_predecessor(session, record, successor)
+                continue
             industry_id, added = _upsert_industry(session, record)
             inserted += added
             company = session.execute(
@@ -414,6 +469,52 @@ class EdgarSubmissionsConnector(EdgarConnector):
         return inserted
 
 
+def _record_predecessor(session: Session, record: CompanyRecord, successor: str) -> int:
+    """A predecessor CIK as a time-bounded identifier of the successor's primary security.
+
+    `valid_from` is the earliest filing date the payload shows - a day the CIK certainly
+    identified the registrant, so the interval is one we can vouch for - and `valid_to` is
+    the succession date. When the payload shows no filing, the interval is the succession
+    day alone: coherent, and honest about what was seen.
+    """
+    cik = record.cik
+    company = session.execute(select(Company).where(Company.cik == successor)).scalar_one_or_none()
+    if company is None:
+        raise LookupError(
+            f"CIK {cik} is the predecessor of {successor}, which is not registered yet. "
+            "Register the successor first (its ticker resolves to it); the predecessor's "
+            "filings are then written under it."
+        )
+    security = _primary_security(session, company)
+    existing = session.execute(
+        select(SecurityIdentifier)
+        .where(SecurityIdentifier.id_type == "cik")
+        .where(SecurityIdentifier.id_value == cik)
+    ).scalar_one_or_none()
+    if existing is not None:
+        return 0
+    predecessor = PREDECESSORS[successor]
+    valid_from = record.earliest_filing_seen or predecessor.succeeded_on
+    session.add(
+        SecurityIdentifier(
+            security_id=security.id,
+            id_type="cik",
+            id_value=cik,
+            valid_from=min(valid_from, predecessor.succeeded_on),
+            valid_to=predecessor.succeeded_on,
+        )
+    )
+    session.flush()
+    _log.info(
+        "predecessor_registrant_recorded",
+        cik=cik,
+        successor=successor,
+        succeeded_on=predecessor.succeeded_on.isoformat(),
+        evidence=predecessor.evidence,
+    )
+    return 1
+
+
 def _ticker_exchange_pairs(record: CompanyRecord) -> list[tuple[str, str]]:
     """(ticker, exchange) pairs from EDGAR's parallel lists, tolerating a short exchange list."""
     if not record.tickers:
@@ -424,6 +525,21 @@ def _ticker_exchange_pairs(record: CompanyRecord) -> list[tuple[str, str]]:
         exchange = exchanges[index] if index < len(exchanges) else exchanges[-1]
         pairs.append((ticker, exchange))
     return pairs
+
+
+def _earliest_filing_seen(payload: dict[str, object]) -> dt.date | None:
+    filings = payload.get("filings")
+    recent = filings.get("recent") if isinstance(filings, dict) else None
+    dates = recent.get("filingDate") if isinstance(recent, dict) else None
+    if not isinstance(dates, list):
+        return None
+    parsed = []
+    for value in dates:
+        try:
+            parsed.append(dt.date.fromisoformat(str(value)))
+        except ValueError:
+            continue
+    return min(parsed) if parsed else None
 
 
 def _fiscal_year_end_month(value: object) -> int | None:
@@ -555,6 +671,10 @@ class EdgarCompanyFactsConnector(EdgarConnector):
         if not records:
             return 0
         cik = records[0].cik
+        if successor_of(cik) is not None:
+            _log.info(
+                "predecessor_filings_written_under_successor", cik=cik, successor=successor_of(cik)
+            )
         records, unknowable = _split_unknowable(records)
         if unknowable:
             _log.warning(
@@ -566,7 +686,7 @@ class EdgarCompanyFactsConnector(EdgarConnector):
                     for f in unknowable[:5]
                 ],
             )
-        company = session.execute(select(Company).where(Company.cik == cik)).scalar_one_or_none()
+        company = _company_for_cik(session, cik)
         if company is None:
             raise LookupError(
                 f"CIK {cik} is not registered. Run EdgarSubmissionsConnector first: a statement "
@@ -827,6 +947,26 @@ class EdgarCompanyRefresh(EdgarConnector):
                 parsed += second.records_parsed
                 if second.status != "ok":
                     error = f"companyfacts: {second.error}"
+            predecessor = PREDECESSORS.get(cik)
+            if error is None and predecessor is not None:
+                # The old registrant's filings: registered as an identifier, then written
+                # under the continuing company. A late restatement filed under the old CIK
+                # is still a restatement of this company's history.
+                for stage, connector in (
+                    ("submissions", EdgarSubmissionsConnector),
+                    ("companyfacts", EdgarCompanyFactsConnector),
+                ):
+                    run = connector(user_agent=self._user_agent, throttle=self._throttle).run(
+                        session,
+                        storage=storage,
+                        run_name=f"edgar_{stage}:{predecessor.cik}",
+                        cik=predecessor.cik,
+                    )
+                    rows += run.rows_written
+                    parsed += run.records_parsed
+                    if run.status != "ok":
+                        error = f"predecessor {stage}: {run.error}"
+                        break
         except Exception as exc:  # the lookup itself failed: unknown ticker, EDGAR refusal
             session.rollback()
             error = f"{type(exc).__name__}: {exc}"[:2000]
