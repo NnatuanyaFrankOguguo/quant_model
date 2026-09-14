@@ -91,8 +91,10 @@ FIGURE_TABLES: set[str] = {
     "price_history",  # P2, migration 0012 - business date is `date`
     "shares_outstanding",  # P2, migration 0013
     "shareholdings",  # P2, migration 0014 - units and pct_held are figures off a page
+    "corporate_actions",  # TG2, migration 0015 - a ratio or a cash amount off a document
+    "adjustment_factors",  # TG12, migration 0015 - carries the action's document too
     # --- later phases ---
-    # "corporate_actions", "fx_rates", "adjustment_factors"
+    # "fx_rates"
 }
 
 #: The subset of FIGURE_TABLES that must also carry `page`.
@@ -122,6 +124,9 @@ MODEL_READABLE_TABLES: set[str] = {
     "shareholdings",
     "company_relationships",
     "index_membership",
+    # --- the point-in-time adjustment, TG2/TG12 migration 0015 ---
+    "corporate_actions",  # a backtest reads splits and dividends; known_as_of + ex_date
+    "adjustment_factors",  # P7 check 19: only factors known by the decision date apply
     # --- later phases ---
     # "indicators", "ml_features", "news_sentiment"
 }
@@ -139,6 +144,8 @@ BUSINESS_DATE_COLUMNS: frozenset[str] = frozenset(
         "action_date",
         # `docs/08` uses valid_from for dated validity: identifiers, roles, index membership.
         "valid_from",
+        # Corporate actions and their factors are dated by the ex-date, the day that matters.
+        "ex_date",
     }
 )
 

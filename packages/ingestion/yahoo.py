@@ -23,8 +23,18 @@ deterministic function of stored bytes — a re-parse gives the same bars, and a
 
 Dividends are not reversed: Yahoo's `close` is split-adjusted only; its `adjclose` is the
 dividend-adjusted series and is deliberately not stored (`docs/08` §2.4: no adjusted column;
-adjustments are computed on read from `adjustment_factors`, TG2). The split and dividend
-events themselves stay in the raw document for P3 to turn into `corporate_actions`.
+adjustments are computed on read from `adjustment_factors`, TG2).
+
+## The events are actions
+
+The same response carries the split and dividend events, and since migration 0015 they
+are written too: each split as a `corporate_actions` row with its own `adjustment_factors`
+row (prices before the ex-date x from/to), each cash dividend as an action with its
+per-share amount - unadjusted, because Yahoo serves dividend amounts in post-split terms
+just as it serves prices. An action is first dated its ex-date: it was public by then at
+the latest, which is the bound the price bars use too (`known_as_of` = the day it traded).
+An action seen again with different figures is a second vintage dated the day the change
+was observed, and the `no_update` trigger keeps it that way.
 
 ## Vintages
 
@@ -48,11 +58,17 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from packages.common.models import DataSource, PriceHistory, SecurityIdentifier
+from packages.common.models import (
+    AdjustmentFactor,
+    CorporateAction,
+    DataSource,
+    PriceHistory,
+    SecurityIdentifier,
+)
 from packages.common.timez import utctoday
 from packages.ingestion.base import Connector, DataSourceLicence, RawResponse
 
-__all__ = ["PriceBar", "YahooChartConnector", "unadjust"]
+__all__ = ["ActionRecord", "PriceBar", "Split", "YahooChartConnector", "unadjust"]
 
 _log = structlog.get_logger(__name__)
 
@@ -84,7 +100,33 @@ class Split:
     ratio: Decimal  # numerator / denominator: 4 for a 4-for-1
 
 
-class YahooChartConnector(Connector[PriceBar]):
+@dataclass(frozen=True)
+class Dividend:
+    ex_date: dt.date
+    amount: Decimal  # per share, as served: in post-split terms
+
+
+#: Dividends are quoted to the tenth of a cent; six places keeps every print exact.
+_DIVIDEND_PLACES = Decimal("0.000001")
+
+
+@dataclass(frozen=True)
+class ActionRecord:
+    """One corporate action as the chart response carries it, in as-traded terms."""
+
+    symbol: str
+    action_type: str  # 'split'|'dividend'
+    ex_date: dt.date
+    ratio_from: Decimal | None  # split: 1 old share ...
+    ratio_to: Decimal | None  # ... becomes this many new ones
+    cash_amount: Decimal | None  # dividend: per share, gross, as traded
+    currency: str | None
+
+
+YahooRecord = PriceBar | ActionRecord
+
+
+class YahooChartConnector(Connector[YahooRecord]):
     """`/v8/finance/chart/{symbol}` → `price_history`, one symbol per run."""
 
     name = "yahoo_chart"
@@ -149,8 +191,13 @@ class YahooChartConnector(Connector[PriceBar]):
             http_status=response.status_code,
         )
 
-    def parse(self, raw: RawResponse) -> list[PriceBar]:
-        """Pure. Split-adjusted bars in, as-traded bars out; bars with no close are skipped."""
+    def parse(self, raw: RawResponse) -> list[YahooRecord]:
+        """Pure. Split-adjusted bars in, as-traded bars out; bars with no close are skipped.
+
+        The response's split and dividend events follow the bars, as `ActionRecord`s, in
+        as-traded terms: a dividend amount is multiplied back by the later splits exactly
+        as a price is.
+        """
         payload = json.loads(raw.data.decode("utf-8"))
         chart = payload.get("chart") or {}
         if chart.get("error"):
@@ -193,10 +240,45 @@ class YahooChartConnector(Connector[PriceBar]):
                 )
             )
         bars.sort(key=lambda bar: bar.date)
-        return bars
+        actions: list[ActionRecord] = []
+        for split in splits:
+            numerator, denominator = _ratio_terms(split.ratio)
+            actions.append(
+                ActionRecord(
+                    symbol=symbol,
+                    action_type="split",
+                    ex_date=split.ex_date,
+                    ratio_from=denominator,
+                    ratio_to=numerator,
+                    cash_amount=None,
+                    currency=currency,
+                )
+            )
+        for dividend in _dividends_from(result.get("events") or {}, zone):
+            amount = (dividend.amount * unadjust(dividend.ex_date, splits)).quantize(
+                _DIVIDEND_PLACES, rounding=ROUND_HALF_UP
+            )
+            actions.append(
+                ActionRecord(
+                    symbol=symbol,
+                    action_type="dividend",
+                    ex_date=dividend.ex_date,
+                    ratio_from=None,
+                    ratio_to=None,
+                    cash_amount=amount,
+                    currency=currency,
+                )
+            )
+        actions.sort(key=lambda action: (action.ex_date, action.action_type))
+        return [*bars, *actions]
 
-    def write(self, session: Session, records: list[PriceBar], *, source_document_id: int) -> int:
-        """Insert bars the table does not already hold at these figures. Returns rows inserted."""
+    def write(
+        self, session: Session, records: list[YahooRecord], *, source_document_id: int
+    ) -> int:
+        """Insert bars and actions the tables do not already hold at these figures.
+
+        Returns rows inserted: bars, actions, and the factor row each split carries.
+        """
         if not records:
             return 0
         symbol = records[0].symbol
@@ -204,8 +286,16 @@ class YahooChartConnector(Connector[PriceBar]):
         data_source_id = session.execute(
             select(DataSource.id).where(DataSource.source_name == SOURCE_NAME)
         ).scalar_one()
+        actions = [r for r in records if isinstance(r, ActionRecord)]
+        bars_only = [r for r in records if isinstance(r, PriceBar)]
+        written = _write_actions(
+            session, actions, security_id=security_id, source_document_id=source_document_id
+        )
+        if not bars_only:
+            return written
+        bars: list[PriceBar] = bars_only
 
-        dates = [bar.date for bar in records]
+        dates = [bar.date for bar in bars]
         latest: dict[dt.date, tuple[Decimal | None, ...]] = {}
         rows = session.execute(
             select(
@@ -227,7 +317,7 @@ class YahooChartConnector(Connector[PriceBar]):
         today = utctoday()
         to_insert = []
         unchanged = 0
-        for bar in records:
+        for bar in bars:
             figures = (bar.open_raw, bar.high_raw, bar.low_raw, bar.close_raw, bar.volume)
             stored = latest.get(bar.date)
             if stored is not None and _same(stored, figures):
@@ -253,8 +343,8 @@ class YahooChartConnector(Connector[PriceBar]):
         if unchanged:
             _log.info("unchanged_bars_skipped", symbol=symbol, count=unchanged)
         if not to_insert:
-            return 0
-        inserted = 0
+            return written
+        inserted = written
         for start in range(0, len(to_insert), 2000):
             statement = (
                 pg_insert(PriceHistory)
@@ -264,6 +354,80 @@ class YahooChartConnector(Connector[PriceBar]):
             )
             inserted += len(session.execute(statement).fetchall())
         return inserted
+
+
+def _write_actions(
+    session: Session,
+    actions: list[ActionRecord],
+    *,
+    security_id: int,
+    source_document_id: int,
+) -> int:
+    """Actions the table does not hold at these figures, each split with its factor row.
+
+    First sight is dated the ex-date; a changed figure is a new vintage dated today. A
+    dividend's amount and a split's ratio are the figures compared, so a re-served event
+    with the same terms writes nothing.
+    """
+    if not actions:
+        return 0
+    stored = session.execute(
+        select(
+            CorporateAction.action_type,
+            CorporateAction.ex_date,
+            CorporateAction.ratio_from,
+            CorporateAction.ratio_to,
+            CorporateAction.cash_amount,
+        )
+        .where(CorporateAction.security_id == security_id)
+        .order_by(CorporateAction.known_as_of)
+    ).all()
+    newest: dict[tuple[str, dt.date], tuple[Decimal | None, ...]] = {}
+    for action_type, ex_date, ratio_from, ratio_to, cash in stored:
+        newest[(action_type, ex_date)] = (ratio_from, ratio_to, cash)  # last one wins
+
+    today = utctoday()
+    written = 0
+    for action in actions:
+        figures = (action.ratio_from, action.ratio_to, action.cash_amount)
+        seen = newest.get((action.action_type, action.ex_date))
+        if seen is not None and _same(seen, figures):
+            continue
+        known_as_of = action.ex_date if seen is None else today
+        row = CorporateAction(
+            security_id=security_id,
+            action_type=action.action_type,
+            ex_date=action.ex_date,
+            ratio_from=action.ratio_from,
+            ratio_to=action.ratio_to,
+            cash_amount=action.cash_amount,
+            currency=action.currency,
+            source_document_id=source_document_id,
+            known_as_of=known_as_of,
+        )
+        session.add(row)
+        session.flush()
+        written += 1
+        if action.action_type == "split" and action.ratio_from and action.ratio_to:
+            session.add(
+                AdjustmentFactor(
+                    security_id=security_id,
+                    ex_date=action.ex_date,
+                    action_id=row.id,
+                    factor=action.ratio_from / action.ratio_to,
+                    known_as_of=known_as_of,
+                    source_document_id=source_document_id,
+                )
+            )
+            written += 1
+    session.flush()
+    return written
+
+
+def _ratio_terms(ratio: Decimal) -> tuple[Decimal, Decimal]:
+    """A split ratio back to whole-number terms: 4 -> (4, 1); 1.5 -> (3, 2); 0.1 -> (1, 10)."""
+    numerator, denominator = ratio.as_integer_ratio()
+    return Decimal(numerator), Decimal(denominator)
 
 
 def unadjust(date: dt.date, splits: list[Split]) -> Decimal:
@@ -309,6 +473,27 @@ def _splits_from(events: dict[str, object], zone: dt.tzinfo) -> list[Split]:
             )
         )
     return splits
+
+
+def _dividends_from(events: dict[str, object], zone: dt.tzinfo) -> list[Dividend]:
+    dividends: list[Dividend] = []
+    raw = events.get("dividends") or {}
+    if not isinstance(raw, dict):
+        return dividends
+    for entry in raw.values():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            amount = Decimal(str(entry["amount"]))
+            stamp = int(entry["date"])
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            continue
+        if amount < 0:
+            continue
+        dividends.append(
+            Dividend(ex_date=dt.datetime.fromtimestamp(stamp, zone).date(), amount=amount)
+        )
+    return dividends
 
 
 def _number(series: object, index: int) -> Decimal | None:

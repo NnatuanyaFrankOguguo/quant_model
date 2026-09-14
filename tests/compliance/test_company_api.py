@@ -19,7 +19,9 @@ from sqlalchemy import delete, func, select
 
 from packages.common import db as common_db
 from packages.common.models import (
+    AdjustmentFactor,
     Company,
+    CorporateAction,
     ExtractionJob,
     Filing,
     PriceHistory,
@@ -88,6 +90,12 @@ def apple_loaded(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
             session.execute(delete(Filing).where(Filing.company_id == company_id))
             session.execute(
                 delete(SharesOutstanding).where(SharesOutstanding.security_id.in_(security_ids))
+            )
+            session.execute(
+                delete(AdjustmentFactor).where(AdjustmentFactor.security_id.in_(security_ids))
+            )
+            session.execute(
+                delete(CorporateAction).where(CorporateAction.security_id.in_(security_ids))
             )
             session.execute(delete(PriceHistory).where(PriceHistory.security_id.in_(security_ids)))
             session.execute(

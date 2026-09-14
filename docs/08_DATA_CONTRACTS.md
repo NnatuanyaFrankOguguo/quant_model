@@ -722,6 +722,19 @@ every holder exactly as wealthy, but raw prices show ₦100 → ₦50 — a 50% 
 oversold, volatility doubles, and a backtest books a catastrophic loss that never happened.
 **Nothing raises an error.** See [01_ARCHITECTURE.md](01_ARCHITECTURE.md) §7.1.
 
+> **Built 2026-09-14, migration 0015.** Both tables exist, with three deliberate readings of the
+> DDL above. `corporate_actions` carries `known_as_of` in its unique key
+> (`security_id, ex_date, action_type, known_as_of`), so a corrected ratio is a second row —
+> the rule every other figure table here follows; the `no_update` trigger holds it. `factor`
+> is **each action's own multiplier, never cumulative**: a stored cumulative product is one
+> global vintage that every new action rewrites, which is the adjusted-column sin one level
+> down; `packages/common/adjust.py` multiplies the factors whose ex-date is after the bar
+> and whose `known_as_of` is on or before the decision date. And `adjustment_factors` carries
+> `source_document_id` too (§2.13: provenance on every figure). First source: the split and
+> dividend events in every stored Yahoo chart response; a first sight is dated its ex-date,
+> the day it was public at the latest. A dividend's factor is not written — adjusting a price
+> series for cash dividends is a total-return choice for P6/P7 to make explicitly.
+
 ```sql
 -- [proposed] TG2 — OPERATIONS §1.3
 CREATE TABLE fx_rates (

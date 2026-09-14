@@ -19,6 +19,7 @@ from typing import Literal
 from sqlalchemy import and_, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
+from packages.common.adjust import cumulative_factor, factors_known
 from packages.common.models import (
     Company,
     DataSource,
@@ -178,9 +179,10 @@ class PriceReaction:
     four bars must exist, known by the decision date; otherwise there is no reaction,
     never a partial one.
 
-    As traded means unadjusted: a split inside the window would read as a crash. Until
-    P3 holds corporate actions (`docs/08` §2.4), a window with an implausible one-day
-    move is withheld rather than served wrong - see `_IMPLAUSIBLE_DAY_RATIO`.
+    The closes are as traded; the returns are on closes adjusted by the corporate actions
+    known on the decision date (`packages.common.adjust`), so a split inside the window is
+    the non-event it was. A window still holding an implausible one-day move after that is
+    an action the tables do not hold, and is withheld - see `_IMPLAUSIBLE_DAY_RATIO`.
     """
 
     before: PriceRef
@@ -670,9 +672,10 @@ def _prices_on(
 
 #: Calendar days after a publication day that surely hold its fifth trading day.
 _REACTION_LOOKAHEAD_DAYS = 12
-#: A close that is this many times its predecessor (or the inverse) within the window is
-#: a corporate action, not a reaction - Apple's 4:1 split of 2020-08-31 turns 499.23 into
-#: 129.04 as traded. The window is withheld, and the reason is this constant's name.
+#: After adjustment by every action known on the decision date, a close that is still this
+#: many times its predecessor (or the inverse) inside the window is an action the tables do
+#: not hold - the window is withheld rather than served wrong, and the reason is this name.
+#: Before migration 0015 this was the only guard; Apple's 4:1 of 2020-08-31 tripped it.
 _IMPLAUSIBLE_DAY_RATIO = Decimal("1.5")
 
 
@@ -683,9 +686,13 @@ def _reactions_around(
 
     Bars are taken at their newest vintage known by `known_by`, the decision date - a bar
     republished later with a different close is a different vintage, as everywhere here.
+    The returns are computed on closes adjusted by the corporate actions known on that
+    date (`packages.common.adjust`), so a split inside the window is a non-event, as it
+    was for every holder. The closes returned are still as traded.
     """
     if not dates:
         return {}
+    factors = factors_known(session, security_id=security_id, decision_date=known_by)
     windows = [
         PriceHistory.date.between(
             on - dt.timedelta(days=_PRICE_LOOKBACK_DAYS),
@@ -720,23 +727,20 @@ def _reactions_around(
         if len(after) < 5:
             continue
         window = [newest[d] for d in [before[-1], on, *after[:5]]]
+        adjusted = [bar.close_raw * cumulative_factor(bar.date, factors)[0] for bar in window]
         if any(
-            not (
-                1 / _IMPLAUSIBLE_DAY_RATIO
-                <= later.close_raw / earlier.close_raw
-                <= _IMPLAUSIBLE_DAY_RATIO
-            )
-            for earlier, later in zip(window, window[1:], strict=False)
+            not (1 / _IMPLAUSIBLE_DAY_RATIO <= later / earlier <= _IMPLAUSIBLE_DAY_RATIO)
+            for earlier, later in zip(adjusted, adjusted[1:], strict=False)
         ):
-            continue  # a split or similar inside the window: as-traded closes would lie
+            continue  # an action we do not hold, inside the window: the closes would lie
         b, d0, d1, d5 = window[0], window[1], window[2], window[6]
         result[on] = PriceReaction(
             before=b,
             on_day=d0,
             after_1=d1,
             after_5=d5,
-            return_1d=(d1.close_raw / b.close_raw - 1).quantize(Decimal("0.0001")),
-            return_5d=(d5.close_raw / b.close_raw - 1).quantize(Decimal("0.0001")),
+            return_1d=(adjusted[2] / adjusted[0] - 1).quantize(Decimal("0.0001")),
+            return_5d=(adjusted[6] / adjusted[0] - 1).quantize(Decimal("0.0001")),
         )
     return result
 

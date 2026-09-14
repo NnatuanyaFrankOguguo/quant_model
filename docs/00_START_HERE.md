@@ -463,7 +463,7 @@ describes the source's lag, not ours.
 | Docker | ✅ 29.6.1 (Desktop must be *running* for backup/restore) |
 | Node (needed at P9) | ✅ v24.14.0 |
 | Monorepo scaffold | ✅ 4 packages (`common`, `compliance`, `ingestion`, `scheduler`), the rest reserved — `packages/README.md` |
-| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 31 tables + `alembic_version`, at migration 0014 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The rest are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
+| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 33 tables + `alembic_version`, at migration 0015 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The rest are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
 | FastAPI service | ✅ `/health`, ping, the macro series routes, and `/v1/public/companies{,/{t}/statements,/ratios,/dcf}` — mode gate, bearer auth, audit row per request, every response type registered |
 | Any application code | ✅ The spine. No financial logic, by design |
 | CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed — no remote** |
@@ -491,6 +491,9 @@ Ordered. The first four are the difference between P0.4 running and not running.
       Hold Apple's FY2025 revenue (416,161m), total assets and `interest_expense` (NULL) against
       the 10-K; run the DCF at a 9% and a 10% discount rate. Then P2 is 🧪 for the same reason
       P0 is — CI has never run — and P3's entry criteria are next
+- [ ] **Check nine, again, now with the actions held:** `SELECT close_raw FROM price_history`
+      at 2020-08-28 still reads 499.23, and `adjusted_close(..., decision_date=2020-09-01)`
+      reads 124.81 — the promise [08](08_DATA_CONTRACTS.md) §2.4 made, kept in code
 - [ ] **One question a week from the Kaizen ledger** ([05](05_USER_STORIES.md) §11) — the
       questions a person actually asks, each with its honest status; the first five to pick are
       named in §11.3. Each is one PR: route, test, screen, and the status flipped in the ledger
@@ -596,7 +599,7 @@ the stories each one blocks are in [05_USER_STORIES](05_USER_STORIES.md) §9.
 | ID | Gap | Why it bites | Lands in |
 |---|---|---|---|
 | **TG1** | **Price-history ingestion has no task.** T9 (indicators) computes on `price_history` and T11 (backtest) needs OHLCV bars — nothing fills either. | Hard blocker for P6 and P7, and invisible until the morning you start P6. | P2 (US), P4 (NGX) |
-| **TG2** | **All six `OPERATIONS.md` Part 1 correctness tables are unscheduled** — corporate actions (§1.1, "the highest-priority gap"), trading calendar, FX, ticker history, fiscal alignment, unit conversion. | Un-adjusted prices silently corrupt every indicator and backtest downstream. | P0 schema, P3 data |
+| **TG2** | **All six `OPERATIONS.md` Part 1 correctness tables are unscheduled** — corporate actions (§1.1, "the highest-priority gap"), trading calendar, FX, ticker history, fiscal alignment, unit conversion. | Un-adjusted prices silently corrupt every indicator and backtest downstream. | P0 schema, P3 data · corporate actions ✅ 0015 (US), fiscal alignment ✅ P2; the other four P3 |
 | **TG3** | **Auth/identity has no task.** "auth" is one word inside T16 (P9). | Multi-user is mandated from day one and mode derives from the principal in P0. | P0 |
 | **TG4** | **Backup and disaster recovery is unscheduled** (`OPERATIONS.md` §2.1). | The dataset is the moat. Losing it is the only unrecoverable failure. | P0 |
 | **TG5** | **The data-licensing gate has no enforcing task.** | `PROJECT_CONTEXT.md` §9.3 calls it "the one that kills deals". | P0, enforced every phase |
@@ -606,7 +609,7 @@ the stories each one blocks are in [05_USER_STORIES](05_USER_STORIES.md) §9.
 | **TG9** | **The storage-engine decision is contradictory and unscheduled** — `DATA_FOUNDATION.md` says DuckDB, `SPEC.md`'s DDL is Postgres-flavoured. | Rework risk; the DDL is written in one dialect or the other. | P0 (ADR-0001) |
 | **TG10** | **The manual override has no task.** T4's review queue covers new extractions, not correcting a figure already on screen. | Trust erosion; violates the no-silent-overwrite rule. | P3 |
 | **TG11** | **There is no `watchlists` table**, though T7's brief is specified to pull "watchlist moves". | Cheap now, annoying later. | P0 schema, P5 use |
-| **TG12** | **`adjustment_factors` has no point-in-time dimension.** A corporate action can be announced after its ex-date. | A subtle leak in P7's adjusted-price handling. | P3 |
+| **TG12** | **`adjustment_factors` has no point-in-time dimension.** A corporate action can be announced after its ex-date. | A subtle leak in P7's adjusted-price handling. | ✅ migration 0015, 2026-09-14 |
 | **TG13** | **Two different thresholds are both written as "85%", and the pass bar is missing.** `TEAM_BRIEF.md` Part 4 sets **≥85% on 10 filings** as v0.4's *stage gate*; `TEAM_BRIEF.md` Part 3 uses the same 85% as the *abandon / buy-EODHD* trigger. A pass bar and an abandon bar cannot be the same number. A third unrelated 0.85 (per-extraction review routing, P4.3) is adjacent enough to be conflated with both. | **The P4 gate is unfalsifiable while the pass bar equals the abandon floor** — clearing "abandon" reads as passing. | **Resolved — see [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §3, task P4.0.** Numbers now set: 95% headline / 90% all-items pass bar, 85% abandon floor. |
 | **TG14** | **Nothing specifies who double-checks the golden set.** And the premise is **mis-cited**: no root document requires a second person — `TEAM_BRIEF.md` §2.3 asks only that the golden set be built by someone *accountable* for it. The requirement is this document set's own good idea, presented as inherited. | The set encodes one person's assumptions — and the project is explicitly solo, so the realistic answer is "no second person exists". That must be *recorded*, not left open behind a 🔴 gate. | P3 — **force the decision**: name the second person and the date, or record that none was available and raise production sampling to weekly for P4's first two months |
 | **TG15** | **No test asserts the paper trader and backtester share a cost-model *instance*.** | Two implementations drift, discovered with real money. | P11 |
@@ -642,6 +645,14 @@ knowledge), TG20 (stale thresholds). None of them raise an error.
 > dropped two of its columns. **TG13 was mis-stated**: the number is not missing, it is
 > *doubled* — the pass bar and the abandon floor are both "85%", so clearing "abandon" reads as
 > passing.
+>
+> **Build note, 2026-09-14.** **TG12 is closed and TG2's first table is in**: migration 0015
+> creates `corporate_actions` and `adjustment_factors` with `known_as_of` in both keys, the
+> Yahoo connector writes every split and dividend the chart response carries (as traded; a
+> first sight is dated its ex-date), and `packages/common/adjust.py` computes the adjusted
+> close on read from the factors known on the decision date — 499.23 on 2020-08-28 reads
+> 124.81 from 2020-08-31 and 499.23 before it. Five of TG2's six code paths remain P3's:
+> trading calendar, FX, ticker history, unit conversion (fiscal alignment landed in P2).
 >
 > **TG15 is specified as the wrong test** — the gap requires a shared cost-model *instance*;
 > the acceptance criteria test that the two modules import the same *class*, which two

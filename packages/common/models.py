@@ -562,6 +562,56 @@ class SharesOutstanding(Base):
 
 
 # ---------------------------------------------------------------------------
+# §2.4 TG2 / TG12 - corporate actions and the point-in-time adjustment (migration 0015)
+# ---------------------------------------------------------------------------
+
+
+class CorporateAction(Base):
+    """One split, bonus, rights issue, dividend or consolidation, as a dated fact off a
+    document. `known_as_of` is in the unique key: a corrected ratio is a second row."""
+
+    __tablename__ = "corporate_actions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), nullable=False)
+    action_type: Mapped[str] = mapped_column(Text, nullable=False)
+    announcement_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    ex_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    record_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    pay_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    ratio_from: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    ratio_to: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    cash_amount: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    subscription_price: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    currency: Mapped[str | None] = mapped_column(CHAR(3), nullable=True)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+    confidence: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    needs_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    known_as_of: Mapped[dt.date] = mapped_column(Date, nullable=False)
+
+
+class AdjustmentFactor(Base):
+    """One action's own multiplier for prices before its ex-date, with the day it became
+    knowable. Never cumulative: the read function multiplies what was known on the day."""
+
+    __tablename__ = "adjustment_factors"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), nullable=False)
+    ex_date: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    action_id: Mapped[int] = mapped_column(ForeignKey("corporate_actions.id"), nullable=False)
+    factor: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    known_as_of: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+
+
+# ---------------------------------------------------------------------------
 # §2.14 #50–54 The entity graph (P2, migration 0014; populated from P3/P4)
 # ---------------------------------------------------------------------------
 
