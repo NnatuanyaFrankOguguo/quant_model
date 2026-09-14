@@ -16,9 +16,18 @@ its month is read. `docs/08` §1.3 and `OPERATIONS.md` §1.5 on fiscal alignment
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
+from dataclasses import dataclass
 
-__all__ = ["fiscal_year_of", "period_label", "period_type_of", "quarter_of"]
+__all__ = [
+    "ExpectedFiling",
+    "fiscal_year_of",
+    "next_expected_filing",
+    "period_label",
+    "period_type_of",
+    "quarter_of",
+]
 
 #: A period end within this many days of a month's start belongs to the previous month.
 _SPILLOVER_DAYS = 7
@@ -28,6 +37,41 @@ _QUARTER = (80, 100)
 _HALF = (170, 195)
 _NINE_MONTHS = (260, 290)
 _YEAR = (350, 380)
+
+
+#: The SEC's *longest* deadlines, in days after the period end: 90 for a 10-K and 45 for
+#: a 10-Q, which are the non-accelerated filer's. Large accelerated filers have 60 and 40,
+#: but the filer category is not stored, so the longest is used: a company is called overdue
+#: only when every category of filer would be. Extensions (Form 12b-25) are not modelled.
+FORM_10K_DEADLINE_DAYS = 90
+FORM_10Q_DEADLINE_DAYS = 45
+
+
+@dataclass(frozen=True)
+class ExpectedFiling:
+    """The next periodic report after the newest period held, and the last day it may be filed."""
+
+    period_end: dt.date  # the last day of the fiscal quarter's month - a 52/53-week filer's
+    form: str  # actual date is within a week of it, which the deadline's slack absorbs
+    due_by: dt.date
+
+
+def next_expected_filing(last_period_end: dt.date, fye_month: int) -> ExpectedFiling:
+    """What should come next, from the newest period held and the fiscal year end alone.
+
+    After a Q3 the next report is the 10-K; after anything else, a 10-Q. The expected period
+    end is the month end three fiscal months on. This is an operational freshness signal
+    (`docs/05` §11, Q12 and Q22) - "is a report due that we do not hold?" - and it says
+    nothing about the figures: it is never written to a figure table.
+    """
+    anchor = _anchor(last_period_end)
+    month, year = anchor.month + 3, anchor.year
+    if month > 12:
+        month, year = month - 12, year + 1
+    period_end = dt.date(year, month, calendar.monthrange(year, month)[1])
+    form = "10-K" if quarter_of(last_period_end, fye_month) == 3 else "10-Q"
+    days = FORM_10K_DEADLINE_DAYS if form == "10-K" else FORM_10Q_DEADLINE_DAYS
+    return ExpectedFiling(period_end=period_end, form=form, due_by=period_end + dt.timedelta(days))
 
 
 def _anchor(end: dt.date) -> dt.date:

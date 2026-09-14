@@ -32,6 +32,7 @@ from packages.common.models import (
 )
 from packages.common.pit import LineItemAsKnown, line_items_as_known_on
 from packages.normalize.chart import SOURCE_SYSTEM_BY_METHOD, ChartVersion, load_chart
+from packages.normalize.periods import next_expected_filing
 from packages.valuation.ratios import compute_ratios
 
 __all__ = [
@@ -74,6 +75,12 @@ class CompanySummary:
     statement_periods: int
     latest_period_end: dt.date | None
     latest_filing_date: dt.date | None
+    #: The report that should come next and the last day the SEC allows for it, derived
+    #: from the newest period held and the fiscal year end (`normalize.periods`). Overdue
+    #: means today is past that day and the report is not held - a freshness signal.
+    next_filing_form: str | None = None
+    next_filing_due_by: dt.date | None = None
+    filing_overdue: bool = False
 
 
 AbsentBecause = Literal["not_in_filing", "no_mapping"]
@@ -168,7 +175,7 @@ def find_security(session: Session, ticker: str) -> SecurityRef | None:
     return SecurityRef(*row) if row else None
 
 
-def list_companies(session: Session) -> list[CompanySummary]:
+def list_companies(session: Session, *, today: dt.date) -> list[CompanySummary]:
     """Every registered company under its primary ticker, and how much of it is loaded.
 
     EDGAR lists every ticker a registrant has - JPMorgan's exchange-traded notes, Bank of
@@ -204,6 +211,7 @@ def list_companies(session: Session) -> list[CompanySummary]:
             periods.c.periods,
             periods.c.latest_period_end,
             periods.c.latest_filing_date,
+            Company.fiscal_year_end,
         )
         .join(Security, Security.id == SecurityIdentifier.security_id)
         .join(Company, Company.id == Security.company_id)
@@ -212,18 +220,29 @@ def list_companies(session: Session) -> list[CompanySummary]:
         .where(SecurityIdentifier.id.in_(select(primary.c.id)))
         .order_by(SecurityIdentifier.id_value)
     ).all()
-    return [
-        CompanySummary(
-            ticker=r[0],
-            legal_name=r[1],
-            cik=r[2],
-            exchange=r[3],
-            statement_periods=int(r[4] or 0),
-            latest_period_end=r[5],
-            latest_filing_date=r[6],
+    companies: list[CompanySummary] = []
+    for r in rows:
+        latest_period_end, fye_month = r[5], r[7]
+        expected = (
+            next_expected_filing(latest_period_end, fye_month)
+            if latest_period_end is not None and fye_month is not None
+            else None
         )
-        for r in rows
-    ]
+        companies.append(
+            CompanySummary(
+                ticker=r[0],
+                legal_name=r[1],
+                cik=r[2],
+                exchange=r[3],
+                statement_periods=int(r[4] or 0),
+                latest_period_end=latest_period_end,
+                latest_filing_date=r[6],
+                next_filing_form=expected.form if expected else None,
+                next_filing_due_by=expected.due_by if expected else None,
+                filing_overdue=expected is not None and today > expected.due_by,
+            )
+        )
+    return companies
 
 
 def statements_as_known_on(

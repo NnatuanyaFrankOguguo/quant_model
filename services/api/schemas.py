@@ -225,6 +225,20 @@ class CompanyInfo(BaseModel):
     latest_filing_date: date | None = Field(
         default=None, description="known_as_of of the newest statement - when it was filed"
     )
+    next_filing_form: str | None = Field(
+        default=None, description="The report that should come next: '10-K' or '10-Q'"
+    )
+    next_filing_due_by: date | None = Field(
+        default=None,
+        description=(
+            "The last day the SEC allows for it, for any filer category - derived from the "
+            "fiscal year end, not from the company's own calendar"
+        ),
+    )
+    filing_overdue: bool = Field(
+        default=False,
+        description="True when that day has passed and the report is not held - a freshness flag",
+    )
 
 
 @register_public_type

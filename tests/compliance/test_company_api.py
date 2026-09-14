@@ -109,6 +109,12 @@ def test_companies_lists_apple_under_its_primary_ticker(client, apple_loaded) ->
     assert apple["cik"] == APPLE_CIK
     assert apple["statement_periods"] > 0
     assert apple["latest_filing_date"] is not None
+    # docs/05 §11 Q12/Q22: the fixture's newest period is Q3 FY2026 (to 2026-06-27), so
+    # the next report is the 10-K, due by the SEC's longest deadline, 2026-12-29.
+    assert apple["latest_period_end"] == "2026-06-27"
+    assert apple["next_filing_form"] == "10-K"
+    assert apple["next_filing_due_by"] == "2026-12-29"
+    assert apple["filing_overdue"] is (dt.date.today() > dt.date(2026, 12, 29))
 
 
 def test_statements_carry_provenance_and_the_filing_date(client, apple_loaded) -> None:

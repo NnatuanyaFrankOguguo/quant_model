@@ -166,7 +166,7 @@ async def macro_observations(
 async def companies() -> CompanyList:
     """Every registered company under its primary ticker, with how much of it is loaded."""
     with get_session() as session:
-        rows = snapshot.list_companies(session)
+        rows = snapshot.list_companies(session, today=utctoday())
     return CompanyList(
         companies=[
             CompanyInfo(
@@ -177,6 +177,9 @@ async def companies() -> CompanyList:
                 statement_periods=r.statement_periods,
                 latest_period_end=r.latest_period_end,
                 latest_filing_date=r.latest_filing_date,
+                next_filing_form=r.next_filing_form,
+                next_filing_due_by=r.next_filing_due_by,
+                filing_overdue=r.filing_overdue,
             )
             for r in rows
         ]

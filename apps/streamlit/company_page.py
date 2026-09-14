@@ -190,6 +190,17 @@ def main() -> None:
         f"{company['statement_periods']} periods loaded, "
         f"newest filed {company['latest_filing_date']}"
     )
+    if company["filing_overdue"]:
+        st.warning(
+            f"🔴 Overdue: a {company['next_filing_form']} was due by "
+            f"{company['next_filing_due_by']} (the SEC's longest deadline) and is not held. "
+            "Either the company is late or our copy is - refresh before relying on this page."
+        )
+    elif company["next_filing_due_by"]:
+        st.caption(
+            f"🟢 Up to date. Next: a {company['next_filing_form']} due by "
+            f"{company['next_filing_due_by']}."
+        )
 
     try:
         statements = fetch_statements(ticker, as_known_on.isoformat(), period_type)

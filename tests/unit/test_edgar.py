@@ -43,6 +43,7 @@ from packages.ingestion.edgar import (
 from packages.normalize.chart import ChartVersion, LabelMapping, load_chart, resolve
 from packages.normalize.periods import (
     fiscal_year_of,
+    next_expected_filing,
     period_label,
     period_type_of,
     quarter_of,
@@ -205,6 +206,29 @@ def test_a_thirteen_week_span_at_year_end_is_q4_not_fy() -> None:
 def test_a_span_the_vocabulary_cannot_name_is_refused() -> None:
     assert period_type_of(dt.date(2025, 1, 1), dt.date(2025, 5, 31), 9) is None  # 5 months
     assert period_type_of(dt.date(2023, 9, 29), dt.date(2025, 9, 27), 9) is None  # 2 years
+
+
+@pytest.mark.parametrize(
+    ("last_period_end", "fye_month", "form", "period_end", "due_by"),
+    [
+        # Apple, September year end: after Q3 the 10-K; after the FY, Q1's 10-Q.
+        (dt.date(2026, 6, 27), 9, "10-K", dt.date(2026, 9, 30), dt.date(2026, 12, 29)),
+        (dt.date(2025, 9, 27), 9, "10-Q", dt.date(2025, 12, 31), dt.date(2026, 2, 14)),
+        # Walmart, January year end.
+        (dt.date(2026, 1, 31), 1, "10-Q", dt.date(2026, 4, 30), dt.date(2026, 6, 14)),
+        (dt.date(2025, 10, 31), 1, "10-K", dt.date(2026, 1, 31), dt.date(2026, 5, 1)),
+        # Coca-Cola's Q1 ends 2026-04-03: a 52/53-week spillover, anchored back to March.
+        (dt.date(2026, 4, 3), 12, "10-Q", dt.date(2026, 6, 30), dt.date(2026, 8, 14)),
+        # Cisco's FY2025 ended 2025-08-02, a July year that spilled into August.
+        (dt.date(2025, 8, 2), 7, "10-Q", dt.date(2025, 10, 31), dt.date(2025, 12, 15)),
+    ],
+)
+def test_the_next_expected_filing_and_the_sec_s_longest_deadline(
+    last_period_end: dt.date, fye_month: int, form: str, period_end: dt.date, due_by: dt.date
+) -> None:
+    """docs/05 §11 Q12/Q22: 'is a report due that we do not hold?' - from the dates alone."""
+    expected = next_expected_filing(last_period_end, fye_month)
+    assert (expected.form, expected.period_end, expected.due_by) == (form, period_end, due_by)
 
 
 def test_period_labels() -> None:
