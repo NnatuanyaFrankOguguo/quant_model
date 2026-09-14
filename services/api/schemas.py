@@ -458,6 +458,54 @@ class RatioHistoryPoint(BaseModel):
     )
 
 
+class DividendPaid(BaseModel):
+    """One cash dividend per share, as it traded and in the decision date's share terms."""
+
+    ex_date: date
+    cash_amount: Decimal = Field(description="Per share, gross, as traded on the ex-date")
+    amount_in_todays_shares: Decimal = Field(
+        description="cash_amount times the split factors known on the decision date, so "
+        "amounts across a split compare like for like"
+    )
+    currency: str | None = None
+    known_as_of: date
+    source_document_id: int
+
+
+class DividendYear(BaseModel):
+    year: int
+    total: Decimal = Field(description="Per share, in the decision date's share terms")
+    count: int = Field(description="Dividends with an ex-date in the year, among those held")
+    change_yoy: Decimal | None = Field(
+        default=None, description="Against the prior year's total; null on the first year"
+    )
+    partial: bool = Field(description="True for the decision date's own year, still running")
+
+
+@register_public_type
+class CompanyDividends(BaseModel):
+    """Does it pay, what, and has it ever cut it - from the corporate actions held.
+
+    Per-share amounts are compared in the share terms of the decision date, using the
+    split factors known on it: a 7-for-1 that turns 3.05 a quarter into 0.47 is not a cut.
+    A cut is a complete year whose total fell below the prior year's. Nothing here is a
+    forecast of the next payment.
+    """
+
+    ticker: str
+    legal_name: str
+    as_known_on: date
+    currency: str
+    attribution: str
+    pays: bool = Field(description="At least one dividend with an ex-date in the last 15 months")
+    latest: DividendPaid | None = None
+    dividends: list[DividendPaid] = Field(description="Oldest first")
+    years: list[DividendYear] = Field(
+        description="Every year from the first dividend held to the decision date's year"
+    )
+    cuts: list[DividendYear] = Field(description="Complete years whose total fell")
+
+
 @register_public_type
 class CompanyRatioHistory(BaseModel):
     """Ratios at every past publication date, so today's multiple has its own context.

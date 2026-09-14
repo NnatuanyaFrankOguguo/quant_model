@@ -29,12 +29,15 @@ from services.api.schemas import (
     Backdrop,
     BackdropReading,
     CompanyDcf,
+    CompanyDividends,
     CompanyInfo,
     CompanyList,
     CompanyRatioHistory,
     CompanyRatios,
     CompanyStatements,
     DcfAssumptionsUsed,
+    DividendPaid,
+    DividendYear,
     Figure,
     MacroObservationPoint,
     MacroObservations,
@@ -360,6 +363,72 @@ def _backdrop(b: snapshot.Backdrop | None) -> Backdrop | None:
         inflation=_reading(b.inflation),
         inflation_basis=b.inflation_basis,
         real_risk_free=b.real_risk_free,
+    )
+
+
+@router.get("/companies/{ticker}/dividends", response_model=CompanyDividends)
+async def company_dividends(
+    ticker: str,
+    as_known_on: dt.date | None = Query(
+        default=None, description="Dividends and splits known on this date; nothing after it."
+    ),
+) -> CompanyDividends:
+    """Every cash dividend per share the actions hold, by year, with the cuts named.
+
+    Amounts are compared in the share terms of the decision date, using the split factors
+    known on it, so a split is not a cut. A year with no dividend among the events held
+    is a year of zero, stated only inside the span the events cover.
+    """
+    decision_date = as_known_on or utctoday()
+    with get_session() as session:
+        ref = snapshot.find_security(session, ticker)
+        if ref is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        history = snapshot.dividends_for(
+            session, security_id=ref.security_id, decision_date=decision_date
+        )
+        attribution = snapshot.attribution_for(session, PRICE_SOURCE)
+    paid = [
+        DividendPaid(
+            ex_date=d.ex_date,
+            cash_amount=d.cash_amount,
+            amount_in_todays_shares=d.amount_in_todays_shares,
+            currency=d.currency,
+            known_as_of=d.known_as_of,
+            source_document_id=d.source_document_id,
+        )
+        for d in history.dividends
+    ]
+    latest = paid[-1] if paid else None
+    return CompanyDividends(
+        ticker=ref.ticker,
+        legal_name=ref.legal_name,
+        as_known_on=decision_date,
+        currency=ref.currency,
+        attribution=attribution,
+        pays=latest is not None and (decision_date - latest.ex_date).days <= 15 * 31,
+        latest=latest,
+        dividends=paid,
+        years=[
+            DividendYear(
+                year=y.year,
+                total=y.total,
+                count=y.count,
+                change_yoy=y.change_yoy,
+                partial=y.partial,
+            )
+            for y in history.years
+        ],
+        cuts=[
+            DividendYear(
+                year=y.year,
+                total=y.total,
+                count=y.count,
+                change_yoy=y.change_yoy,
+                partial=y.partial,
+            )
+            for y in history.cuts
+        ],
     )
 
 

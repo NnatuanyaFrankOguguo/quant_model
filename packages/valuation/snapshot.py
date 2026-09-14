@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from packages.common.adjust import cumulative_factor, factors_known
 from packages.common.models import (
     Company,
+    CorporateAction,
     DataSource,
     Exchange,
     Filing,
@@ -48,6 +49,7 @@ __all__ = [
     "SecurityRef",
     "SharesRef",
     "backdrop_for",
+    "dividends_for",
     "attribution_for",
     "find_security",
     "latest_price",
@@ -229,6 +231,42 @@ BACKDROP_BY_CURRENCY: dict[str, tuple[str, str]] = {
 }
 _INDEX_BASIS = "index: value / value twelve months earlier - 1, in percent"
 _SERIES_BASIS = "series: published year-on-year rate"
+
+
+@dataclass(frozen=True)
+class DividendPaid:
+    """One cash dividend per share: as it traded, and in the share terms of the decision date."""
+
+    ex_date: dt.date
+    cash_amount: Decimal  # per share, as traded on the ex-date
+    amount_in_todays_shares: Decimal  # cash_amount x the split factors known on the date
+    currency: str | None
+    known_as_of: dt.date
+    source_document_id: int
+
+
+@dataclass(frozen=True)
+class DividendYear:
+    year: int
+    total: Decimal  # per share, in the decision date's share terms
+    count: int
+    change_yoy: Decimal | None  # fraction against the prior year's total; None on a first year
+    partial: bool  # the decision date's own year, still running
+
+
+@dataclass(frozen=True)
+class DividendHistory:
+    """`docs/05` §11, Q4: does it pay, what, and has it ever cut it.
+
+    Per-share amounts are compared in the share terms of the decision date - a 7-for-1
+    split turns 3.05 a quarter into 0.47 and is not a cut - using the adjustment factors
+    known on that date. A year with no dividend among the events held is a year of zero,
+    and is stated as such only inside the span the events cover.
+    """
+
+    dividends: list[DividendPaid]  # oldest first
+    years: list[DividendYear]  # oldest first, from the first dividend held to the date's year
+    cuts: list[DividendYear]  # the complete years whose total fell below the prior year's
 
 
 @dataclass(frozen=True)
@@ -771,6 +809,77 @@ def _share_counts_on(
             max(eligible, key=lambda c: (c.as_of_date, c.known_as_of)) if eligible else None
         )
     return result
+
+
+#: Dividends are quoted to the tenth of a cent; six places keeps every print and drops the
+#: repeating digits a 7-for-1 factor brings.
+_DIVIDEND_PLACES = Decimal("0.000001")
+
+
+def dividends_for(session: Session, *, security_id: int, decision_date: dt.date) -> DividendHistory:
+    """Every cash dividend known on the date, newest vintage per ex-date, in today's shares."""
+    rows = session.execute(
+        select(
+            CorporateAction.ex_date,
+            CorporateAction.cash_amount,
+            CorporateAction.currency,
+            CorporateAction.known_as_of,
+            CorporateAction.source_document_id,
+        )
+        .where(CorporateAction.security_id == security_id)
+        .where(CorporateAction.action_type == "dividend")
+        .where(CorporateAction.known_as_of <= decision_date)
+        .where(CorporateAction.ex_date <= decision_date)
+        .order_by(CorporateAction.ex_date, CorporateAction.known_as_of)
+    ).all()
+    newest: dict[dt.date, tuple[Decimal, str | None, dt.date, int]] = {}
+    for ex_date, amount, currency, known, document in rows:
+        if amount is None:
+            continue
+        newest[ex_date] = (amount, currency, known, document)  # by vintage: last wins
+    factors = factors_known(session, security_id=security_id, decision_date=decision_date)
+    dividends = [
+        DividendPaid(
+            ex_date=ex_date,
+            cash_amount=amount,
+            amount_in_todays_shares=(amount * cumulative_factor(ex_date, factors)[0]).quantize(
+                _DIVIDEND_PLACES
+            ),
+            currency=currency,
+            known_as_of=known,
+            source_document_id=document,
+        )
+        for ex_date, (amount, currency, known, document) in sorted(newest.items())
+    ]
+    if not dividends:
+        return DividendHistory(dividends=[], years=[], cuts=[])
+
+    by_year: dict[int, list[DividendPaid]] = {}
+    for paid in dividends:
+        by_year.setdefault(paid.ex_date.year, []).append(paid)
+    years: list[DividendYear] = []
+    prior_total: Decimal | None = None
+    for year in range(dividends[0].ex_date.year, decision_date.year + 1):
+        paid_this_year = by_year.get(year, [])
+        total = sum((p.amount_in_todays_shares for p in paid_this_year), Decimal(0))
+        partial = year == decision_date.year
+        years.append(
+            DividendYear(
+                year=year,
+                total=total,
+                count=len(paid_this_year),
+                # A running year against a complete one is not a comparison; no fraction.
+                change_yoy=None if partial else year_on_year(total, prior_total),
+                partial=partial,
+            )
+        )
+        prior_total = total
+    cuts = [
+        y
+        for prev, y in zip(years, years[1:], strict=False)
+        if not y.partial and y.total < prev.total
+    ]
+    return DividendHistory(dividends=dividends, years=years, cuts=cuts)
 
 
 def backdrop_for(session: Session, *, currency: str, decision_date: dt.date) -> Backdrop | None:

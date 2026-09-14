@@ -135,6 +135,11 @@ def fetch_ratio_history(ticker: str, as_known_on: str, period_type: str) -> dict
     )
 
 
+@st.cache_data(ttl=60)
+def fetch_dividends(ticker: str, as_known_on: str) -> dict[str, Any]:
+    return _get(f"/v1/public/companies/{ticker}/dividends", {"as_known_on": as_known_on})
+
+
 def fetch_dcf(ticker: str, params: dict[str, Any]) -> dict[str, Any]:
     return _get(f"/v1/public/companies/{ticker}/dcf", params)
 
@@ -457,6 +462,50 @@ def main() -> None:
         st.caption(f"{history['attribution']}  ·  {history['price_attribution']}")
     else:
         st.caption("No period of this type was first published in its own season.")
+
+    st.subheader("Dividends")
+    try:
+        dividends = fetch_dividends(ticker, as_known_on.isoformat())
+    except httpx.HTTPError as exc:
+        st.error(f"Could not load the dividends: {type(exc).__name__}")
+        return
+    latest = dividends["latest"]
+    if latest is None:
+        st.caption("No cash dividend is held for this company.")
+    else:
+        years = dividends["years"]
+        first_year = years[0]["year"]
+        cuts = dividends["cuts"]
+        cut_years = ", ".join(str(c["year"]) for c in cuts)
+        cut_text = (
+            "no cut in a complete year since"
+            if not cuts
+            else f"cut in {cut_years} (the year's total fell against the year before); since"
+        )
+        st.write(
+            f"{'**Pays.**' if dividends['pays'] else '**Not paying now.**'} Latest "
+            f"**{Decimal(latest['cash_amount']):,.4f}** per share, ex-date {latest['ex_date']}  ·  "
+            f"{len(dividends['dividends'])} dividends held  ·  {cut_text} {first_year}."
+        )
+        st.caption(
+            "Per-share amounts below are in today's share terms - each one multiplied by the "
+            "split factors known on the as-known-on date - so a split is not a cut. A year with "
+            "no dividend among the events held reads 0."
+        )
+        st.table(
+            pd.DataFrame(
+                [
+                    {
+                        "year": f"{y['year']}{' (to date)' if y['partial'] else ''}",
+                        "per share": f"{Decimal(y['total']):,.4f}",
+                        "payments": y["count"],
+                        "change": _fraction(y["change_yoy"], percent=True, signed=True),
+                    }
+                    for y in reversed(years[-12:])
+                ]
+            ).set_index("year")
+        )
+        st.caption(dividends["attribution"])
 
     st.subheader("DCF — on your assumptions")
     st.caption(

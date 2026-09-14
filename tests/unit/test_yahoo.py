@@ -480,3 +480,134 @@ def test_a_known_split_inside_the_window_is_a_non_event_for_the_reaction(
         db_session, security_id=apple_security, dates=[on], known_by=dt.date(2020, 8, 30)
     )
     assert on not in withheld, "the fifth session after is not yet known on the 30th"
+
+
+# --- the dividend history in today's share terms (docs/05 §11, Q4) -----------------------
+
+
+def _write_actions(session: Session, security_id: int, actions: list[tuple[str, str, str]]) -> None:
+    """(type, ex_date, figure) rows straight into corporate_actions, first sight on the ex-date.
+    A split's figure is 'from:to'; a dividend's is its per-share amount."""
+    from packages.common.models import AdjustmentFactor, CorporateAction, DataSource, SourceDocument
+
+    source_id = session.execute(
+        select(DataSource.id).where(DataSource.source_name == "Yahoo Finance")
+    ).scalar_one()
+    document = SourceDocument(
+        data_source_id=source_id,
+        url="file:///actions.json",
+        storage_key="documents/sha256/" + "a" * 64,
+        sha256="a" * 64,
+        media_type="application/json",
+        retrieved_at=dt.datetime(2026, 9, 1, tzinfo=dt.UTC),
+    )
+    session.add(document)
+    session.flush()
+    for action_type, ex_date, figure in actions:
+        row = CorporateAction(
+            security_id=security_id,
+            action_type=action_type,
+            ex_date=dt.date.fromisoformat(ex_date),
+            ratio_from=Decimal(figure.split(":")[0]) if action_type == "split" else None,
+            ratio_to=Decimal(figure.split(":")[1]) if action_type == "split" else None,
+            cash_amount=Decimal(figure) if action_type == "dividend" else None,
+            currency="USD",
+            source_document_id=document.id,
+            known_as_of=dt.date.fromisoformat(ex_date),
+        )
+        session.add(row)
+        session.flush()
+        if action_type == "split":
+            session.add(
+                AdjustmentFactor(
+                    security_id=security_id,
+                    ex_date=row.ex_date,
+                    action_id=row.id,
+                    factor=row.ratio_from / row.ratio_to,
+                    known_as_of=row.known_as_of,
+                    source_document_id=document.id,
+                )
+            )
+    session.flush()
+
+
+@pytest.mark.invariant
+def test_a_split_is_not_a_cut_and_a_real_cut_is_named(
+    db_session: Session, apple_security: int
+) -> None:
+    """Four years of dividends: 3.05 a quarter, then a 7-for-1 after which 0.47 a quarter is
+    the same money per old share; then a year that really was cut; then the current year,
+    still running, which is never called a cut."""
+    from packages.valuation.snapshot import dividends_for
+
+    _write_actions(
+        db_session,
+        apple_security,
+        [
+            ("dividend", "2023-02-10", "3.05"),
+            ("dividend", "2023-05-12", "3.05"),
+            ("dividend", "2023-08-11", "3.05"),
+            ("dividend", "2023-11-10", "3.05"),
+            ("split", "2024-01-02", "1:7"),
+            ("dividend", "2024-02-09", "0.47"),
+            ("dividend", "2024-05-10", "0.47"),
+            ("dividend", "2024-08-09", "0.47"),
+            ("dividend", "2024-11-08", "0.47"),
+            ("dividend", "2025-02-07", "0.20"),  # the cut
+            ("dividend", "2025-05-09", "0.20"),
+            ("dividend", "2025-08-08", "0.20"),
+            ("dividend", "2025-11-07", "0.20"),
+            ("dividend", "2026-02-06", "0.21"),
+        ],
+    )
+    history = dividends_for(
+        db_session, security_id=apple_security, decision_date=dt.date(2026, 3, 1)
+    )
+    assert len(history.dividends) == 13, "thirteen dividends; the split is not one"
+    first = history.dividends[0]
+    assert first.cash_amount == Decimal("3.05"), "as it traded"
+    assert first.amount_in_todays_shares == Decimal("0.435714"), "3.05 / 7, in today's shares"
+    totals = {
+        y.year: (y.total.quantize(Decimal("0.0001")), y.count, y.partial) for y in history.years
+    }
+    assert totals == {
+        2023: (Decimal("1.7429"), 4, False),  # 12.20 / 7
+        2024: (Decimal("1.8800"), 4, False),
+        2025: (Decimal("0.8000"), 4, False),
+        2026: (Decimal("0.2100"), 1, True),
+    }
+    assert [c.year for c in history.cuts] == [2025], "the split year is not a cut; 2025 is"
+    changes = {y.year: y.change_yoy for y in history.years}
+    assert changes[2023] is None
+    assert changes[2024] == Decimal("0.0787"), "1.88 against 1.742856"
+    assert changes[2025] == Decimal("-0.5745")
+    assert changes[2026] is None, "a running year is not compared with a complete one"
+
+    # Before the split was known, the 2023 amounts stand as they traded.
+    earlier = dividends_for(
+        db_session, security_id=apple_security, decision_date=dt.date(2023, 12, 31)
+    )
+    assert earlier.dividends[0].amount_in_todays_shares == Decimal("3.05")
+    assert [y.year for y in earlier.years] == [2023] and earlier.cuts == []
+
+
+def test_a_year_with_no_dividend_inside_the_span_is_a_zero_and_a_cut(
+    db_session: Session, apple_security: int
+) -> None:
+    from packages.valuation.snapshot import dividends_for
+
+    _write_actions(
+        db_session,
+        apple_security,
+        [("dividend", "2022-06-01", "1.00"), ("dividend", "2024-06-01", "1.00")],
+    )
+    history = dividends_for(
+        db_session, security_id=apple_security, decision_date=dt.date(2024, 12, 31)
+    )
+    assert [(y.year, y.total, y.count) for y in history.years] == [
+        (2022, Decimal("1.00"), 1),
+        (2023, Decimal(0), 0),
+        (2024, Decimal("1.00"), 1),
+    ]
+    assert [c.year for c in history.cuts] == [2023]
+    assert history.years[2].change_yoy is None, "growth from nothing is not a fraction"

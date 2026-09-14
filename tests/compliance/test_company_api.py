@@ -317,12 +317,23 @@ def test_ratio_history_is_the_multiple_as_the_market_first_saw_it(client, apple_
     assert [p["period_label"] for p in early["points"]] == ["FY2023"]
 
 
+def test_dividends_say_none_held_rather_than_guessing(client, apple_loaded) -> None:
+    """docs/05 §11 Q4 through the route. The fixture's 2020 window holds the split and no
+    dividend, so the answer is honest emptiness: not paying, nothing latest, no years, no
+    cuts - never an estimate from the cash-flow total."""
+    body = client.get("/v1/public/companies/AAPL/dividends").json()
+    assert body["ticker"] == "AAPL" and body["attribution"] == "Source: Yahoo Finance"
+    assert body["pays"] is False and body["latest"] is None
+    assert body["dividends"] == [] and body["years"] == [] and body["cuts"] == []
+
+
 def test_no_company_response_field_is_advice_shaped(client, apple_loaded) -> None:
     for path, params in (
         ("/v1/public/companies", {}),
         ("/v1/public/companies/AAPL/statements", {"period_type": "FY"}),
         ("/v1/public/companies/AAPL/ratios", {}),
         ("/v1/public/companies/AAPL/ratios/history", {}),
+        ("/v1/public/companies/AAPL/dividends", {}),
         (
             "/v1/public/companies/AAPL/dcf",
             {"growth": "0.05", "discount_rate": "0.09", "terminal_growth": "0.02"},

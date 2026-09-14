@@ -30,6 +30,7 @@ from enum import Enum
 from packages.compliance.mode import Mode
 from services.api.schemas import (
     CompanyDcf,
+    CompanyDividends,
     CompanyList,
     CompanyRatioHistory,
     CompanyRatios,
@@ -83,6 +84,9 @@ MANIFEST: dict[str, RouteSpec] = {
     ),
     "GET /v1/public/companies/{ticker}/ratios/history": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyRatioHistory
+    ),
+    "GET /v1/public/companies/{ticker}/dividends": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyDividends
     ),
     "GET /v1/public/companies/{ticker}/dcf": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyDcf
