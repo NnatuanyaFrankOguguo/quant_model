@@ -775,3 +775,68 @@ def test_a_fact_ending_after_its_own_filing_is_dropped_not_dated(
         .where(Statement.period_end == dt.date(2025, 9, 27))
     ).scalar_one()
     assert fy2025_balance.known_as_of == dt.date(2025, 10, 31)
+
+
+@pytest.mark.invariant
+def test_a_period_reported_under_two_contexts_is_one_statement(
+    db_session: Session, apple: Company
+) -> None:
+    """Cisco's Q3 FY2011 10-Q carries the quarter under two context start dates.
+
+    Here Apple's Q1 FY2026 10-Q is given a second context starting two days late, carrying
+    a tag the quarter lacks (interest expense) and a revenue figure that disagrees. One
+    statement results: the quarter's own revenue stands, the missing tag is taken from
+    the slipped context, and the merge and the conflict are both logged.
+    """
+    import structlog
+
+    payload = json.loads(_facts_raw().data)
+    us_gaap = payload["facts"]["us-gaap"]
+    quarter = {"end": "2025-12-27", "accn": "0000320193-26-000006", "fy": 2026, "fp": "Q1"}
+    assert not any(
+        f["end"] == "2025-12-27" and f.get("start")
+        for f in us_gaap["InterestExpense"]["units"]["USD"]
+    ), "the fixture must not already carry interest expense for the quarter"
+    us_gaap["InterestExpense"]["units"]["USD"].append(
+        {**quarter, "start": "2025-09-30", "val": 100, "form": "10-Q", "filed": "2026-01-30"}
+    )
+    us_gaap["RevenueFromContractWithCustomerExcludingAssessedTax"]["units"]["USD"].append(
+        {**quarter, "start": "2025-09-30", "val": 1, "form": "10-Q", "filed": "2026-01-30"}
+    )
+    raw = RawResponse(
+        data=json.dumps(payload).encode(), media_type="application/json", url="c", http_status=200
+    )
+    with structlog.testing.capture_logs() as logs:
+        result = _facts_connector(raw).run(db_session, cik=APPLE_CIK)
+    assert result.status == "ok", result.error
+
+    merges = [e for e in logs if e["event"] == "period_reported_under_several_contexts"]
+    assert len(merges) == 1
+    assert merges[0]["period"] == "income Q1 to 2025-12-27"
+    assert (
+        merges[0]["contexts"][0].startswith("2025-09-28 (")
+        and "2025-09-30 (2 facts)" in (merges[0]["contexts"][1])
+    )
+    assert merges[0]["tags_added"] == ["InterestExpense from 2025-09-30"]
+    assert merges[0]["conflicts"] == [
+        "RevenueFromContractWithCustomerExcludingAssessedTax: 143756000000 from 2025-09-28 "
+        "vs 1 from 2025-09-30"
+    ]
+
+    statements = (
+        db_session.execute(
+            select(Statement)
+            .where(Statement.company_id == apple.id)
+            .where(Statement.statement_type == "income")
+            .where(Statement.period_type == "Q1")
+            .where(Statement.period_end == dt.date(2025, 12, 27))
+        )
+        .scalars()
+        .all()
+    )
+    assert len(statements) == 1, "one statement per named period, whatever the contexts"
+    (statement,) = statements
+    assert statement.version == 1 and statement.period_start == dt.date(2025, 9, 28)
+    items = {i.canonical_key: i.value for i in statement.line_items}
+    assert items["revenue"] == Decimal("143756000000"), "the statement's own value stands"
+    assert items["interest_expense"] == Decimal("100"), "a tag only the other context carried"

@@ -620,6 +620,17 @@ CREATE TABLE account_mappings (
 > loads the rest. The right date is not knowable from the filing, so it is not guessed; the
 > raw document keeps the fact as filed.
 
+> **One statement per named period, however many contexts the filing spread it over** (added
+> 2026-09-13, same load). Cisco's Q3 FY2011 10-Q reports the quarter to 2011-04-30 under two
+> context start dates: 2011-01-30 for 36 facts and 2011-02-01 — a slip — for four, gross
+> profit among them. The period vocabulary names both `Q3`, and `statements` allows one
+> version 1 per (company, statement, period type, period end), so the writer refused the
+> second and the company was lost. The connector now merges a filing's contexts per named
+> period: the context carrying the most facts *is* the statement, the others contribute only
+> the tags it lacks, and the merge is logged with every tag it added. A tag both carry with
+> different values is a conflict — the statement's own value stands, the other is logged, and
+> nothing is averaged or guessed.
+
 ### 2.4 Market data tables
 
 ```sql

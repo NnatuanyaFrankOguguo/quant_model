@@ -252,3 +252,22 @@ def _all_keys(value: object) -> set[str]:
         for v in value:
             keys |= _all_keys(v)
     return keys
+
+
+def test_the_company_page_is_a_thin_client_and_shows_a_banner_not_a_stack_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The page holds no SQL and no arithmetic of its own; with the API down it says so."""
+    from streamlit.testing.v1 import AppTest
+
+    script = Path(__file__).resolve().parents[2] / "apps" / "streamlit" / "company_page.py"
+    source = script.read_text(encoding="utf-8")
+    for forbidden in ("sqlalchemy", "psycopg", "from packages", "import packages", "SELECT "):
+        assert forbidden not in source, f"the page must not contain {forbidden!r}"
+
+    monkeypatch.setenv("QUANT_API_BASE", "http://127.0.0.1:9")
+    app = AppTest.from_file(str(script), default_timeout=30).run()
+    assert not app.exception, "the page must not raise when the API is down"
+    banners = [e.value for e in app.error]
+    assert any("Cannot reach the API" in text for text in banners), banners
+    assert any("uvicorn" in text for text in banners), "it must say how to start the API"

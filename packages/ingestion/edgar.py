@@ -585,9 +585,9 @@ class EdgarCompanyFactsConnector(EdgarConnector):
         session.add(job)
         session.flush()
 
-        # (accession) -> (statement_type, period_type, start, end) -> tag -> fact
-        by_filing: dict[str, dict[tuple[str, str, dt.date | None, dt.date], dict[str, XbrlFact]]]
-        by_filing = defaultdict(lambda: defaultdict(dict))
+        # (accession) -> (statement_type, period_type, end) -> context start -> tag -> fact
+        by_filing: dict[str, dict[_PeriodSlot, dict[dt.date | None, dict[str, XbrlFact]]]]
+        by_filing = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
         filing_meta: dict[str, tuple[str, dt.date, dt.date]] = {}  # accn -> (form, filed, max end)
         skipped_period = 0
         for fact in records:
@@ -599,7 +599,7 @@ class EdgarCompanyFactsConnector(EdgarConnector):
                 skipped_period += 1
                 continue
             statement_type = chart.statement_of(key)
-            slot = by_filing[fact.accession_no][(statement_type, period_type, fact.start, fact.end)]
+            slot = by_filing[fact.accession_no][(statement_type, period_type, fact.end)][fact.start]
             existing = slot.get(fact.tag)
             # Prefer the entry EDGAR marks with a calendar frame - its canonical one.
             if existing is None or (existing.frame is None and fact.frame is not None):
@@ -635,9 +635,15 @@ class EdgarCompanyFactsConnector(EdgarConnector):
             )
             filings_inserted += added
             reported: list[ReportedStatement] = []
-            for (statement_type, period_type, start, end), facts_by_tag in sorted(
-                by_filing[accession].items(), key=lambda item: (item[0][3], item[0][0], item[0][1])
+            for (statement_type, period_type, end), contexts in sorted(
+                by_filing[accession].items(), key=lambda item: (item[0][2], item[0][0], item[0][1])
             ):
+                start, facts_by_tag = _merge_contexts(
+                    contexts,
+                    cik=cik,
+                    accession=accession,
+                    period=(statement_type, period_type, end),
+                )
                 keys = chart.keys_for(statement_type, template)
                 reported_by_tag = {tag: f.value for tag, f in facts_by_tag.items()}
                 values = resolve(reported_by_tag, chart, keys)
@@ -680,6 +686,57 @@ class EdgarCompanyFactsConnector(EdgarConnector):
             facts_unknowable_dropped=len(unknowable),
         )
         return outcome.line_items_inserted + filings_inserted + shares_inserted
+
+
+_PeriodSlot = tuple[str, str, dt.date]  # (statement_type, period_type, period_end)
+
+
+def _merge_contexts(
+    contexts: dict[dt.date | None, dict[str, XbrlFact]],
+    *,
+    cik: str,
+    accession: str,
+    period: _PeriodSlot,
+) -> tuple[dt.date | None, dict[str, XbrlFact]]:
+    """One statement per named period, however many contexts the filing spread it over.
+
+    Cisco's Q3 FY2011 10-Q reports the quarter to 2011-04-30 under two contexts: the
+    thirteen weeks from 2011-01-30, carrying 36 facts, and four facts - gross profit among
+    them - from 2011-02-01, a context-date slip. The period vocabulary names both `Q3`, and
+    one filing cannot hold two version-1 statements of one period; the writer refused the
+    second and the whole company was lost. The context carrying the most facts *is* the
+    statement; the others contribute only the tags it lacks, and the merge is logged. A tag
+    both carry with different values is a conflict: the statement's own value stands and
+    the other is logged - never averaged, never guessed (`docs/08` §2.3).
+    """
+    if len(contexts) == 1:
+        ((start, facts),) = contexts.items()
+        return start, facts
+    ranked = sorted(contexts.items(), key=lambda kv: (-len(kv[1]), kv[0] or dt.date.min))
+    start, primary = ranked[0]
+    merged = dict(primary)
+    added: list[str] = []
+    conflicts: list[str] = []
+    for other_start, facts in ranked[1:]:
+        for tag, fact in facts.items():
+            mine = merged.get(tag)
+            if mine is None:
+                merged[tag] = fact
+                added.append(f"{tag} from {other_start}")
+            elif mine.value != fact.value:
+                conflicts.append(
+                    f"{tag}: {mine.value} from {start} vs {fact.value} from {other_start}"
+                )
+    _log.warning(
+        "period_reported_under_several_contexts",
+        cik=cik,
+        accession=accession,
+        period=f"{period[0]} {period[1]} to {period[2]}",
+        contexts=[f"{s} ({len(f)} facts)" for s, f in ranked],
+        tags_added=added[:5],
+        conflicts=conflicts[:5],
+    )
+    return start, merged
 
 
 def _split_unknowable(facts: list[XbrlFact]) -> tuple[list[XbrlFact], list[XbrlFact]]:
