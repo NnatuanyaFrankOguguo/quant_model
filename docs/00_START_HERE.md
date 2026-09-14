@@ -489,6 +489,9 @@ Ordered. The first four are the difference between P0.4 running and not running.
       Hold Apple's FY2025 revenue (416,161m), total assets and `interest_expense` (NULL) against
       the 10-K; run the DCF at a 9% and a 10% discount rate. Then P2 is 🧪 for the same reason
       P0 is — CI has never run — and P3's entry criteria are next
+- [ ] **One question a week from the Kaizen ledger** ([05](05_USER_STORIES.md) §11) — the
+      questions a person actually asks, each with its honest status; the first five to pick are
+      named in §11.3. Each is one PR: route, test, screen, and the status flipped in the ledger
 - [ ] **Create a Backblaze B2 account before P3 collects documents at scale**
       ([ADR-0009](adr/0009-object-storage-and-immutability.md)). ~$0.10/month at this volume.
       It needs a payment method, so the build cannot do it for itself, and P3.1 assumes the
