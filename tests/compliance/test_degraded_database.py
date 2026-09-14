@@ -80,3 +80,39 @@ def test_the_dashboard_shows_a_banner_not_a_stack_trace(monkeypatch: pytest.Monk
     banners = [e.value for e in app.error]
     assert any("Cannot reach the API" in text for text in banners), banners
     assert any("uvicorn" in text for text in banners), "it must say how to start the API"
+
+
+def test_the_operations_report_is_served_anonymously_and_judges_every_job(client) -> None:
+    """The operations page's one call. Public data - it carries no figure, only which jobs
+    ran - and it lists every job the schedule expects, so absence is visible."""
+    from packages.scheduler.jobs import expected_schedule
+
+    response = client.get("/v1/public/operations/connectors", params={"window_days": 7})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["window_days"] == 7
+    names = {j["name"] for j in body["jobs"]}
+    assert set(expected_schedule()) <= names, "every expected job is on the report"
+    levels = {j["level"] for j in body["jobs"]}
+    assert levels <= {"ok", "warning", "error", "never_ran"}
+    assert body["ok"] + body["warning"] + body["error"] + body["never_ran"] == len(body["jobs"])
+    assert body["needs_a_human"] == any(j["level"] != "ok" for j in body["jobs"])
+    for job in body["jobs"]:
+        if job["scheduled_at_utc"] is not None:
+            assert len(job["scheduled_at_utc"]) == 5, "HH:MM"
+
+
+def test_the_operations_page_shows_a_banner_not_a_stack_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("QUANT_API_BASE", "http://127.0.0.1:9")
+    script = Path(__file__).resolve().parents[2] / "apps" / "streamlit" / "operations_page.py"
+    source = script.read_text(encoding="utf-8")
+    for forbidden in ("sqlalchemy", "psycopg", "from packages", "import packages", "SELECT "):
+        assert forbidden not in source, f"the page must not contain {forbidden!r}"
+    app = AppTest.from_file(str(script), default_timeout=30).run()
+    assert not app.exception
+    banners = [e.value for e in app.error]
+    assert any("Cannot reach the API" in text for text in banners), banners

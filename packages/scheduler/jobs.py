@@ -29,7 +29,7 @@ from packages.ingestion.nigeria_data_portal import (
     NigeriaDataPortalGdpConnector,
 )
 from packages.ingestion.yahoo import YahooChartConnector
-from packages.scheduler.runner import ScheduledJob
+from packages.scheduler.runner import Expectation, ScheduledJob
 
 __all__ = [
     "FRED_JOB_PARAMS",
@@ -37,6 +37,7 @@ __all__ = [
     "build_jobs",
     "edgar_refresh_job",
     "expected_run_names",
+    "expected_schedule",
     "price_job",
 ]
 
@@ -68,8 +69,16 @@ def price_job(ticker: str, *, lookback_days: int | None = PRICE_LOOKBACK_DAYS) -
         hour=22 + minute // 60,
         minute=minute % 60,
         job_id=f"yahoo:{ticker}",
+        publishes_every_days=7,
     )
 
+
+#: How often each kind of source publishes, at the longest. A monthly series and its
+#: slack; a quarter plus the 90-day 10-K deadline; the CBN's Monetary Policy Committee
+#: meets every two months.
+MONTHLY_DAYS = 45
+QUARTERLY_DAYS = 185
+MPC_DAYS = 75
 
 #: EDGAR accepts filings until 22:00 US Eastern, 02:00 UTC in winter; the companyfacts
 #: JSON is rebuilt overnight. Three in the morning UTC is after both, and the jobs are six
@@ -89,6 +98,7 @@ def edgar_refresh_job(ticker: str) -> ScheduledJob:
         hour=EDGAR_REFRESH_HOUR + minute // 60,
         minute=minute % 60,
         job_id=f"edgar:{ticker}",
+        publishes_every_days=QUARTERLY_DAYS,
     )
 
 
@@ -100,6 +110,10 @@ def edgar_refresh_job(ticker: str) -> ScheduledJob:
 FRED_JOB_PARAMS: dict[str, dict[str, object]] = {
     "DGS10": {"lookback_days": 3 * 365},
 }
+
+#: How often each FRED series publishes: the 10-year yield daily, the rest monthly, and
+#: the World Bank's Nigerian CPI once a year.
+FRED_CADENCE_DAYS: dict[str, int] = {"DGS10": 7, "FPCPITOTLZGNGA": 400}
 
 
 def build_jobs() -> list[ScheduledJob]:
@@ -127,6 +141,7 @@ def build_jobs() -> list[ScheduledJob]:
             hour=5,
             minute=30,
             job_id=CbnExchangeRateConnector.name,
+            publishes_every_days=7,
         ),
         ScheduledJob(
             connector=CbnMoneyMarketConnector(),
@@ -134,6 +149,7 @@ def build_jobs() -> list[ScheduledJob]:
             hour=5,
             minute=45,
             job_id=CbnMoneyMarketConnector.name,
+            publishes_every_days=MPC_DAYS,
         ),
         ScheduledJob(
             connector=CbnInflationConnector(),
@@ -141,6 +157,7 @@ def build_jobs() -> list[ScheduledJob]:
             hour=6,
             minute=0,
             job_id=CbnInflationConnector.name,
+            publishes_every_days=MONTHLY_DAYS,
         ),
     ]
     # NBS CPI via the Nigeria Data Portal. Monthly data, so a daily pull is generous; it runs
@@ -154,6 +171,7 @@ def build_jobs() -> list[ScheduledJob]:
                 hour=6,
                 minute=5 + offset * 5,
                 job_id=f"ndp:{item}",
+                publishes_every_days=MONTHLY_DAYS,
             )
         )
     # NBS GDP growth via the same portal. Quarterly data polled daily, for the same reason:
@@ -165,6 +183,7 @@ def build_jobs() -> list[ScheduledJob]:
             hour=6,
             minute=5 + len(ITEM_KEYS) * 5,
             job_id="ndp:gdp",
+            publishes_every_days=QUARTERLY_DAYS,
         )
     )
     for offset, series_id in enumerate(FRED_SERIES):
@@ -175,6 +194,7 @@ def build_jobs() -> list[ScheduledJob]:
                 hour=6,
                 minute=15 + offset * 5,
                 job_id=f"fred:{series_id}",
+                publishes_every_days=FRED_CADENCE_DAYS.get(series_id, MONTHLY_DAYS),
             )
         )
     # US prices after the close, one job per name, a minute apart.
@@ -182,6 +202,19 @@ def build_jobs() -> list[ScheduledJob]:
     # US statements before dawn UTC, one job per name, six minutes apart.
     jobs.extend(edgar_refresh_job(ticker) for ticker in US_UNIVERSE)
     return jobs
+
+
+def expected_schedule() -> dict[str, Expectation]:
+    """Every expected run name with when it runs and how often its source publishes.
+    Derived from the same list the scheduler runs, like `expected_run_names`; the manual
+    paths are monthly uploads with no scheduled time."""
+    schedule: dict[str, Expectation] = {
+        job.identity(): Expectation(f"{job.hour:02d}:{job.minute:02d}", job.publishes_every_days)
+        for job in build_jobs()
+    }
+    for source in MANUAL_SOURCES:
+        schedule[f"manual_csv_{source.lower()}"] = Expectation(None, MONTHLY_DAYS)
+    return schedule
 
 
 def expected_run_names() -> set[str]:

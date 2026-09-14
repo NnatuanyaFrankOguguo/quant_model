@@ -14,12 +14,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from packages.common.db import get_session
 from packages.common.sec import filing_index_url
-from packages.common.timez import utctoday
+from packages.common.timez import utcnow, utctoday
 from packages.compliance.mode import Mode
 from packages.ingestion import macro
 from packages.ingestion.edgar import CHART_VERSION
 from packages.ingestion.edgar import SOURCE_NAME as EDGAR_SOURCE
 from packages.ingestion.yahoo import SOURCE_NAME as PRICE_SOURCE
+from packages.scheduler.jobs import expected_schedule
+from packages.scheduler.runner import health_report
 from packages.valuation import snapshot
 from packages.valuation.dcf import DcfAssumptions, dcf
 from services.api.deps import get_mode
@@ -36,11 +38,13 @@ from services.api.schemas import (
     CompanyRatioHistory,
     CompanyRatios,
     CompanyStatements,
+    ConnectorHealthReport,
     DcfAssumptionsUsed,
     DividendPaid,
     DividendYear,
     Figure,
     FilingSeen,
+    JobHealth,
     MacroObservationPoint,
     MacroObservations,
     MacroSeriesInfo,
@@ -172,6 +176,47 @@ async def macro_observations(
 # ---------------------------------------------------------------------------------------
 # P2 - companies: statements, ratios, DCF. Facts and arithmetic on stated inputs.
 # ---------------------------------------------------------------------------------------
+
+
+@router.get("/operations/connectors", response_model=ConnectorHealthReport)
+async def operations_connectors(
+    window_days: int = Query(default=30, ge=1, le=365),
+) -> ConnectorHealthReport:
+    """Every scheduled job and manual path, judged - the operations page's one call.
+
+    Derived from the job list the scheduler runs, so a job cannot be forgotten here;
+    a job that has never run in the window is reported, because its silence is the
+    failure the health check exists to catch.
+    """
+    checked_at = utcnow()
+    with get_session() as session:
+        rows = health_report(
+            session, expected=expected_schedule(), window_days=window_days, now=checked_at
+        )
+    levels = [r.level for r in rows]
+    return ConnectorHealthReport(
+        checked_at=checked_at,
+        window_days=window_days,
+        needs_a_human=any(level != "ok" for level in levels),
+        ok=levels.count("ok"),
+        warning=levels.count("warning"),
+        error=levels.count("error"),
+        never_ran=levels.count("never_ran"),
+        jobs=[
+            JobHealth(
+                name=r.name,
+                scheduled_at_utc=r.scheduled_at_utc,
+                expected=r.expected,
+                last_run_at=r.last_run_at,
+                last_status=r.last_status,
+                runs_in_window=r.runs_in_window,
+                rows_in_window=r.rows_in_window,
+                level=r.level,
+                finding=r.finding,
+            )
+            for r in rows
+        ],
+    )
 
 
 @router.get("/companies", response_model=CompanyList)

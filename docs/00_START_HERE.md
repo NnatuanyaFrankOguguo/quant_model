@@ -470,7 +470,8 @@ describes the source's lag, not ours.
 | Node (needed at P9) | ✅ v24.14.0 |
 | Monorepo scaffold | ✅ 4 packages (`common`, `compliance`, `ingestion`, `scheduler`), the rest reserved — `packages/README.md` |
 | Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 33 tables + `alembic_version`, at migration 0015 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The rest are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
-| FastAPI service | ✅ `/health`, ping, the macro series routes, and `/v1/public/companies{,/{t}/statements,/ratios,/dcf}` — mode gate, bearer auth, audit row per request, every response type registered |
+| FastAPI service | ✅ `/health`, ping, the macro series routes, `/v1/public/companies{,/{t}/statements,/ratios,/ratios/history,/dividends,/filings,/dcf}`, `/v1/public/filings/recent` and `/v1/public/operations/connectors` — mode gate, bearer auth, audit row per request, every response type registered |
+| Screens | ✅ Three thin Streamlit clients: the company page, the macro dashboard, and the operations page (every job judged ok / warning / error / never ran, every data set's as-of) — `python -m streamlit run apps/streamlit/<page>.py` |
 | Any application code | ✅ The spine. No financial logic, by design |
 | CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed — no remote** |
 | Test suite | ✅ 412 passing, 0 skipped (`tests/unit`, `tests/known_answer`, `tests/compliance`; live-network tests are opt-in) |

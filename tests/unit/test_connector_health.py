@@ -177,3 +177,67 @@ def test_run_job_does_not_retry_a_deterministic_failure(monkeypatch) -> None:
 
     assert len(calls) == 1, "a deterministic failure must not be retried"
     assert result.status == "error"
+
+
+# --- the operations report: every expected job, judged ------------------------------------
+
+
+def _report(session: Session, expected, *, window_days: int):  # type: ignore[no-untyped-def]
+    from packages.scheduler.runner import health_report
+
+    return {
+        r.name: r
+        for r in health_report(session, expected=expected, window_days=window_days, now=NOW)
+    }
+
+
+def test_the_report_judges_every_expected_job_and_names_absence(db_session: Session) -> None:
+    from packages.scheduler.runner import Expectation
+
+    expected = {
+        "fred:DGS10": Expectation("06:15", 7),
+        "edgar:AAPL": Expectation("03:00", 185),
+        "manual_csv_nbs": Expectation(None, 45),
+        "ndp:gdp": Expectation("06:10", 185),
+        "cbn_fx": Expectation("05:30", 7),
+    }
+    _run(db_session, "fred:DGS10", days_ago=1, status="ok", rows=3)
+    _run(db_session, "cbn_fx", days_ago=1, status="error", rows=0)
+    _run(db_session, "ndp:gdp", days_ago=1, status="ok", rows=0)
+    _run(db_session, "ndp:gdp", days_ago=3, status="ok", rows=0)
+    _run(db_session, "yahoo_chart", days_ago=2, status="ok", rows=12)  # seen, not expected
+    db_session.flush()
+
+    report = _report(db_session, expected, window_days=7)
+    assert report["fred:DGS10"].level == "ok" and report["fred:DGS10"].scheduled_at_utc == "06:15"
+    assert report["cbn_fx"].level == "error" and report["cbn_fx"].finding == "last run failed"
+    assert report["edgar:AAPL"].level == "never_ran"
+    assert report["edgar:AAPL"].finding == "never ran in the last 7 days"
+    assert report["manual_csv_nbs"].level == "warning"
+    assert report["manual_csv_nbs"].finding == "no manual upload in the window"
+    # Two quiet runs of a quarterly series inside a week are quiet, not a silent failure.
+    gdp = report["ndp:gdp"]
+    assert gdp.level == "ok" and gdp.finding is not None and gdp.finding.startswith("quiet:")
+    # A name seen running that the schedule does not expect is reported, and says so.
+    assert report["yahoo_chart"].expected is False and report["yahoo_chart"].level == "ok"
+
+    # Over a window longer than the series' publishing span, the same quiet runs are the
+    # signature the health check exists for.
+    wide = _report(db_session, expected, window_days=200)
+    assert wide["ndp:gdp"].level == "warning"
+    assert "wrote zero rows" in (wide["ndp:gdp"].finding or "")
+
+
+def test_the_real_schedule_gives_every_job_a_cadence_and_a_time() -> None:
+    from packages.scheduler.jobs import expected_schedule
+
+    schedule = expected_schedule()
+    assert schedule["edgar:AAPL"].scheduled_at_utc == "03:00"
+    assert schedule["edgar:AAPL"].publishes_every_days == 185
+    assert schedule["yahoo:AAPL"].publishes_every_days == 7
+    assert schedule["ndp:gdp"].publishes_every_days == 185
+    assert schedule["cbn_mpr"].publishes_every_days == 75
+    assert schedule["fred:DGS10"].publishes_every_days == 7
+    assert schedule["fred:FEDFUNDS"].publishes_every_days == 45
+    assert schedule["manual_csv_nbs"].scheduled_at_utc is None
+    assert all(e.publishes_every_days >= 7 for e in schedule.values())

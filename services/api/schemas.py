@@ -58,6 +58,36 @@ class Health(BaseModel):
     migrations: str = Field(description="Current alembic revision, or 'unknown'")
 
 
+class JobHealth(BaseModel):
+    """One job the schedule expects, judged: ok, warning, error, or never ran."""
+
+    name: str
+    scheduled_at_utc: str | None = Field(
+        default=None, description="'HH:MM' UTC, or null for a manual path"
+    )
+    expected: bool
+    last_run_at: dt.datetime | None = None
+    last_status: str | None = None
+    runs_in_window: int
+    rows_in_window: int
+    level: str = Field(description="'ok' | 'warning' | 'error' | 'never_ran'")
+    finding: str | None = Field(default=None, description="What needs a human, when something does")
+
+
+@register_public_type
+class ConnectorHealthReport(BaseModel):
+    """Every job, judged, plus the counts a glance needs. Operational facts only."""
+
+    checked_at: dt.datetime
+    window_days: int
+    needs_a_human: bool
+    ok: int
+    warning: int
+    error: int
+    never_ran: int
+    jobs: list[JobHealth]
+
+
 @register_public_type
 class PublicPing(BaseModel):
     """Proves the public router and mode derivation work.

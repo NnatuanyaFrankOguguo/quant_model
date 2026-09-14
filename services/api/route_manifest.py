@@ -36,6 +36,7 @@ from services.api.schemas import (
     CompanyRatioHistory,
     CompanyRatios,
     CompanyStatements,
+    ConnectorHealthReport,
     Health,
     MacroObservations,
     MacroSeriesList,
@@ -76,6 +77,9 @@ MANIFEST: dict[str, RouteSpec] = {
     "GET /v1/public/macro/series": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, MacroSeriesList),
     "GET /v1/public/macro/series/{code}/observations": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, MacroObservations
+    ),
+    "GET /v1/public/operations/connectors": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, ConnectorHealthReport
     ),
     "GET /v1/public/companies": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyList),
     "GET /v1/public/companies/{ticker}/statements": RouteSpec(

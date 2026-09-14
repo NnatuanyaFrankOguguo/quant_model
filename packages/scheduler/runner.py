@@ -63,6 +63,12 @@ class ScheduledJob:
     hour: int = 6
     minute: int = 0
     job_id: str = ""
+    #: How often the source publishes something new, in days, at the longest. A run
+    #: that writes nothing inside that span is a quiet day, not a finding; a window
+    #: of quiet runs longer than it is the silent-failure signature. Daily sources
+    #: get a week (holidays); monthly ones a month plus slack; quarterly ones a
+    #: quarter plus the filing deadline.
+    publishes_every_days: int = 7
 
     def identity(self) -> str:
         return self.job_id or f"{self.connector.name}:{sorted(self.params.items())}"
@@ -208,6 +214,96 @@ def _scheduled_run(job: ScheduledJob) -> ConnectorRunResult:
     """
     reset_steps()
     return run_job(job)
+
+
+@dataclass(frozen=True)
+class Expectation:
+    """What the schedule expects of one name: when it runs, and how often it should write."""
+
+    scheduled_at_utc: str | None  # 'HH:MM', or None for a path a human feeds
+    publishes_every_days: int
+
+
+@dataclass(frozen=True)
+class JobHealth:
+    """One job the schedule expects (or one name seen running), judged for a screen.
+
+    `level` is the console's vocabulary: 'ok', 'warning', 'error', and 'never_ran' for a
+    job the schedule expects that has not run in the window - which fails exactly like a
+    job that runs and writes nothing, except quieter.
+    """
+
+    name: str
+    scheduled_at_utc: str | None  # 'HH:MM' for a scheduled job; None for a manual path
+    expected: bool  # in the schedule or the manual list, as opposed to merely seen
+    last_run_at: dt.datetime | None
+    last_status: str | None
+    runs_in_window: int
+    rows_in_window: int
+    level: str
+    finding: str | None
+
+
+def health_report(
+    session: Session,
+    *,
+    expected: dict[str, Expectation],
+    window_days: int = 30,
+    now: dt.datetime | None = None,
+) -> list[JobHealth]:
+    """`check_health` joined with what the schedule expects, so absence is reported too.
+
+    `expected` maps every job the health check should see to its expectation: the time it
+    runs (None for a path a human feeds) and how often its source publishes. A manual path
+    that has not run is a warning - a reminder, not a failure; a scheduled job that has not
+    run is an error. Quiet runs inside a source's publishing span are ok: a quarterly
+    series checked over a week has nothing to write, and saying "silent failure" about it
+    would teach the reader to ignore the words.
+    """
+    seen = {h.connector_name: h for h in check_health(session, window_days=window_days, now=now)}
+    report: list[JobHealth] = []
+    for name in sorted(set(expected) | set(seen)):
+        health = seen.get(name)
+        expectation = expected.get(name)
+        at = expectation.scheduled_at_utc if expectation else None
+        is_expected = expectation is not None
+        finding: str | None
+        if health is None:
+            level = "warning" if name.startswith("manual_csv_") else "never_ran"
+            finding = (
+                "no manual upload in the window"
+                if level == "warning"
+                else f"never ran in the last {window_days} days"
+            )
+            report.append(JobHealth(name, at, is_expected, None, None, 0, 0, level, finding))
+            continue
+        finding = health.finding
+        if health.last_status == "error":
+            level = "error"
+        elif health.unhealthy and expectation and window_days < expectation.publishes_every_days:
+            level = "ok"
+            finding = (
+                f"quiet: nothing due yet - the source publishes about every "
+                f"{expectation.publishes_every_days} days and the window is {window_days}"
+            )
+        elif health.unhealthy:
+            level = "warning"
+        else:
+            level = "ok"
+        report.append(
+            JobHealth(
+                name=name,
+                scheduled_at_utc=at,
+                expected=is_expected,
+                last_run_at=health.last_run_at,
+                last_status=health.last_status,
+                runs_in_window=health.runs_in_window,
+                rows_in_window=health.rows_in_window,
+                level=level,
+                finding=finding,
+            )
+        )
+    return report
 
 
 def check_health(
