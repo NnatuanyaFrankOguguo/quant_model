@@ -34,6 +34,7 @@ from packages.ingestion import base as ingestion_base
 from packages.ingestion.base import RawResponse, register
 from packages.ingestion.edgar import (
     EdgarCompanyFactsConnector,
+    EdgarCompanyRefresh,
     EdgarRefusedError,
     EdgarSubmissionsConnector,
     MissingUserAgentError,
@@ -891,3 +892,96 @@ def test_a_period_reported_under_two_contexts_is_one_statement(
     items = {i.canonical_key: i.value for i in statement.line_items}
     assert items["revenue"] == Decimal("143756000000"), "the statement's own value stands"
     assert items["interest_expense"] == Decimal("100"), "a tag only the other context carried"
+
+
+# --------------------------------------------------------------------------------------
+# The scheduled refresh: one job per company, two connectors, three run records
+# --------------------------------------------------------------------------------------
+
+
+def _refresh_connector(
+    monkeypatch: pytest.MonkeyPatch, *, facts: RawResponse | None = None
+) -> EdgarCompanyRefresh:
+    """A refresh whose network is the fixtures: ticker map, submissions, company facts."""
+    import packages.ingestion.edgar as edgar_module
+
+    monkeypatch.setattr(
+        edgar_module, "load_ticker_map", lambda session, connector: {"AAPL": APPLE_CIK}
+    )
+    monkeypatch.setattr(
+        EdgarSubmissionsConnector, "fetch", lambda self, **params: _submissions_raw()
+    )
+    monkeypatch.setattr(
+        EdgarCompanyFactsConnector, "fetch", lambda self, **params: facts or _facts_raw()
+    )
+    EdgarCompanyRefresh._ticker_map = None
+    return EdgarCompanyRefresh(user_agent=UA)
+
+
+def test_the_refresh_runs_identity_then_statements_and_records_all_three(
+    db_session: Session, local_store: LocalDiskBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from packages.common.models import ConnectorRun
+
+    connector = _refresh_connector(monkeypatch)
+    register(db_session, connector)
+    result = connector.run(db_session, run_name="edgar:AAPL", ticker="AAPL")
+    assert result.status == "ok", result.error
+    assert result.connector_name == "edgar:AAPL"
+    assert result.rows_written > 0 and result.records_parsed == 620 + 1
+
+    company = db_session.execute(select(Company).where(Company.cik == APPLE_CIK)).scalar_one()
+    assert (
+        db_session.execute(
+            select(func.count()).select_from(Statement).where(Statement.company_id == company.id)
+        ).scalar_one()
+        > 0
+    )
+    names = {
+        r.connector_name: r.status for r in db_session.execute(select(ConnectorRun)).scalars().all()
+    }
+    # The script's names, so history reads continuously - and the job's own, for the
+    # health check.
+    assert names[f"edgar_submissions:{APPLE_CIK}"] == "ok"
+    assert names[f"edgar_companyfacts:{APPLE_CIK}"] == "ok"
+    assert names["edgar:AAPL"] == "ok"
+
+    # The second night: nothing new, and the job says so without failing.
+    again = _refresh_connector(monkeypatch).run(db_session, run_name="edgar:AAPL", ticker="AAPL")
+    assert again.status == "ok" and again.rows_written == 0
+
+
+def test_a_failing_statements_load_fails_the_job_and_names_the_stage(
+    db_session: Session, local_store: LocalDiskBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broken = RawResponse(data=b"not json", media_type="application/json", url="b", http_status=200)
+    connector = _refresh_connector(monkeypatch, facts=broken)
+    register(db_session, connector)
+    result = connector.run(db_session, run_name="edgar:AAPL", ticker="AAPL")
+    assert result.status == "error"
+    assert result.error is not None and result.error.startswith("companyfacts:")
+    # Identity still landed: the failure was the second stage, and the first is kept.
+    assert db_session.execute(select(Company).where(Company.cik == APPLE_CIK)).scalar_one()
+
+
+def test_an_unknown_ticker_fails_the_job_without_inventing_a_company(
+    db_session: Session, local_store: LocalDiskBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    connector = _refresh_connector(monkeypatch)
+    register(db_session, connector)
+    result = connector.run(db_session, run_name="edgar:NOPE", ticker="NOPE")
+    assert result.status == "error" and result.error is not None
+    assert "NOPE" in result.error
+    assert db_session.execute(select(func.count()).select_from(Company)).scalar_one() == 0
+
+
+def test_every_us_name_has_a_nightly_refresh_before_the_cbn_jobs() -> None:
+    from packages.scheduler.jobs import US_UNIVERSE, build_jobs, expected_run_names
+
+    refresh = {job.job_id: job for job in build_jobs() if job.job_id.startswith("edgar:")}
+    assert set(refresh) == {f"edgar:{t}" for t in US_UNIVERSE}
+    times = sorted((job.hour, job.minute) for job in refresh.values())
+    assert times[0] == (3, 0) and times[-1] < (5, 30), "done before the CBN jobs at 05:30"
+    assert len(set(times)) == len(times), "six minutes apart, never together"
+    assert refresh["edgar:AAPL"].params == {"ticker": "AAPL"}
+    assert set(refresh) <= expected_run_names()

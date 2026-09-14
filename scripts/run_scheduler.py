@@ -1,9 +1,8 @@
 r"""Run the connector schedule. P1.5 / TG8.
 
-    .venv\Scripts\python.exe scripts
-un_scheduler.py          # run forever
-    .venv\Scripts\python.exe scripts
-un_scheduler.py --once   # run every job now, then exit
+    .venv\Scripts\python.exe scripts\run_scheduler.py          # run forever
+    .venv\Scripts\python.exe scripts\run_scheduler.py --once   # run every job now, then exit
+    .venv\Scripts\python.exe scripts\run_scheduler.py --once --job edgar:KO   # one job
 
 Until this existed, `build_scheduler()` was a function nothing called — the schedule was
 designed and unstartable, which is the same as not having one. `OPERATIONS.md` §2.3's whole
@@ -36,11 +35,24 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run every job immediately and exit. Use this to verify the list, or to catch up.",
     )
+    parser.add_argument(
+        "--job",
+        action="append",
+        metavar="ID",
+        help="With --once: run only this job id (repeatable), e.g. --job edgar:KO",
+    )
     args = parser.parse_args(argv)
     configure_logging()
 
     with step("Build the job list") as building:
         jobs = build_jobs()
+        if args.job:
+            wanted = set(args.job)
+            unknown = wanted - {job.identity() for job in jobs}
+            if unknown:
+                building.fail("no such job", which=sorted(unknown))
+                return 2
+            jobs = [job for job in jobs if job.identity() in wanted]
         for job in jobs:
             building.note("job", id=job.identity(), at_utc=f"{job.hour:02d}:{job.minute:02d}")
         building.result(jobs=len(jobs))

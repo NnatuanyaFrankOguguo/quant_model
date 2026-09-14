@@ -20,6 +20,7 @@ from packages.ingestion.cbn import (
     CbnInflationConnector,
     CbnMoneyMarketConnector,
 )
+from packages.ingestion.edgar import EdgarCompanyRefresh
 from packages.ingestion.fred import FRED_SERIES, FredConnector
 from packages.ingestion.manual_csv import MANUAL_SOURCES
 from packages.ingestion.nigeria_data_portal import (
@@ -30,14 +31,21 @@ from packages.ingestion.nigeria_data_portal import (
 from packages.ingestion.yahoo import YahooChartConnector
 from packages.scheduler.runner import ScheduledJob
 
-__all__ = ["FRED_JOB_PARAMS", "US_UNIVERSE", "build_jobs", "expected_run_names", "price_job"]
+__all__ = [
+    "FRED_JOB_PARAMS",
+    "US_UNIVERSE",
+    "build_jobs",
+    "edgar_refresh_job",
+    "expected_run_names",
+    "price_job",
+]
 
 #: The US names P2 covers. `docs/UNIVERSE.md` keeps the US side "separate and unconstrained"
 #: - EDGAR is free and structured, so breadth costs almost nothing here. Two banks (JPM,
 #: BAC) are included on purpose: they exercise the `financial` template, whose income keys
 #: have no XBRL mapping yet and resolve to NULL, which is the honest state of chart v0.1.
-#: Statements come from EDGAR (`scripts/ingest_edgar.py --universe`, run when filings land);
-#: prices from Yahoo, daily, through the jobs below.
+#: Statements come from EDGAR nightly (`edgar_refresh_job`, and by hand through
+#: `scripts/ingest_edgar.py`); prices from Yahoo after the close, through the jobs below.
 US_UNIVERSE: tuple[str, ...] = (
     "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "JPM", "BAC", "XOM", "CVX",
     "JNJ", "PFE", "PG", "KO", "WMT", "HD", "DIS", "CAT", "IBM", "INTC", "CSCO", "ORCL", "UNH",
@@ -60,6 +68,27 @@ def price_job(ticker: str, *, lookback_days: int | None = PRICE_LOOKBACK_DAYS) -
         hour=22 + minute // 60,
         minute=minute % 60,
         job_id=f"yahoo:{ticker}",
+    )
+
+
+#: EDGAR accepts filings until 22:00 US Eastern, 02:00 UTC in winter; the companyfacts
+#: JSON is rebuilt overnight. Three in the morning UTC is after both, and the jobs are six
+#: minutes apart because a company with a new 10-K takes the writer up to five minutes:
+#: twenty-four names end by 05:24, before the CBN jobs begin at 05:30.
+EDGAR_REFRESH_HOUR = 3
+EDGAR_REFRESH_SPACING_MINUTES = 6
+
+
+def edgar_refresh_job(ticker: str) -> ScheduledJob:
+    """One company's nightly EDGAR refresh - identity, then statements - under `edgar:<ticker>`."""
+    minute = US_UNIVERSE.index(ticker) if ticker in US_UNIVERSE else 0
+    minute *= EDGAR_REFRESH_SPACING_MINUTES
+    return ScheduledJob(
+        connector=EdgarCompanyRefresh(),
+        params={"ticker": ticker},
+        hour=EDGAR_REFRESH_HOUR + minute // 60,
+        minute=minute % 60,
+        job_id=f"edgar:{ticker}",
     )
 
 
@@ -150,6 +179,8 @@ def build_jobs() -> list[ScheduledJob]:
         )
     # US prices after the close, one job per name, a minute apart.
     jobs.extend(price_job(ticker) for ticker in US_UNIVERSE)
+    # US statements before dawn UTC, one job per name, six minutes apart.
+    jobs.extend(edgar_refresh_job(ticker) for ticker in US_UNIVERSE)
     return jobs
 
 

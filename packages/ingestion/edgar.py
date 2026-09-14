@@ -50,6 +50,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from packages.common.config import get_settings
+from packages.common.console import step
 from packages.common.models import (
     Company,
     Exchange,
@@ -60,8 +61,16 @@ from packages.common.models import (
     SecurityIdentifier,
     SharesOutstanding,
 )
+from packages.common.storage import StorageBackend
 from packages.common.timez import utcnow
-from packages.ingestion.base import Connector, DataSourceLicence, RawResponse, store_raw
+from packages.ingestion.base import (
+    Connector,
+    ConnectorRunResult,
+    DataSourceLicence,
+    RawResponse,
+    record_run,
+    store_raw,
+)
 from packages.normalize.chart import SOURCE_SYSTEM_BY_METHOD, load_chart, resolve
 from packages.normalize.periods import fiscal_year_of, period_label, period_type_of
 from packages.normalize.statements import ReportedStatement, StatementWriter
@@ -753,6 +762,99 @@ def _split_unknowable(facts: list[XbrlFact]) -> tuple[list[XbrlFact], list[XbrlF
     kept = [f for f in facts if f.end <= f.filed]
     dropped = [f for f in facts if f.end > f.filed]
     return kept, dropped
+
+
+# ---------------------------------------------------------------------------------------
+# The scheduled refresh: identity, then statements, for one company, under one job name
+# ---------------------------------------------------------------------------------------
+
+
+class EdgarCompanyRefresh(EdgarConnector):
+    """One company's nightly refresh: submissions, then company facts, as one scheduled job.
+
+    Statements were loaded by hand (`scripts/ingest_edgar.py`) while P2 was built; the
+    freshness flag on `/companies` then asked, on its first live run, for the Coca-Cola
+    10-Q the copy did not hold. This is the job that answers it. It runs the same two
+    connectors the script runs, records their runs under the same names the script uses
+    (`edgar_submissions:<cik>`, `edgar_companyfacts:<cik>`) so history reads continuously,
+    and records its own run under the job's identity (`edgar:<ticker>`) so the health check
+    can expect exactly one thing per company per night.
+
+    The ticker is resolved through EDGAR's own list once per process per UTC day, and the
+    list is stored as a source document like every other response.
+    """
+
+    name = "edgar_refresh"
+
+    #: (day the map was fetched, ticker -> CIK). One process, one fetch per day.
+    _ticker_map: tuple[dt.date, dict[str, str]] | None = None
+
+    def fetch(self, **params: object) -> RawResponse:
+        raise NotImplementedError("EdgarCompanyRefresh runs two connectors; call run()")
+
+    def parse(self, raw: RawResponse) -> list[object]:
+        raise NotImplementedError("EdgarCompanyRefresh runs two connectors; call run()")
+
+    def run(
+        self,
+        session: Session,
+        *,
+        storage: StorageBackend | None = None,
+        run_name: str | None = None,
+        **params: object,
+    ) -> ConnectorRunResult:
+        recorded_as = run_name or self.name
+        started_at = utcnow()
+        rows = 0
+        parsed = 0
+        error: str | None = None
+        try:
+            with step("resolve the company") as resolving:
+                cik = self._cik_for(session, params)
+                resolving.result(cik=cik)
+            first = EdgarSubmissionsConnector(
+                user_agent=self._user_agent, throttle=self._throttle
+            ).run(session, storage=storage, run_name=f"edgar_submissions:{cik}", cik=cik)
+            rows += first.rows_written
+            parsed += first.records_parsed
+            if first.status != "ok":
+                error = f"submissions: {first.error}"
+            else:
+                second = EdgarCompanyFactsConnector(
+                    user_agent=self._user_agent, throttle=self._throttle
+                ).run(session, storage=storage, run_name=f"edgar_companyfacts:{cik}", cik=cik)
+                rows += second.rows_written
+                parsed += second.records_parsed
+                if second.status != "ok":
+                    error = f"companyfacts: {second.error}"
+        except Exception as exc:  # the lookup itself failed: unknown ticker, EDGAR refusal
+            session.rollback()
+            error = f"{type(exc).__name__}: {exc}"[:2000]
+            _log.error("connector_failed", connector=self.name, error_type=type(exc).__name__)
+        result = ConnectorRunResult(
+            connector_name=recorded_as,
+            status="error" if error else "ok",
+            rows_written=rows,
+            records_parsed=parsed,
+            started_at=started_at,
+            finished_at=utcnow(),
+            error=error,
+        )
+        with step("record run") as recording:
+            record_run(session, result)
+            recording.result(status=result.status, rows_written=result.rows_written)
+        return result
+
+    def _cik_for(self, session: Session, params: dict[str, object]) -> str:
+        if params.get("cik"):
+            return zero_pad_cik(str(params["cik"]))
+        ticker = str(params["ticker"]).strip().upper()
+        today = utcnow().date()
+        cached = EdgarCompanyRefresh._ticker_map
+        if cached is None or cached[0] != today:
+            cached = (today, load_ticker_map(session, self))
+            EdgarCompanyRefresh._ticker_map = cached
+        return resolve_cik(session, self, ticker, ticker_map=cached[1])
 
 
 def _write_share_counts(

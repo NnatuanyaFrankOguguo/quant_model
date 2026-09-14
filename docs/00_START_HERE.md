@@ -444,8 +444,10 @@ company (one filing; the history sits under CIK 34088) and `DIS` to the 2019 one
 CIK 1001039 holds the rest) — a successor-CIK follow-up. Coca-Cola's companyfacts carried
 nothing filed after 2026-04-30 at load time. Every exchange-listed instrument EDGAR names for
 a company (notes, preferreds) is an identifier of its one security; the primary is the lowest
-id. And there is no scheduled EDGAR refresh yet — prices are on the schedule, statements are
-run by hand.
+id. Statements refresh nightly since 2026-09-14 — one `edgar:<ticker>` job per name at 03:00
+UTC, six minutes apart, before the CBN jobs — beside the price jobs; the first live run, on
+Coca-Cola, found EDGAR's companyfacts byte-identical to the load, so the overdue flag there
+describes the source's lag, not ours.
 
 ### What exists right now
 
