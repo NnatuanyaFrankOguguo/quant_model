@@ -38,6 +38,7 @@ import json
 import re
 import threading
 import time
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -250,7 +251,34 @@ class EdgarConnector(Connector[object]):
         )
 
     def _get(self, url: str) -> RawResponse:
-        """One throttled request with the mandatory headers. 403/429 stops everything."""
+        """One throttled request with the mandatory headers. 403/429 stops everything.
+
+        A 5xx or a timeout is EDGAR's own trouble, not ours: it is retried once after a
+        pause, because a backfill over a hundred filings should not fall over on one server
+        hiccup or one slow multi-megabyte instance. A second failure is raised as it is.
+        """
+        try:
+            response = self._request(url)
+        except httpx.TimeoutException:
+            _log.warning("edgar_timeout_retried", url=url)
+            time.sleep(_SERVER_ERROR_PAUSE_SEC)
+            response = self._request(url)
+        else:
+            if response.status_code >= 500:
+                _log.warning("edgar_server_error_retried", url=url, status=response.status_code)
+                time.sleep(_SERVER_ERROR_PAUSE_SEC)
+                response = self._request(url)
+        response.raise_for_status()
+        return RawResponse(
+            data=response.content,
+            media_type="application/json",
+            url=url,
+            http_status=response.status_code,
+            etag=response.headers.get("etag"),
+            last_modified=_parse_http_date(response.headers.get("last-modified")),
+        )
+
+    def _request(self, url: str) -> httpx.Response:
         self._throttle.wait()
         response = httpx.get(
             url,
@@ -263,18 +291,14 @@ class EdgarConnector(Connector[object]):
                 f"EDGAR refused {url} with HTTP {response.status_code}. This is the rate limit "
                 f"or a missing User-Agent, and it comes with a ~10-minute IP block. Not retried."
             )
-        response.raise_for_status()
-        return RawResponse(
-            data=response.content,
-            media_type="application/json",
-            url=url,
-            http_status=response.status_code,
-            etag=response.headers.get("etag"),
-            last_modified=_parse_http_date(response.headers.get("last-modified")),
-        )
+        return response
 
+
+#: How long to wait before the one retry of a 5xx. EDGAR's brief outages clear in seconds.
+_SERVER_ERROR_PAUSE_SEC = 5.0
 
 _TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+_ARCHIVE = "https://www.sec.gov/Archives/edgar/data"
 
 
 def load_ticker_map(session: Session, connector: EdgarConnector) -> dict[str, str]:
@@ -868,6 +892,21 @@ def _merge_contexts(
     return start, merged
 
 
+def _newest_report(session: Session, cik: str) -> str | None:
+    """The accession of the newest 10-K or 10-Q held for a company, or None."""
+    company = _company_for_cik(session, cik)
+    if company is None:
+        return None
+    return session.execute(
+        select(Filing.accession_no)
+        .where(Filing.company_id == company.id)
+        .where(Filing.filing_type.in_(["10-K", "10-Q"]))
+        .where(Filing.accession_no.is_not(None))
+        .order_by(Filing.filing_date.desc(), Filing.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def _split_unknowable(facts: list[XbrlFact]) -> tuple[list[XbrlFact], list[XbrlFact]]:
     """Keep the facts a filing could have known; set aside those it could not.
 
@@ -882,6 +921,228 @@ def _split_unknowable(facts: list[XbrlFact]) -> tuple[list[XbrlFact], list[XbrlF
     kept = [f for f in facts if f.end <= f.filed]
     dropped = [f for f in facts if f.end > f.filed]
     return kept, dropped
+
+
+# ---------------------------------------------------------------------------------------
+# Per-class share counts, read from the filing's XBRL instance
+# ---------------------------------------------------------------------------------------
+
+#: Companies whose cover page counts each share class separately. companyfacts drops every
+#: dimensioned fact, so their `dei:EntityCommonStockSharesOutstanding` never reaches it and
+#: no P/E can be computed from that feed. The count lives in each filing's XBRL instance,
+#: one fact per class member, and that is what `EdgarInstanceSharesConnector` reads.
+CLASS_COUNTED_CIKS: frozenset[str] = frozenset(
+    {
+        "0001652044",  # Alphabet: Class A, Class B, Capital Class C
+        "0001326801",  # Meta Platforms: Class A, Class B
+    }
+)
+
+_XBRL_INSTANCE_NS = "http://www.xbrl.org/2003/instance"
+_XBRLDI_NS = "http://xbrl.org/2006/xbrldi"
+_CLASS_AXIS = "StatementClassOfStockAxis"
+
+
+@dataclass(frozen=True)
+class ClassShareCount:
+    """One class's cover-page count, as an instance document carries it."""
+
+    cik: str
+    accession_no: str
+    share_class: str  # the axis member's local name without 'Member', or 'ordinary'
+    as_of_date: dt.date
+    shares: Decimal
+
+
+class EdgarInstanceSharesConnector(EdgarConnector):
+    """One filing's XBRL instance -> `shares_outstanding`, one row per share class.
+
+    The folder index names the instance (`*_htm.xml`); the instance is what is stored and
+    parsed. A count's `known_as_of` is the filing date of the accession the instance came
+    from, read from `filings` at write time - the instance itself does not carry it.
+    """
+
+    name = "edgar_instance_shares"
+
+    def fetch(self, **params: object) -> RawResponse:
+        cik = zero_pad_cik(str(params["cik"]))
+        accession = str(params["accession_no"])
+        folder = f"{_ARCHIVE}/{int(cik)}/{accession.replace('-', '')}/"
+        index = json.loads(self._get(folder + "index.json").data.decode("utf-8"))
+        names = [
+            str(item.get("name") or "")
+            for item in (index.get("directory") or {}).get("item") or []
+            if isinstance(item, dict)
+        ]
+        instances = _instance_documents(names)
+        if len(instances) != 1:
+            raise LookupError(
+                f"{accession}: expected one XBRL instance in the folder, found "
+                f"{instances or 'none'} among {sorted(n for n in names if n.endswith('.xml'))}"
+            )
+        return self._get(folder + instances[0])
+
+    def parse(self, raw: RawResponse) -> list[ClassShareCount]:  # type: ignore[override]
+        """Pure. Every `dei:EntityCommonStockSharesOutstanding` fact with its class and date.
+
+        The accession is read from the stored URL, which names the filing's folder; the
+        instance carries the CIK itself.
+        """
+        accession = _accession_from_url(raw.url or "")
+        root = ET.fromstring(raw.data)
+        contexts: dict[str, tuple[dt.date | None, str]] = {}
+        for context in root.iter(f"{{{_XBRL_INSTANCE_NS}}}context"):
+            instant = context.find(f"{{{_XBRL_INSTANCE_NS}}}period/{{{_XBRL_INSTANCE_NS}}}instant")
+            share_class = "ordinary"
+            for member in context.iter(f"{{{_XBRLDI_NS}}}explicitMember"):
+                if str(member.get("dimension") or "").endswith(_CLASS_AXIS) and member.text:
+                    share_class = member.text.strip().split(":")[-1].removesuffix("Member")
+            date = (
+                dt.date.fromisoformat(instant.text.strip())
+                if instant is not None and instant.text
+                else None
+            )
+            contexts[str(context.get("id"))] = (date, share_class)
+        cik = ""
+        for element in root.iter():
+            if _is_dei(element, "EntityCentralIndexKey") and element.text:
+                cik = zero_pad_cik(element.text.strip())
+                break
+        counts: list[ClassShareCount] = []
+        for element in root.iter():
+            if not _is_dei(element, "EntityCommonStockSharesOutstanding") or not element.text:
+                continue
+            date, share_class = contexts.get(str(element.get("contextRef")), (None, "ordinary"))
+            if date is None:
+                continue
+            try:
+                shares = Decimal(element.text.strip())
+            except InvalidOperation:
+                continue
+            if shares <= 0:
+                continue
+            counts.append(
+                ClassShareCount(
+                    cik=cik,
+                    accession_no=accession,
+                    share_class=share_class,
+                    as_of_date=date,
+                    shares=shares,
+                )
+            )
+        counts.sort(key=lambda c: (c.as_of_date, c.share_class))
+        return counts
+
+    def write(  # type: ignore[override]
+        self, session: Session, records: list[ClassShareCount], *, source_document_id: int
+    ) -> int:
+        if not records:
+            return 0
+        cik = records[0].cik
+        accession = records[0].accession_no
+        company = _company_for_cik(session, cik)
+        if company is None:
+            raise LookupError(f"CIK {cik} is not registered; run the submissions connector first")
+        filing = session.execute(
+            select(Filing)
+            .where(Filing.company_id == company.id)
+            .where(Filing.accession_no == accession)
+        ).scalar_one_or_none()
+        if filing is None:
+            raise LookupError(
+                f"{accession} is not in filings for CIK {cik}; load the company facts first - "
+                "a count's known_as_of is the filing date, and it is not guessed"
+            )
+        security = _primary_security(session, company)
+        return _write_class_counts(
+            session,
+            records,
+            security_id=security.id,
+            filed=filing.filing_date,
+            source_document_id=source_document_id,
+        )
+
+
+#: An inline-XBRL filing (2019 on) carries its instance as `<name>_htm.xml`; before that the
+#: instance is `<prefix>-<yyyymmdd>.xml` beside the schema and the four linkbases, which
+#: end in _cal, _def, _lab and _pre and are not instances.
+_LINKBASE_SUFFIXES = ("_cal.xml", "_def.xml", "_lab.xml", "_pre.xml")
+_PLAIN_INSTANCE = re.compile(r"^[a-z0-9]+-\d{8}\.xml$", re.IGNORECASE)
+
+
+def _instance_documents(names: list[str]) -> list[str]:
+    inline = [n for n in names if n.endswith("_htm.xml")]
+    if inline:
+        return inline
+    return [n for n in names if _PLAIN_INSTANCE.match(n) and not n.endswith(_LINKBASE_SUFFIXES)]
+
+
+def _is_dei(element: ET.Element, local_name: str) -> bool:
+    tag = element.tag
+    return isinstance(tag, str) and tag.endswith("}" + local_name) and "xbrl.sec.gov/dei" in tag
+
+
+def _accession_from_url(url: str) -> str:
+    """`.../edgar/data/1652044/000165204426000071/goog-20260630_htm.xml` -> the accession."""
+    match = re.search(r"/(\d{18})/[^/]*$", url)
+    if match is None:
+        raise ValueError(f"the stored URL does not name a filing folder: {url!r}")
+    digits = match.group(1)
+    return f"{digits[:10]}-{digits[10:12]}-{digits[12:]}"
+
+
+def _write_class_counts(
+    session: Session,
+    counts: list[ClassShareCount],
+    *,
+    security_id: int,
+    filed: dt.date,
+    source_document_id: int,
+) -> int:
+    """Per-class counts -> `shares_outstanding`, one vintage rule with the cover-page path."""
+    stored = session.execute(
+        select(
+            SharesOutstanding.share_class,
+            SharesOutstanding.as_of_date,
+            SharesOutstanding.known_as_of,
+            SharesOutstanding.shares,
+        )
+        .where(SharesOutstanding.security_id == security_id)
+        .where(SharesOutstanding.basic_or_diluted == "basic")
+    ).all()
+    history: dict[tuple[str, dt.date], list[tuple[dt.date, Decimal]]] = {}
+    for share_class, as_of_date, known_as_of, shares in stored:
+        history.setdefault((share_class, as_of_date), []).append((known_as_of, shares))
+    for versions in history.values():
+        versions.sort()
+    rows: list[dict[str, object]] = []
+    for count in counts:
+        versions = history.get((count.share_class, count.as_of_date), [])
+        if versions and versions[-1][1] == count.shares:
+            continue  # the same count for the same date and class: the same vintage
+        if any(known == filed for known, _ in versions):
+            continue  # this filing's own vintage is already held
+        rows.append(
+            {
+                "security_id": security_id,
+                "as_of_date": count.as_of_date,
+                "share_class": count.share_class,
+                "basic_or_diluted": "basic",
+                "known_as_of": filed,
+                "shares": count.shares,
+                "source_document_id": source_document_id,
+                "page": None,
+            }
+        )
+    if not rows:
+        return 0
+    statement = (
+        pg_insert(SharesOutstanding)
+        .values(rows)
+        .on_conflict_do_nothing()
+        .returning(SharesOutstanding.as_of_date)
+    )
+    return len(session.execute(statement).fetchall())
 
 
 # ---------------------------------------------------------------------------------------
@@ -947,6 +1208,24 @@ class EdgarCompanyRefresh(EdgarConnector):
                 parsed += second.records_parsed
                 if second.status != "ok":
                     error = f"companyfacts: {second.error}"
+            if error is None and cik in CLASS_COUNTED_CIKS:
+                # The newest 10-K or 10-Q's instance: the cover-page count per class,
+                # which companyfacts never carries for these companies.
+                newest = _newest_report(session, cik)
+                if newest is not None:
+                    third = EdgarInstanceSharesConnector(
+                        user_agent=self._user_agent, throttle=self._throttle
+                    ).run(
+                        session,
+                        storage=storage,
+                        run_name=f"edgar_instance_shares:{cik}",
+                        cik=cik,
+                        accession_no=newest,
+                    )
+                    rows += third.rows_written
+                    parsed += third.records_parsed
+                    if third.status != "ok":
+                        error = f"instance shares: {third.error}"
             predecessor = PREDECESSORS.get(cik)
             if error is None and predecessor is not None:
                 # The old registrant's filings: registered as an identifier, then written

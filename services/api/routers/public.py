@@ -315,6 +315,7 @@ async def company_ratios(
         SharesUsed(
             as_of_date=snap.shares.as_of_date,
             shares=snap.shares.shares,
+            share_classes=list(snap.shares.share_classes),
             basic_or_diluted=snap.shares.basic_or_diluted,
             known_as_of=snap.shares.known_as_of,
             source_document_id=snap.shares.source_document_id,
@@ -488,6 +489,7 @@ async def company_ratio_history(
                     SharesUsed(
                         as_of_date=p.shares.as_of_date,
                         shares=p.shares.shares,
+                        share_classes=list(p.shares.share_classes),
                         basic_or_diluted=p.shares.basic_or_diluted,
                         known_as_of=p.shares.known_as_of,
                         source_document_id=p.shares.source_document_id,

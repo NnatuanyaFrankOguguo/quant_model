@@ -438,8 +438,11 @@ on its date, so the stale warning means what it says.
 
 **Recorded limitations.** XBRL begins in mid-2009, so a pre-2009 period's `known_as_of` is
 its first XBRL appearance — later than the truth, never earlier. Multi-class companies
-(Alphabet, Meta) carry no cover-page share count in companyfacts, so their per-share figures
-are blank until a class-aware count is sourced. EDGAR maps `XOM` to ExxonMobil's 2026 holding
+(Alphabet, Meta) carry no cover-page share count in companyfacts, which drops every
+dimensioned fact; since 2026-09-14 `EdgarInstanceSharesConnector` reads the count per class
+from each 10-K and 10-Q's XBRL instance instead, `shares_outstanding` holds one row per class
+(`share_class` = the axis member), and a multiple sums the classes counted at one date —
+Alphabet's A + B + C, 12.23bn as of 2026-07-15. EDGAR maps `XOM` to ExxonMobil's 2026 holding
 company and `DIS` to the 2019 one, with the history under the old CIKs; since 2026-09-14 the
 successor map in `packages/ingestion/edgar.py` (each entry's evidence is the successor's own
 8-K12B) records the old CIK as a time-bounded identifier of the security and writes its

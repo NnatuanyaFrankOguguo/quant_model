@@ -340,7 +340,11 @@ class PriceUsed(BaseModel):
 
 class SharesUsed(BaseModel):
     as_of_date: date = Field(description="The date the count was true of - never today's")
-    shares: Decimal
+    shares: Decimal = Field(description="Every class counted at that date, summed")
+    share_classes: list[str] = Field(
+        default_factory=list,
+        description="['ordinary'] for a single-class company; the class members otherwise",
+    )
     basic_or_diluted: str
     known_as_of: date
     source_document_id: int

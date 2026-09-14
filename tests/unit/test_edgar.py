@@ -25,6 +25,7 @@ from packages.common.models import (
     Filing,
     Security,
     SecurityIdentifier,
+    SourceDocument,
     Statement,
     StatementLineItem,
 )
@@ -35,6 +36,7 @@ from packages.ingestion.base import RawResponse, register
 from packages.ingestion.edgar import (
     EdgarCompanyFactsConnector,
     EdgarCompanyRefresh,
+    EdgarInstanceSharesConnector,
     EdgarRefusedError,
     EdgarSubmissionsConnector,
     MissingUserAgentError,
@@ -1097,3 +1099,157 @@ def test_the_real_successor_map_names_its_evidence() -> None:
         assert len(successor) == 10 and len(predecessor.cik) == 10
         assert predecessor.evidence.count("-") == 2, "an accession number, the 8-K12B"
         assert predecessor.succeeded_on < dt.date.today()
+
+
+# --------------------------------------------------------------------------------------
+# Per-class share counts from the XBRL instance (Alphabet, Meta)
+# --------------------------------------------------------------------------------------
+
+
+def _instance_raw(cik_digits: str = "1652044") -> RawResponse:
+    """The trimmed Alphabet instance, optionally renumbered to another registrant."""
+    data = (FIXTURES / "GOOGL_instance_trimmed.xml").read_bytes()
+    data = data.replace(b"0001652044", zero_pad_cik(cik_digits).encode())
+    return RawResponse(
+        data=data,
+        media_type="application/xml",
+        url=f"https://www.sec.gov/Archives/edgar/data/{int(cik_digits)}/000165204426000071/"
+        "goog-20260630_htm.xml",
+        http_status=200,
+    )
+
+
+def test_the_instance_parse_names_every_class_with_its_date() -> None:
+    counts = EdgarInstanceSharesConnector(user_agent=UA).parse(_instance_raw())
+    assert [(c.share_class, c.shares) for c in counts] == [
+        ("CapitalClassC", Decimal("5527000000")),
+        ("CommonClassA", Decimal("5868000000")),
+        ("CommonClassB", Decimal("835000000")),
+    ]
+    assert {c.as_of_date for c in counts} == {dt.date(2026, 7, 15)}
+    assert {c.accession_no for c in counts} == {"0001652044-26-000071"}, "from the stored URL"
+    assert {c.cik for c in counts} == {"0001652044"}
+
+
+@pytest.mark.invariant
+def test_class_counts_are_summed_for_a_multiple_and_never_mixed_across_dates(
+    db_session: Session, apple: Company
+) -> None:
+    """Apple stands in for Alphabet: the instance is renumbered to its CIK, and a filing row
+    carries the accession so the count's known_as_of is that filing's date."""
+    from packages.common.models import SharesOutstanding
+    from packages.valuation.snapshot import latest_share_count
+
+    security_id = db_session.execute(
+        select(Security.id).where(Security.company_id == apple.id)
+    ).scalar_one()
+    db_session.add(
+        Filing(
+            company_id=apple.id,
+            filing_type="10-Q",
+            filing_date=dt.date(2026, 7, 23),
+            period_end=dt.date(2026, 6, 30),
+            accession_no="0001652044-26-000071",
+            source_document_id=db_session.execute(select(func.min(SourceDocument.id))).scalar_one(),
+            known_as_of=dt.date(2026, 7, 23),
+        )
+    )
+    db_session.flush()
+    connector = EdgarInstanceSharesConnector(user_agent=UA)
+    connector.fetch = lambda **params: _instance_raw("320193")  # type: ignore[method-assign]
+    result = connector.run(db_session, cik=APPLE_CIK, accession_no="0001652044-26-000071")
+    assert result.status == "ok", result.error
+    assert result.rows_written == 3
+    rows = (
+        db_session.execute(
+            select(SharesOutstanding).where(SharesOutstanding.security_id == security_id)
+        )
+        .scalars()
+        .all()
+    )
+    assert {(r.share_class, r.known_as_of) for r in rows} == {
+        ("CapitalClassC", dt.date(2026, 7, 23)),
+        ("CommonClassA", dt.date(2026, 7, 23)),
+        ("CommonClassB", dt.date(2026, 7, 23)),
+    }
+    # The same instance again: the same vintages, nothing written.
+    assert (
+        connector.run(db_session, cik=APPLE_CIK, accession_no="0001652044-26-000071").rows_written
+        == 0
+    )
+
+    used = latest_share_count(db_session, security_id=security_id, on=dt.date(2026, 8, 1))
+    assert used is not None
+    assert used.shares == Decimal("12230000000"), "A + B + C"
+    assert used.share_classes == ("CapitalClassC", "CommonClassA", "CommonClassB")
+    assert used.as_of_date == dt.date(2026, 7, 15) and used.known_as_of == dt.date(2026, 7, 23)
+    # Before the filing was public, the classes were not known: nothing, never a partial sum.
+    assert latest_share_count(db_session, security_id=security_id, on=dt.date(2026, 7, 22)) is None
+
+    # An older count for one class only, at an earlier date, is not mixed into the newer date.
+    db_session.add(
+        SharesOutstanding(
+            security_id=security_id,
+            as_of_date=dt.date(2026, 4, 15),
+            share_class="CommonClassA",
+            basic_or_diluted="basic",
+            known_as_of=dt.date(2026, 4, 25),
+            shares=Decimal("5900000000"),
+            source_document_id=rows[0].source_document_id,
+        )
+    )
+    db_session.flush()
+    earlier = latest_share_count(db_session, security_id=security_id, on=dt.date(2026, 5, 1))
+    assert earlier is not None
+    assert earlier.shares == Decimal("5900000000") and earlier.share_classes == ("CommonClassA",)
+    later = latest_share_count(db_session, security_id=security_id, on=dt.date(2026, 8, 1))
+    assert later is not None and later.shares == Decimal("12230000000")
+
+
+def test_an_instance_for_a_filing_not_held_is_refused(db_session: Session, apple: Company) -> None:
+    connector = EdgarInstanceSharesConnector(user_agent=UA)
+    connector.fetch = lambda **params: _instance_raw("320193")  # type: ignore[method-assign]
+    result = connector.run(db_session, cik=APPLE_CIK, accession_no="0001652044-26-000071")
+    assert result.status == "error" and result.error is not None
+    assert "known_as_of is the filing date" in result.error
+
+
+def test_a_server_error_is_retried_once_and_a_second_one_is_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 5xx is EDGAR's trouble: one retry after a pause; a refusal is still never retried."""
+    import packages.ingestion.edgar as edgar_module
+
+    monkeypatch.setattr(edgar_module.time, "sleep", lambda seconds: None)
+    statuses = iter([503, 200])
+    calls: list[str] = []
+
+    def fake_get(url: str, **kwargs: object) -> httpx.Response:
+        calls.append(url)
+        return httpx.Response(next(statuses), content=b"{}", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(edgar_module.httpx, "get", fake_get)
+    connector = EdgarSubmissionsConnector(user_agent=UA, throttle=edgar_module._Throttle(0.0))
+    assert connector._get("https://data.sec.gov/x").http_status == 200
+    assert len(calls) == 2
+
+    statuses = iter([503, 503])
+    calls.clear()
+    with pytest.raises(httpx.HTTPStatusError):
+        connector._get("https://data.sec.gov/y")
+    assert len(calls) == 2, "one retry, not a loop"
+
+    # A timeout on a slow instance document is retried the same way.
+    attempts = iter([httpx.ReadTimeout("slow"), None])
+    calls.clear()
+
+    def slow_then_fine(url: str, **kwargs: object) -> httpx.Response:
+        calls.append(url)
+        failure = next(attempts)
+        if failure is not None:
+            raise failure
+        return httpx.Response(200, content=b"{}", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(edgar_module.httpx, "get", slow_then_fine)
+    assert connector._get("https://data.sec.gov/z").http_status == 200
+    assert len(calls) == 2

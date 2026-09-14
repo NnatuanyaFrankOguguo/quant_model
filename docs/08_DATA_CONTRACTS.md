@@ -1359,6 +1359,18 @@ CREATE TABLE shares_outstanding (
 | `basic_or_diluted` | TEXT | NOT NULL | — | Both are published; a P/E must say which it used |
 | `known_as_of` | DATE | NOT NULL | — | Point-in-time guard, in the PK — a restated count inserts, never updates |
 
+> **Multi-class companies** (added 2026-09-14). A company that counts each class on its cover
+> page — Alphabet's A, B and C; Meta's A and B — tags the count once per class member on the
+> `StatementClassOfStockAxis`, and EDGAR's companyfacts feed drops every dimensioned fact, so
+> nothing reaches `dei:EntityCommonStockSharesOutstanding` there. `EdgarInstanceSharesConnector`
+> reads the filing's XBRL instance instead and writes one row per class, `share_class` the
+> member's local name (`CommonClassA`, `CapitalClassC`), `known_as_of` the filing date read
+> from `filings`. A multiple takes the newest as-of date known and **sums every class counted
+> at that date**; classes counted on different dates are never mixed, and the classes summed
+> travel with the count (`SharesUsed.share_classes`). `CLASS_COUNTED_CIKS` in
+> `packages/ingestion/edgar.py` names the companies; the nightly refresh reads their newest
+> report, and `scripts/ingest_edgar.py` backfills every 10-K and 10-Q.
+
 #### 50–54. The entity graph
 
 ```sql

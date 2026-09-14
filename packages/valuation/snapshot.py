@@ -147,10 +147,11 @@ class PriceRef:
 @dataclass(frozen=True)
 class SharesRef:
     as_of_date: dt.date
-    shares: Decimal
+    shares: Decimal  # every class as of the date, summed
     basic_or_diluted: str
     known_as_of: dt.date
     source_document_id: int
+    share_classes: tuple[str, ...] = ("ordinary",)
 
 
 @dataclass(frozen=True)
@@ -566,10 +567,16 @@ def latest_price(session: Session, *, security_id: int, on: dt.date) -> PriceRef
 def latest_share_count(
     session: Session, *, security_id: int, on: dt.date, basic_or_diluted: str = "basic"
 ) -> SharesRef | None:
-    """The newest count as of a date on or before `on`, known by `on`."""
-    row = session.execute(
+    """The newest count as of a date on or before `on`, known by `on` - every class summed.
+
+    A multi-class company reports one count per class; a P/E needs all of them. The
+    newest as-of date known on `on` is taken, and every class counted at that date (at its
+    newest vintage) is summed. Classes reported on different dates are not mixed.
+    """
+    rows = session.execute(
         select(
             SharesOutstanding.as_of_date,
+            SharesOutstanding.share_class,
             SharesOutstanding.shares,
             SharesOutstanding.basic_or_diluted,
             SharesOutstanding.known_as_of,
@@ -579,10 +586,31 @@ def latest_share_count(
         .where(SharesOutstanding.basic_or_diluted == basic_or_diluted)
         .where(SharesOutstanding.as_of_date <= on)
         .where(SharesOutstanding.known_as_of <= on)
-        .order_by(SharesOutstanding.as_of_date.desc(), SharesOutstanding.known_as_of.desc())
-        .limit(1)
-    ).first()
-    return SharesRef(*row) if row else None
+        .order_by(SharesOutstanding.as_of_date.desc(), SharesOutstanding.known_as_of)
+    ).all()
+    return _sum_classes([SharesRef(r[0], r[2], r[3], r[4], r[5], (r[1],)) for r in rows])
+
+
+def _sum_classes(rows: list[SharesRef]) -> SharesRef | None:
+    """Rows ordered newest as-of date first, then by vintage: the newest date's classes, summed."""
+    if not rows:
+        return None
+    as_of = rows[0].as_of_date
+    newest_per_class: dict[str, SharesRef] = {}
+    for row in rows:
+        if row.as_of_date != as_of:
+            continue
+        newest_per_class[row.share_classes[0]] = row  # ordered by vintage: the last wins
+    classes = sorted(newest_per_class)
+    parts = [newest_per_class[c] for c in classes]
+    return SharesRef(
+        as_of_date=as_of,
+        shares=sum((p.shares for p in parts), Decimal(0)),
+        basic_or_diluted=parts[0].basic_or_diluted,
+        known_as_of=max(p.known_as_of for p in parts),
+        source_document_id=parts[0].source_document_id,
+        share_classes=tuple(classes),
+    )
 
 
 #: A period first published this long after it ended is an original report. Later than
@@ -792,6 +820,7 @@ def _share_counts_on(
     rows = session.execute(
         select(
             SharesOutstanding.as_of_date,
+            SharesOutstanding.share_class,
             SharesOutstanding.shares,
             SharesOutstanding.basic_or_diluted,
             SharesOutstanding.known_as_of,
@@ -800,14 +829,13 @@ def _share_counts_on(
         .where(SharesOutstanding.security_id == security_id)
         .where(SharesOutstanding.basic_or_diluted == basic_or_diluted)
         .where(SharesOutstanding.as_of_date <= max(dates))
+        .order_by(SharesOutstanding.as_of_date.desc(), SharesOutstanding.known_as_of)
     ).all()
-    counts = [SharesRef(*r) for r in rows]
+    counts = [SharesRef(r[0], r[2], r[3], r[4], r[5], (r[1],)) for r in rows]
     result: dict[dt.date, SharesRef | None] = {}
     for on in dates:
         eligible = [c for c in counts if c.as_of_date <= on and c.known_as_of <= on]
-        result[on] = (
-            max(eligible, key=lambda c: (c.as_of_date, c.known_as_of)) if eligible else None
-        )
+        result[on] = _sum_classes(eligible)
     return result
 
 

@@ -25,12 +25,17 @@ from __future__ import annotations
 
 import argparse
 
+from sqlalchemy import select
+
 from packages.common.console import configure_logging, error, step, success
 from packages.common.db import get_session
+from packages.common.models import Company, Filing
 from packages.ingestion.base import register
 from packages.ingestion.edgar import (
+    CLASS_COUNTED_CIKS,
     PREDECESSORS,
     EdgarCompanyFactsConnector,
+    EdgarInstanceSharesConnector,
     EdgarSubmissionsConnector,
     load_ticker_map,
     resolve_cik,
@@ -74,6 +79,38 @@ def ingest_one(cik: str, *, label: str) -> bool:
                         history.fail(f"predecessor {stage} failed", error=run.error)
                         return False
                 history.result(rows_inserted=run.rows_written)
+
+        if cik in CLASS_COUNTED_CIKS:
+            # The cover page counts each class separately and companyfacts drops every
+            # dimensioned fact: read the count from every 10-K and 10-Q instance held,
+            # oldest first, so each count's known_as_of is its own filing date.
+            with step(f"Ingest {label}: per-class share counts from every report") as classes:
+                company = session.execute(select(Company).where(Company.cik == cik)).scalar_one()
+                accessions = (
+                    session.execute(
+                        select(Filing.accession_no)
+                        .where(Filing.company_id == company.id)
+                        .where(Filing.filing_type.in_(["10-K", "10-Q"]))
+                        .where(Filing.accession_no.is_not(None))
+                        .order_by(Filing.filing_date, Filing.id)
+                    )
+                    .scalars()
+                    .all()
+                )
+                instance = EdgarInstanceSharesConnector()
+                written = 0
+                for accession in accessions:
+                    run = instance.run(
+                        session,
+                        run_name=f"edgar_instance_shares:{cik}",
+                        cik=cik,
+                        accession_no=accession,
+                    )
+                    if run.status != "ok":
+                        classes.fail("instance failed", accession=accession, error=run.error)
+                        return False
+                    written += run.rows_written
+                classes.result(reports=len(accessions), rows_inserted=written)
     return True
 
 

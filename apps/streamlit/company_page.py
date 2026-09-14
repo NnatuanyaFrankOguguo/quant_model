@@ -384,8 +384,13 @@ def main() -> None:
         st.warning("No price was known on this date, so every multiple is blank.")
     if shares:
         st.write(
-            f"Shares used: **{Decimal(shares['shares']):,.0f}** ({shares['basic_or_diluted']}), "
-            f"as of {shares['as_of_date']}, known {shares['known_as_of']}"
+            f"Shares used: **{Decimal(shares['shares']):,.0f}** ({shares['basic_or_diluted']}"
+            + (
+                f", {' + '.join(shares['share_classes'])}"
+                if shares.get("share_classes") and shares["share_classes"] != ["ordinary"]
+                else ""
+            )
+            + f"), as of {shares['as_of_date']}, known {shares['known_as_of']}"
         )
     else:
         st.warning("No share count was known on this date, so per-share figures are blank.")
