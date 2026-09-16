@@ -52,6 +52,13 @@ from sqlalchemy.orm import Session
 
 from packages.common.config import get_settings
 from packages.common.console import step
+from packages.common.identity import (
+    CIK,
+    TICKER,
+    has_primary_ticker,
+    identifier_exists,
+    resolve_security,
+)
 from packages.common.models import (
     Company,
     Exchange,
@@ -468,23 +475,29 @@ class EdgarSubmissionsConnector(EdgarConnector):
                         session.flush()
                         inserted += 1
                     securities_by_code[code] = security
-                current = session.execute(
-                    select(SecurityIdentifier)
-                    .where(SecurityIdentifier.id_type == "ticker")
-                    .where(SecurityIdentifier.id_value == ticker)
-                    .where(SecurityIdentifier.valid_to.is_(None))
-                ).scalar_one_or_none()
+                # Resolved through the one resolver, and scoped to this exchange since
+                # migration 0018: a ticker string is unique per market, not globally, so
+                # the same string legitimately listed on two exchanges is two identifiers
+                # of two securities rather than the first one found winning.
+                current = resolve_security(session, value=ticker, as_of=observed_on, exchange=code)
                 if current is None:
                     # valid_from is the day we first observed the ticker - a lower bound on
                     # its validity, never a claim about when it began. Submissions do not
                     # say; TG2 (P3) is where identifier history gets real dates.
+                    #
+                    # EDGAR lists a registrant's common stock before its notes and
+                    # preferred series, so the first ticker stored for a security is the
+                    # primary one. `one_primary_ticker_per_security` then holds it to one.
                     session.add(
                         SecurityIdentifier(
                             security_id=security.id,
-                            id_type="ticker",
+                            id_type=TICKER,
                             id_value=ticker,
                             valid_from=observed_on,
                             valid_to=None,
+                            exchange_id=security.exchange_id,
+                            is_primary=not has_primary_ticker(session, security_id=security.id),
+                            source="edgar_submissions",
                         )
                     )
                     session.flush()
@@ -510,22 +523,22 @@ def _record_predecessor(session: Session, record: CompanyRecord, successor: str)
             "filings are then written under it."
         )
     security = _primary_security(session, company)
-    existing = session.execute(
-        select(SecurityIdentifier)
-        .where(SecurityIdentifier.id_type == "cik")
-        .where(SecurityIdentifier.id_value == cik)
-    ).scalar_one_or_none()
-    if existing is not None:
+    # "Have we stored this already", not "what did it mean on a date" - so
+    # `identifier_exists`, which takes no date, rather than the dated resolver.
+    if identifier_exists(session, value=cik, id_type=CIK):
         return 0
     predecessor = PREDECESSORS[successor]
     valid_from = record.earliest_filing_seen or predecessor.succeeded_on
     session.add(
         SecurityIdentifier(
             security_id=security.id,
-            id_type="cik",
+            id_type=CIK,
             id_value=cik,
             valid_from=min(valid_from, predecessor.succeeded_on),
+            # Inclusive, as everywhere: the last day this CIK identified the registrant.
+            # `exchange_id` stays NULL - a CIK names a registrant, not a listing.
             valid_to=predecessor.succeeded_on,
+            source="edgar_predecessor_map",
         )
     )
     session.flush()

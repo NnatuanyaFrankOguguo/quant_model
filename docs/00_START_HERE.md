@@ -234,7 +234,7 @@ below. **P1 and P2 are closed**, both verified by eye on 2026-09-15.
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: remote exists, `main` never pushed, CI never run |
 | P1 Macro Backdrop | ✅ Complete | 2026-09-03 | 2026-09-15 | 13/13 | Check 11 confirmed 2026-09-15 · 10 of 13 series live · 28,053 rows · staleness thresholds verified (0016) |
 | P2 US Company Data | ✅ Complete | 2026-09-13 | 2026-09-15 | 15/15 | 24 companies · 1,662 filings · 7,917 statement versions · 53,710 line items · 269,216 price bars · 3,270 corporate actions |
-| P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
+| P3 NG Manual Analyzer | 🔨 In progress | 2026-09-16 | — | — | P3.3 first: identity history ✅ 0018 (`no_overlapping_ids`, `resolve_security`). Four of TG2's six paths done. P3.1/P3.2/P3.4 wait on the operator's B2 account and ticker verification |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
 | P5 News & Daily Brief | ⬜ Not started | — | — | — | |
 | P6 Scenarios & Indicators | ⬜ Not started | — | — | — | Blocked by gap G1 until scheduled |
@@ -541,6 +541,22 @@ Ordered. The first four are the difference between P0.4 running and not running.
       entirely (asleep 06:10–08:59). The `schtasks` entry in [02](02_INFRASTRUCTURE.md) §2.3
       survives a logout but not sleep; the choices are a sleep setting, a wake timer, or a
       host that stays on (§5 there)
+- [ ] **P3.3, the remaining TG2 paths, in `OPERATIONS.md`'s own priority order.** Identity
+      landed 2026-09-16 (0018). Next: **§1.6 one conversion point for units** — first band
+      there, and the error class no balance-sheet tie-out catches, since a figure off by
+      1,000× on *one* line item among forty looks plausible. Then **§1.2 the trading
+      calendar**, which that order defers to "before v0.7 indicators" (P6)
+- [ ] **Migrate `companies.cik` into the identity table** — the half of
+      [10](10_PRE_BUILD_CORRECTIONS.md) §2.11 that 0018 deliberately left, since it touches
+      the EDGAR connector, four API responses and the company page, and one task is one PR.
+      A mutable scalar outside identity history is the shape §1.4 exists to remove
+- [ ] **Dated *ticker* resolution is unavailable until identifier intervals are real.**
+      `resolve_security` takes a date and is tested on real intervals, but every live ticker
+      row holds `valid_from = 2026-09-13`, the day EDGAR was first observed — a lower bound,
+      not a claim. So `find_security` resolves as of today on purpose; passing the decision
+      date would 404 every historical read, and inventing a start date would breach
+      `SPEC.md` §4.1. Unblocked by [TEAM_BRIEF](../TEAM_BRIEF.md) §2.2-F, the ticker alias
+      table with real dates — operator work, ~half a day
 - [ ] **One question a week from the Kaizen ledger** ([05](05_USER_STORIES.md) §11) — the
       questions a person actually asks, each with its honest status; the first five to pick are
       named in §11.3. Each is one PR: route, test, screen, and the status flipped in the ledger
@@ -646,7 +662,7 @@ the stories each one blocks are in [05_USER_STORIES](05_USER_STORIES.md) §9.
 | ID | Gap | Why it bites | Lands in |
 |---|---|---|---|
 | **TG1** | **Price-history ingestion has no task.** T9 (indicators) computes on `price_history` and T11 (backtest) needs OHLCV bars — nothing fills either. | Hard blocker for P6 and P7, and invisible until the morning you start P6. | P2 (US), P4 (NGX) |
-| **TG2** | **All six `OPERATIONS.md` Part 1 correctness tables are unscheduled** — corporate actions (§1.1, "the highest-priority gap"), trading calendar, FX, ticker history, fiscal alignment, unit conversion. | Un-adjusted prices silently corrupt every indicator and backtest downstream. | **Three of six done**: corporate actions ✅ 0015, fiscal alignment ✅ P2, FX ✅ 0017 (6,059 rates to 2001). Remaining: trading calendar, ticker history, unit conversion — P3 |
+| **TG2** | **All six `OPERATIONS.md` Part 1 correctness tables are unscheduled** — corporate actions (§1.1, "the highest-priority gap"), trading calendar, FX, ticker history, fiscal alignment, unit conversion. | Un-adjusted prices silently corrupt every indicator and backtest downstream. | **Four of six done**: corporate actions ✅ 0015, fiscal alignment ✅ P2, FX ✅ 0017 (6,059 rates to 2001), ticker history ✅ 0018 (`docs/10` §2.11's three defects; `resolve_security` is the one resolution point). Remaining: **unit conversion** (§1.6, first band of `OPERATIONS`' priority order — next), **trading calendar** (§1.2, due "before v0.7 indicators") |
 | **TG3** | **Auth/identity has no task.** "auth" is one word inside T16 (P9). | Multi-user is mandated from day one and mode derives from the principal in P0. | P0 |
 | **TG4** | **Backup and disaster recovery is unscheduled** (`OPERATIONS.md` §2.1). | The dataset is the moat. Losing it is the only unrecoverable failure. | P0 |
 | **TG5** | **The data-licensing gate has no enforcing task.** | `PROJECT_CONTEXT.md` §9.3 calls it "the one that kills deals". | P0, enforced every phase |

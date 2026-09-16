@@ -58,12 +58,12 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from packages.common.identity import resolve_security
 from packages.common.models import (
     AdjustmentFactor,
     CorporateAction,
     DataSource,
     PriceHistory,
-    SecurityIdentifier,
 )
 from packages.common.timez import utctoday
 from packages.ingestion.base import Connector, DataSourceLicence, RawResponse
@@ -524,15 +524,17 @@ def _same(stored: tuple[Decimal | None, ...], figures: tuple[object, ...]) -> bo
 
 
 def _security_for_ticker(session: Session, symbol: str) -> int:
-    row = session.execute(
-        select(SecurityIdentifier.security_id)
-        .where(SecurityIdentifier.id_type == "ticker")
-        .where(SecurityIdentifier.id_value == symbol)
-        .where(SecurityIdentifier.valid_to.is_(None))
-    ).scalar_one_or_none()
-    if row is None:
+    """The security this symbol names **today**, through the one resolver (`OPERATIONS` §1.4).
+
+    Today is the right date here, and a historical one would be wrong: the symbol came off
+    the wire in this morning's response, so it is the provider's name for the security now.
+    The bars themselves are dated, and the series they attach to is the security, never the
+    string - which is the point of resolving to a `security_id` before writing any of them.
+    """
+    resolved = resolve_security(session, value=symbol, as_of=utctoday())
+    if resolved is None:
         raise LookupError(
             f"no current security carries ticker {symbol!r}. Register the company first "
             "(scripts/ingest_edgar.py): prices attach to a security, never to a ticker string."
         )
-    return row
+    return resolved.security_id

@@ -18,9 +18,9 @@ from typing import Any, Literal
 
 from sqlalchemy import Select, and_, func, or_, select, tuple_
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.selectable import Subquery
 
 from packages.common.adjust import cumulative_factor, factors_known
+from packages.common.identity import primary_tickers, resolve_security
 from packages.common.models import (
     Company,
     CorporateAction,
@@ -30,12 +30,12 @@ from packages.common.models import (
     MacroSeries,
     PriceHistory,
     Security,
-    SecurityIdentifier,
     SharesOutstanding,
     Statement,
     StatementLineItem,
 )
 from packages.common.pit import LineItemAsKnown, line_items_as_known_on
+from packages.common.timez import utctoday
 from packages.ingestion import macro
 from packages.normalize.chart import SOURCE_SYSTEM_BY_METHOD, ChartVersion, load_chart
 from packages.normalize.periods import next_expected_filing
@@ -307,12 +307,33 @@ def attribution_for(session: Session, source_name: str) -> str:
 
 
 def find_security(session: Session, ticker: str) -> SecurityRef | None:
-    """The security currently carrying `ticker`, with the identity a reader needs."""
+    """The security `ticker` names **today**, with the identity a reader needs.
+
+    Resolution goes through `packages.common.identity`, the only module that reads the
+    identifier table (`OPERATIONS.md` §1.4).
+
+    **Why today and not the caller's decision date.** `resolve_security` answers the dated
+    question, and it is tested on real dated intervals - but the ticker rows this codebase
+    holds cannot yet support it. Every one was written by the EDGAR submissions connector
+    with `valid_from` set to *the day the ticker was first observed*, which that connector's
+    own comment calls "a lower bound on its validity, never a claim about when it began".
+    Resolving `AAPL` as of 2020 against a `valid_from` of 2026-09-13 returns nothing, so
+    passing the decision date here would turn every historical read into a 404 and break
+    `docs/05` §11 Q31, where a copied address reproduces the view as of the date it was seen.
+
+    Inventing a start date to paper over that would breach `SPEC.md` §4.1 - never infer
+    missing data. So the ticker stays a present-tense handle for "which company the reader
+    means", and the decision date governs the figures, which is where point-in-time bites.
+    Real identifier intervals are manual work (`TEAM_BRIEF.md` §2.2-F, the ticker alias
+    table); when they land, this passes the decision date and the docstring above goes away.
+    """
+    resolved = resolve_security(session, value=ticker, as_of=utctoday())
+    if resolved is None:
+        return None
     row = session.execute(
         select(
             Security.id,
             Company.id,
-            SecurityIdentifier.id_value,
             Company.legal_name,
             Company.cik,
             Exchange.code,
@@ -320,26 +341,13 @@ def find_security(session: Session, ticker: str) -> SecurityRef | None:
             Company.fiscal_year_end,
             Company.statement_template,
         )
-        .join(SecurityIdentifier, SecurityIdentifier.security_id == Security.id)
         .join(Company, Company.id == Security.company_id)
         .join(Exchange, Exchange.id == Security.exchange_id)
-        .where(SecurityIdentifier.id_type == "ticker")
-        .where(SecurityIdentifier.id_value == ticker.strip().upper())
-        .where(SecurityIdentifier.valid_to.is_(None))
+        .where(Security.id == resolved.security_id)
     ).first()
-    return SecurityRef(*row) if row else None
-
-
-def _primary_ticker_ids() -> Subquery:
-    """The lowest current ticker identifier per security: the primary ticker, as in
-    `list_companies` (EDGAR lists notes and preferreds after the common stock)."""
-    return (
-        select(func.min(SecurityIdentifier.id).label("id"))
-        .where(SecurityIdentifier.id_type == "ticker")
-        .where(SecurityIdentifier.valid_to.is_(None))
-        .group_by(SecurityIdentifier.security_id)
-        .subquery()
-    )
+    if row is None:
+        return None
+    return SecurityRef(row[0], row[1], resolved.id_value, *row[2:])
 
 
 def _filings_query(decision_date: dt.date) -> Select[tuple[Any, ...]]:
@@ -348,10 +356,10 @@ def _filings_query(decision_date: dt.date) -> Select[tuple[Any, ...]]:
         .group_by(Statement.filing_id)
         .subquery()
     )
-    primary = _primary_ticker_ids()
+    primary = primary_tickers()
     return (
         select(
-            SecurityIdentifier.id_value,
+            primary.c.ticker,
             Company.legal_name,
             Company.cik,
             Filing.filing_type,
@@ -363,9 +371,8 @@ def _filings_query(decision_date: dt.date) -> Select[tuple[Any, ...]]:
         )
         .join(Company, Company.id == Filing.company_id)
         .join(Security, Security.company_id == Company.id)
-        .join(SecurityIdentifier, SecurityIdentifier.security_id == Security.id)
+        .join(primary, primary.c.security_id == Security.id)
         .outerjoin(versions, versions.c.filing_id == Filing.id)
-        .where(SecurityIdentifier.id.in_(select(primary.c.id)))
         .where(Filing.known_as_of <= decision_date)
         .order_by(Filing.filing_date.desc(), Filing.id.desc())
     )
@@ -397,17 +404,11 @@ def list_companies(session: Session, *, today: dt.date) -> list[CompanySummary]:
 
     EDGAR lists every ticker a registrant has - JPMorgan's exchange-traded notes, Bank of
     America's preferred series - and each is a current identifier of the same security.
-    The first one EDGAR lists is the common stock, and it was inserted first, so the lowest
-    identifier id per security is the primary ticker. Share classes as securities of their
-    own are TG2 (P3) work.
+    One of them is the common stock and `security_identifiers.is_primary` says which, which
+    since migration 0018 is a constrained column rather than this query guessing by lowest
+    id. Share classes as securities of their own are TG2 (P3) work.
     """
-    primary = (
-        select(func.min(SecurityIdentifier.id).label("id"))
-        .where(SecurityIdentifier.id_type == "ticker")
-        .where(SecurityIdentifier.valid_to.is_(None))
-        .group_by(SecurityIdentifier.security_id)
-        .subquery()
-    )
+    primary = primary_tickers()
     periods = (
         select(
             Statement.company_id,
@@ -421,7 +422,7 @@ def list_companies(session: Session, *, today: dt.date) -> list[CompanySummary]:
     )
     rows = session.execute(
         select(
-            SecurityIdentifier.id_value,
+            primary.c.ticker,
             Company.legal_name,
             Company.cik,
             Exchange.code,
@@ -430,12 +431,11 @@ def list_companies(session: Session, *, today: dt.date) -> list[CompanySummary]:
             periods.c.latest_filing_date,
             Company.fiscal_year_end,
         )
-        .join(Security, Security.id == SecurityIdentifier.security_id)
+        .join(Security, Security.id == primary.c.security_id)
         .join(Company, Company.id == Security.company_id)
         .join(Exchange, Exchange.id == Security.exchange_id)
         .outerjoin(periods, periods.c.company_id == Company.id)
-        .where(SecurityIdentifier.id.in_(select(primary.c.id)))
-        .order_by(SecurityIdentifier.id_value)
+        .order_by(primary.c.ticker)
     ).all()
     companies: list[CompanySummary] = []
     for r in rows:

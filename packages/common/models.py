@@ -144,24 +144,66 @@ class Security(Base):
 
 
 class SecurityIdentifier(Base):
-    """A ticker, ISIN, CUSIP or SEDOL, dated. `docs/08` §2.1, TG2.
+    """A ticker, ISIN, CUSIP, SEDOL, CIK, LEI or FIGI, dated. `docs/08` §2.1, TG2.
 
     Tickers get reused and companies rename; GUARANTY became GTCO on 2021-08-01 and both
     rows point at the same security, so the price history never splits.
+
+    **Read nothing here directly.** `packages/common/identity.py` is the only module that
+    queries this table (`OPERATIONS.md` §1.4: "no `WHERE ticker = ?` anywhere else in the
+    codebase"), and a test walks the AST of the repository to keep it that way.
+
+    `valid_to` is **inclusive**: the last day the identifier was valid. The next row starts
+    the following day, which is what makes `docs/08` §2.1's GUARANTY/GTCO sample gap-free.
+
+    Two things migration 0018 creates in raw SQL, because neither is expressible here:
+
+    * `no_overlapping_ids` - `EXCLUDE USING gist` over
+      `(id_type, id_value, COALESCE(exchange_id, 0), daterange(valid_from, valid_to + 1))`.
+      `docs/10` §2.11 calls it "the only mechanism that makes `resolve_security` provably
+      single-valued", and it replaced a unique key that let two securities hold one ticker
+      over overlapping dates as long as `valid_from` differed by a day.
+    * `CREATE EXTENSION btree_gist`, which that constraint needs for integer equality.
     """
 
     __tablename__ = "security_identifiers"
     __table_args__ = (
-        UniqueConstraint("id_type", "id_value", "valid_from"),
+        # Mirrors migration 0018. The dropped `UNIQUE (id_type, id_value, valid_from)` is
+        # deliberately absent: it was not exchange-scoped, so it rejected one ticker string
+        # legitimately listed on two exchanges from the same day.
+        CheckConstraint(
+            "id_type IN ('ticker', 'isin', 'cusip', 'sedol', 'cik', 'lei', 'figi')",
+            name="identifier_type_is_known",
+        ),
+        CheckConstraint(
+            "id_type <> 'ticker' OR exchange_id IS NOT NULL", name="identifier_has_exchange"
+        ),
+        CheckConstraint(
+            "valid_to IS NULL OR valid_to >= valid_from", name="identifier_interval_is_ordered"
+        ),
         Index("ix_security_identifiers_lookup", "id_type", "id_value", "valid_from", "valid_to"),
+        Index(
+            "one_primary_ticker_per_security",
+            "security_id",
+            unique=True,
+            postgresql_where=text("is_primary AND id_type = 'ticker' AND valid_to IS NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), nullable=False)
-    id_type: Mapped[str] = mapped_column(Text, nullable=False)  # 'ticker'|'isin'|'cusip'|'sedol'
+    id_type: Mapped[str] = mapped_column(Text, nullable=False)  # see identity.ID_TYPES
     id_value: Mapped[str] = mapped_column(Text, nullable=False)
     valid_from: Mapped[dt.date] = mapped_column(Date, nullable=False)
     valid_to: Mapped[dt.date | None] = mapped_column(Date, nullable=True)  # NULL = current
+    # NULL for the global types (ISIN, CUSIP, SEDOL, CIK, LEI, FIGI): they name an
+    # instrument or a registrant, not a listing. A ticker without one is refused.
+    exchange_id: Mapped[int | None] = mapped_column(ForeignKey("exchanges.id"), nullable=True)
+    # Which of a security's current tickers is the common stock. EDGAR lists notes and
+    # preferred series beside it; `one_primary_ticker_per_security` allows exactly one.
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    #: Who says this identifier was theirs. Provenance, `CLAUDE.md`'s hard rule.
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     security: Mapped[Security] = relationship()
 

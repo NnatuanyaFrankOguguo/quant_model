@@ -223,7 +223,7 @@ given) and their DDL here is this document's proposal, written in the same style
 |---|---|---|---|---|
 | 1 | `companies` | The legal entity | P2 | Doc A |
 | 2 | `securities` | A tradeable instrument; **retains delisted rows** | P2 | Doc A |
-| 3 | `security_identifiers` | Ticker history, time-bounded | P3 | **[proposed]** TG2 |
+| 3 | `security_identifiers` | Ticker history, time-bounded | P2 (0011) / P3 (0018) | **[built]** TG2 · §2.1 |
 | 4 | `exchanges` | NGX, NASDAQ, NYSE | P2 | Doc A |
 | 5 | `trading_calendar` | Which days each exchange was open | P3 | **[proposed]** TG2 |
 | 6 | `industries` | Sector classification; drives the statement template | P2 | Doc A |
@@ -341,18 +341,52 @@ CREATE TABLE securities (
 > unavoidable and silently inflates every historical result.
 
 ```sql
--- [proposed] TG2 — OPERATIONS §1.4
+-- [built] TG2 — OPERATIONS §1.4. Created by 0011, corrected by 0018 per docs/10 §2.11.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 CREATE TABLE security_identifiers (
   id           SERIAL PRIMARY KEY,
   security_id  INT NOT NULL REFERENCES securities(id),
-  id_type      TEXT NOT NULL,                  -- 'ticker' | 'isin' | 'cusip' | 'sedol'
+  id_type      TEXT NOT NULL,                  -- see identifier_type_is_known below
   id_value     TEXT NOT NULL,
   valid_from   DATE NOT NULL,
-  valid_to     DATE,                           -- NULL = still current
-  UNIQUE (id_type, id_value, valid_from)
+  valid_to     DATE,                           -- NULL = current; otherwise INCLUSIVE
+  exchange_id  INT REFERENCES exchanges(id),   -- NULL for the global types
+  is_primary   BOOLEAN NOT NULL DEFAULT false, -- which current ticker is the common stock
+  source       TEXT,                           -- who says this identifier was theirs
+  CONSTRAINT identifier_type_is_known CHECK (
+    id_type IN ('ticker','isin','cusip','sedol','cik','lei','figi')),
+  CONSTRAINT identifier_has_exchange CHECK (
+    id_type <> 'ticker' OR exchange_id IS NOT NULL),
+  CONSTRAINT identifier_interval_is_ordered CHECK (
+    valid_to IS NULL OR valid_to >= valid_from),
+  CONSTRAINT no_overlapping_ids EXCLUDE USING gist (
+    id_type WITH =, id_value WITH =, (COALESCE(exchange_id, 0)) WITH =,
+    daterange(valid_from, COALESCE(valid_to + 1, 'infinity'::date), '[)') WITH &&)
 );
 CREATE INDEX ON security_identifiers (id_type, id_value, valid_from, valid_to);
+CREATE UNIQUE INDEX one_primary_ticker_per_security ON security_identifiers (security_id)
+  WHERE is_primary AND id_type = 'ticker' AND valid_to IS NULL;
 ```
+
+> **The `UNIQUE (id_type, id_value, valid_from)` this block used to carry was the defect,
+> not the constraint** ([10](10_PRE_BUILD_CORRECTIONS.md) §2.11). It permits two securities
+> to hold one ticker over overlapping windows as long as `valid_from` differs by a day,
+> which is the NGX ticker-reuse merge §1.4 exists to stop; and it is not exchange-scoped, so
+> it also *rejects* a real dual listing. 0018 dropped it for `no_overlapping_ids`.
+>
+> Two details of that constraint differ from §2.11's literal SQL, because the literal form
+> does not deliver the single-valuedness the same paragraph promises.
+> **`COALESCE(exchange_id, 0)`**: `exchange_id` is NULL for the global types and `NULL = NULL`
+> is NULL inside an exclusion constraint, so every ISIN would escape the check — the one type
+> that is globally unique by definition. **`valid_to + 1`**: `valid_to` is inclusive here, and
+> a one-day interval (`valid_from = valid_to`, which `_record_predecessor` writes) is an
+> *empty* range under a half-open bound on the raw value, and an empty range overlaps nothing.
+>
+> **Read it through one function.** `packages/common/identity.py::resolve_security(value,
+> as_of, id_type, exchange)` is the only code that queries this table, per `OPERATIONS.md`
+> §1.4's "no `WHERE ticker = ?` anywhere else in the codebase"; a test walks the repository's
+> AST to enforce it. Given no `exchange`, a value live on two exchanges raises rather than
+> choosing.
 
 > **`id_type = 'cik'`** (added 2026-09-14). A predecessor registrant's CIK, attached to the
 > continuing company's primary security, `valid_to` the successor's 8-K12B date and
