@@ -37,6 +37,7 @@ from typing import Any, Generic, TypeVar, cast
 import structlog
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from packages.common.config import redact_secrets
@@ -417,6 +418,14 @@ def store_raw(session: Session, raw: RawResponse, *, connector: Connector) -> So
     Idempotent on content: the same bytes fetched twice reuse the existing row, because the
     key *is* the hash. `sha256` is `UNIQUE`, so a reissued document is a new row and never an
     edit of the old one.
+
+    **Safe against a second writer of the same bytes.** Two jobs can store one document at
+    the same moment - every EDGAR job fetches the shared ticker file first - and the
+    select-then-insert below is a race the unique index catches: on 2026-09-16 a night of
+    missed jobs fired together and two of them died on
+    `duplicate key value violates unique constraint "source_documents_sha256_key"`. The
+    insert runs in a savepoint, so losing that race costs the savepoint and not the
+    caller's transaction, and the row the winner wrote is returned instead.
     """
     storage = get_storage()
     stored = storage.put(raw.data, media_type=raw.media_type)
@@ -436,8 +445,19 @@ def store_raw(session: Session, raw: RawResponse, *, connector: Connector) -> So
         etag=raw.etag,
         last_modified=raw.last_modified,
     )
-    session.add(document)
-    session.flush()
+    try:
+        with session.begin_nested():
+            session.add(document)
+            session.flush()
+    except IntegrityError:
+        # Another writer inserted this exact document between the select and the insert.
+        won = session.execute(
+            select(SourceDocument).where(SourceDocument.sha256 == stored.sha256)
+        ).scalar_one_or_none()
+        if won is None:
+            raise  # the violation was not the one we can absorb
+        _log.info("source_document_already_written_by_another_run", sha256=stored.sha256[:12])
+        return won
     return document
 
 

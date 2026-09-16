@@ -7,10 +7,16 @@ store never overwrites, and a stored object can be proved intact later.
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
-from packages.common.storage import KEY_PREFIX, LocalDiskBackend, sha256_hex
+from packages.common.storage import (
+    KEY_PREFIX,
+    LocalDiskBackend,
+    StoredObject,
+    sha256_hex,
+)
 
 PDF = b"%PDF-1.7\nnot really a pdf, but bytes are bytes\n"
 
@@ -80,3 +86,52 @@ def test_verify_is_false_for_an_absent_object(store: LocalDiskBackend) -> None:
 def test_get_raises_for_an_absent_object(store: LocalDiskBackend) -> None:
     with pytest.raises(FileNotFoundError):
         store.get(sha256_hex(b"never stored"))
+
+
+# --------------------------------------------------------------------------------------
+# Two runs storing the same bytes at once (the 2026-09-16 03:15 stampede)
+# --------------------------------------------------------------------------------------
+
+
+def test_two_threads_storing_the_same_bytes_do_not_fight_over_the_temp_file(
+    tmp_path: Path,
+) -> None:
+    """Every EDGAR job fetches the shared ticker file, so this happens for real.
+
+    On Windows two writers of one shared `.partial` name failed with "the process cannot
+    access the file because it is being used by another process", and the job died. Losing
+    the race is not a failure: the name IS the hash, so the winner wrote these exact bytes.
+    """
+    import threading
+
+    store = LocalDiskBackend(tmp_path / "documents")
+    data = b'{"0":{"cik_str":320193,"ticker":"AAPL"}}' * 500
+    writers = 8
+    barrier = threading.Barrier(writers)
+    results: list[StoredObject] = []
+    errors: list[BaseException] = []
+
+    def put_it() -> None:
+        try:
+            barrier.wait(timeout=10)
+            results.append(store.put(data, media_type="application/json"))
+        except BaseException as exc:  # noqa: BLE001 - the test reports whatever escaped
+            errors.append(exc)
+
+    threads = [threading.Thread(target=put_it) for _ in range(writers)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert not errors, f"a writer raised: {errors[0]!r}"
+    assert len(results) == writers
+    assert len({r.sha256 for r in results}) == 1, "one content address"
+    # Not "exactly one wrote it": two writers of identical bytes can both complete a
+    # replace, and that is harmless - the name is the hash, so neither can write anything
+    # the other did not. `newly_written` is a report, not a lock, and locking a
+    # content-addressed store against its own content would buy nothing.
+    assert any(r.newly_written for r in results), "somebody wrote it"
+    assert store.get(results[0].sha256) == data, "the stored bytes are whole"
+    leftovers = list((tmp_path / "documents" / "sha256").glob("*.partial"))
+    assert leftovers == [], f"temp files left behind: {leftovers}"

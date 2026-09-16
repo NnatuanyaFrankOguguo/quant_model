@@ -10,16 +10,21 @@ from __future__ import annotations
 
 import datetime as dt
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from packages.common.models import ConnectorRun, MacroObservation, MacroSeries, SourceDocument
-from packages.common.storage import LocalDiskBackend
+from packages.common.storage import LocalDiskBackend, sha256_hex
+from packages.common.timez import utcnow
 from packages.ingestion import base as ingestion_base
-from packages.ingestion.base import register
+from packages.ingestion.base import RawResponse, register
+from packages.ingestion.edgar import EdgarSubmissionsConnector
 from packages.ingestion.manual_csv import ManualCsvConnector
+
+UA = "Test Person test@example.com"
 
 CSV = (
     "series_code,as_of_date,known_as_of,value\n"
@@ -394,3 +399,91 @@ def test_a_run_is_recorded_under_the_name_it_was_given(
     assert recorded == "manual:nbs:july"
     # Without a name, the connector's own name - unchanged behaviour for the manual path.
     assert connector.run(db_session, path=csv_path).connector_name == "manual_csv_nbs"
+
+
+@pytest.mark.invariant
+def test_a_document_written_by_another_run_is_taken_not_raised(
+    db_session: Session, local_store: LocalDiskBackend
+) -> None:
+    """The select-then-insert in `store_raw` is a race the unique index catches.
+
+    A genuinely separate connection commits the same document between this session's
+    select and its insert - which is what two jobs waking together did on 2026-09-16 -
+    and the loser must take the winner's row and carry on, with its own transaction
+    still usable.
+    """
+    from sqlalchemy import delete, event
+
+    from packages.common.models import DataSource
+
+    # The same database this session uses, on a connection of its own. Not
+    # `packages.common.db.engine`: that is the dev database, and a competitor committed
+    # there would conflict with nothing here - the first version of this test passed a
+    # green assertion for that reason.
+    engine = db_session.get_bind().engine
+
+    connector = EdgarSubmissionsConnector(user_agent=UA)
+    register(db_session, connector)
+    raw = RawResponse(
+        data=f"race fixture {uuid4().hex}".encode(),
+        media_type="application/json",
+        url="https://www.sec.gov/files/company_tickers.json",
+        http_status=200,
+    )
+    digest = sha256_hex(raw.data)
+    competitor_id: list[int] = []
+
+    def commit_a_competing_row(*_args: object) -> None:
+        """Runs as this session begins its flush: the other job commits first."""
+        if competitor_id:
+            return
+        with Session(bind=engine) as other:
+            source_id = (
+                other.execute(select(DataSource.id).order_by(DataSource.id)).scalars().first()
+            )
+            document = SourceDocument(
+                data_source_id=source_id,
+                url=raw.url,
+                storage_key=f"documents/sha256/{digest}.json",
+                sha256=digest,
+                media_type="application/json",
+                retrieved_at=utcnow(),
+            )
+            other.add(document)
+            other.commit()
+            competitor_id.append(document.id)
+
+    event.listen(db_session, "before_flush", commit_a_competing_row)
+    try:
+        stored = ingestion_base.store_raw(db_session, raw, connector=connector)
+        assert competitor_id, "the competitor must have committed for this to be the race"
+        assert stored.id == competitor_id[0], "we take the row the winner wrote"
+        assert stored.sha256 == digest
+        # The caller's transaction survived: the failed insert cost a savepoint, not the run.
+        assert (
+            db_session.execute(select(func.count()).select_from(SourceDocument)).scalar_one() >= 1
+        )
+        db_session.flush()
+    finally:
+        event.remove(db_session, "before_flush", commit_a_competing_row)
+        if competitor_id:
+            with Session(bind=engine) as cleanup:
+                cleanup.execute(delete(SourceDocument).where(SourceDocument.id == competitor_id[0]))
+                cleanup.commit()
+
+
+def test_missed_jobs_queue_rather_than_stampede() -> None:
+    """A night of misfires must not run twenty-four EDGAR jobs at once.
+
+    `coalesce` and `max_instances` stop one job running twice; they say nothing about
+    different jobs coming due together. One worker makes them queue - which is also what
+    the EDGAR connector's process-wide 10 req/s throttle assumes.
+    """
+    from packages.scheduler.jobs import build_jobs
+    from packages.scheduler.runner import build_scheduler
+
+    scheduler = build_scheduler(build_jobs())  # built, never started: nothing to shut down
+    executor = scheduler._executors["default"]
+    assert executor._pool._max_workers == 1, "jobs run one after another"
+    for job in scheduler.get_jobs():
+        assert job.coalesce is True and job.max_instances == 1

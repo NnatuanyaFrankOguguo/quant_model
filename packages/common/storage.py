@@ -27,11 +27,13 @@ from a convention into something the database enforces.
 from __future__ import annotations
 
 import hashlib
+import os
 import stat
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from uuid import uuid4
 
 from packages.common.config import get_settings
 
@@ -150,16 +152,33 @@ class LocalDiskBackend(StorageBackend):
         path.parent.mkdir(parents=True, exist_ok=True)
         # Write to a temporary name and rename, so a crash mid-write cannot leave a
         # truncated file sitting at a content address that promises it is complete.
-        tmp = path.with_suffix(path.suffix + ".partial")
-        tmp.write_bytes(data)
-        tmp.replace(path)
-        _make_read_only(path)
+        #
+        # The temp name carries this writer's own id, because two jobs can store the same
+        # bytes at the same moment - every EDGAR job fetches the shared ticker file - and
+        # on Windows a second writer of one shared `.partial` fails with "the process
+        # cannot access the file because it is being used by another process" (seen
+        # 2026-09-16 03:15, when a night of missed jobs all fired at once). Losing the
+        # race is not a failure: the name IS the hash, so whoever won wrote these exact
+        # bytes.
+        tmp = path.with_suffix(f"{path.suffix}.{os.getpid()}.{uuid4().hex}.partial")
+        newly_written = True
+        try:
+            tmp.write_bytes(data)
+            tmp.replace(path)
+        except OSError:
+            if self._find(digest) is None:
+                raise  # not a race: the object is genuinely not there
+            newly_written = False
+        finally:
+            tmp.unlink(missing_ok=True)
+        if newly_written:
+            _make_read_only(path)
         return StoredObject(
             sha256=digest,
             storage_key=self.key_for(digest, media_type),
             media_type=media_type,
             size_bytes=len(data),
-            newly_written=True,
+            newly_written=newly_written,
         )
 
     def get(self, sha256: str) -> bytes:

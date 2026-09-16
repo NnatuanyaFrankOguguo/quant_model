@@ -213,22 +213,27 @@ retrofitted.
 > **Update this table at every phase transition.** It is the only place in the document set
 > that claims what is done. Keeping it honest is what stops you from building on sand.
 
-**Current phase: P2 — US Company Data. Status: 🧪 BUILT, 13 of 15 checks in code; 13 and 14
-are the operator's, by eye, on the company page. P1 and P0 are also 🧪, for reasons that
-have not changed.**
+**Current phase: P2 — US Company Data. Status: ✅ COMPLETE, 15 of 15 checks, verified by
+the operator on 2026-09-15 — who checked the figures against the SEC's own documents rather
+than against this system's word for them. P1 closed the same day (check 11, its last). P0
+alone remains 🧪, for the reason it has always been: CI has never run.**
+
+**Next: P3 — Nigerian Manual Analyzer**, whose entry criteria are the operator's (a
+Backblaze B2 account; the UNIVERSE.md tickers verified against NGX's listing directory).
 
 The P0 spine from [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §6.1 is built and
 verified on 2026-09-02: 17 tables migrated on Neon PostgreSQL 18.6, the mode gate enforced and
 adversarially tested, a backup dumped and actually restored. **It is 🧪 and not ✅ for one
 reason: check 13 (CI green on a PR) cannot run — there is no GitHub remote yet.** The
-workflow is written and waiting. P1 is 🧪 for the by-eye check 11 alone. Both are the
-operator's to close; see "the immediate next actions" below.
+workflow is written and waiting, and the remote now exists but holds only `p0-spine`:
+`main` has never been pushed. That one is the operator's; see "the immediate next actions"
+below. **P1 and P2 are closed**, both verified by eye on 2026-09-15.
 
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
-| P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
-| P1 Macro Backdrop | 🧪 Built | 2026-09-03 | — | 12½/13 | 10 of 13 series live · 28,053 rows · check 11 by eye |
-| P2 US Company Data | 🧪 Built | 2026-09-13 | — | 13/15 | 24 companies · 1,551 filings · 7,418 statement versions · 50,141 line items · 269,192 price bars · checks 13, 14 by eye |
+| P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: remote exists, `main` never pushed, CI never run |
+| P1 Macro Backdrop | ✅ Complete | 2026-09-03 | 2026-09-15 | 13/13 | Check 11 confirmed 2026-09-15 · 10 of 13 series live · 28,053 rows · staleness thresholds verified (0016) |
+| P2 US Company Data | ✅ Complete | 2026-09-13 | 2026-09-15 | 15/15 | 24 companies · 1,662 filings · 7,917 statement versions · 53,710 line items · 269,216 price bars · 3,270 corporate actions |
 | P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
 | P5 News & Daily Brief | ⬜ Not started | — | — | — | |
@@ -421,11 +426,46 @@ the four public company routes and `apps/streamlit/company_page.py` for the by-e
 and the universe: **24 of 24 US companies loaded end to end**, every price series current
 to 2026-09-11, `pit_sanity` violations zero, orphan line items zero.
 
-**P2 checkpoint: 1–12 and 15 in code; 13 and 14 by eye** — open the company page, hold
-Apple's FY2025 revenue, total assets and `interest_expense` (NULL: Apple no longer discloses
-it separately) against the 10-K, then run the DCF at 9% and 10% and watch the value move.
-Check 9 reads as [08](08_DATA_CONTRACTS.md) §2.4 corrected it: `close_raw` as traded, no
-stored adjusted column.
+**P2 checkpoint: 15 of 15, closed 2026-09-15.** Checks 1–12 and 15 in code; 13 and 14 by
+eye, and the operator did not take the page's word for it — they pulled Apple's 10-K and the
+SEC's structured feed independently and compared both against what the API and the page
+hold. **Check 13: all three figures match** (revenue 416,161m, total assets 359,241m, and an
+`interest_expense` that is correctly blank — no such line and no such XBRL fact in the
+FY2024 or FY2025 10-K; the last one was FY2023's 3,933m, which the page still shows). They
+went past the three: **all 19 FY2025 values we hold match the filing tag for tag**, zero
+mismatches, and the internal identities hold (revenue − cost of revenue = gross profit;
+liabilities + equity = total assets). **Check 14: value per share fell 12.93%** between a 9%
+and a 10% discount rate (105.89 → 92.19), inside the 12–13% the plan predicts, recomputed by
+hand from the echoed inputs and agreeing to the cent. Check 9 reads as
+[08](08_DATA_CONTRACTS.md) §2.4 corrected it: `close_raw` as traded, no stored adjusted
+column.
+
+**P1 check 11 closed the same day.** The three US series agree with FRED's own feed on every
+shared date, zero disagreements across the full history; the naira rate was current. The
+staleness flags were the finding: 8 series flagged, of which 3 were genuine and 5 were the
+flag's own arithmetic — fixed in migration 0016, below.
+
+**What the operator's verification and the first unattended night taught** (2026-09-15/16),
+each now fixed with a test:
+
+* **Two jobs storing one document collided.** Every EDGAR job fetches the shared SEC ticker
+  file first. A night of missed jobs fired together when the laptop woke, and two died —
+  one on Windows' *"the process cannot access the file because it is being used by another
+  process"* (both writers used one `.partial` name), one on
+  `duplicate key value violates unique constraint "source_documents_sha256_key"` (both
+  missed the select, both inserted). The store now writes under a per-writer temp name and
+  treats losing the race as success — the name *is* the hash, so the winner wrote the same
+  bytes — and `store_raw` inserts inside a savepoint and takes the winner's row. The
+  scheduler now runs one job at a time, which is also what the EDGAR connector's
+  process-wide 10 req/s throttle has always assumed.
+* **The staleness flag was crying wolf** (migration 0016). `_staleness` measures the age of
+  the newest *period held*, so a threshold must cover a whole period **plus** the publisher's
+  lag; seeded at the lag alone, every healthy monthly series flagged from day 21 of its
+  cycle. Thresholds are now measured from our own vintages, and a test holds the rule for
+  every series — which immediately found two more that no dashboard had flagged, because
+  they hold no data yet. Flags went from 8 to 3, and all 3 are genuine: NBS CPI stopped at
+  November 2025, GDP at Q3 2024, and the US 10-year is behind because runs were missed while
+  the laptop slept.
 
 **What the universe load taught** — three defects, each a filer's data meeting a constraint
 that did its job, each now a rule in [08](08_DATA_CONTRACTS.md) §2.3 with a regression test:
@@ -473,7 +513,7 @@ describes the source's lag, not ours.
 | FastAPI service | ✅ `/health`, ping, the macro series routes, `/v1/public/companies{,/{t}/statements,/ratios,/ratios/history,/dividends,/filings,/dcf}`, `/v1/public/filings/recent` and `/v1/public/operations/connectors` — mode gate, bearer auth, audit row per request, every response type registered |
 | Screens | ✅ Three thin Streamlit clients: the company page, the macro dashboard, and the operations page (every job judged ok / warning / error / never ran, every data set's as-of) — `python -m streamlit run apps/streamlit/<page>.py` |
 | Any application code | ✅ The spine. No financial logic, by design |
-| CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed — no remote** |
+| CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed** — the remote exists but holds only `p0-spine`; `main` has never been pushed |
 | Test suite | ✅ 412 passing, 0 skipped (`tests/unit`, `tests/known_answer`, `tests/compliance`; live-network tests are opt-in) |
 | Backup | ✅ Dumped, verified, copied, **and restored** 2026-09-02 — [REVIEW_CADENCE](REVIEW_CADENCE.md) row 2. Off-site: still zero |
 | ADR log | ✅ [0001–0010](adr/README.md) |
@@ -493,14 +533,14 @@ Ordered. The first four are the difference between P0.4 running and not running.
       §6.4 — GitHub will not let you approve your own PR)
 - [x] ~~Install the pre-commit hooks~~ — installed 2026-09-03 and run over all files:
       gitleaks, ruff, ruff-format, yaml/toml, large files, private keys, `no-commit-to-branch`
-- [ ] **P2 checks 13 and 14, by eye.** Start the API (`.venv\Scripts\python.exe -m uvicorn
-      services.api.main:app`), then `python -m streamlit run apps\streamlit\company_page.py`.
-      Hold Apple's FY2025 revenue (416,161m), total assets and `interest_expense` (NULL) against
-      the 10-K; run the DCF at a 9% and a 10% discount rate. Then P2 is 🧪 for the same reason
-      P0 is — CI has never run — and P3's entry criteria are next
-- [ ] **Check nine, again, now with the actions held:** `SELECT close_raw FROM price_history`
-      at 2020-08-28 still reads 499.23, and `adjusted_close(..., decision_date=2020-09-01)`
-      reads 124.81 — the promise [08](08_DATA_CONTRACTS.md) §2.4 made, kept in code
+- [x] ~~**P2 checks 13 and 14, and P1 check 11, by eye**~~ — done 2026-09-15, independently
+      of the page: the 10-K and the SEC feed pulled directly, all 19 FY2025 values matched,
+      the DCF recomputed by hand, FRED compared across its full history
+- [ ] **Stop the laptop sleeping through the schedule, or move the schedule.** The 03:00 run
+      of 2026-09-16 fired at 03:15 on wake, and that morning's 06:15 FRED jobs were skipped
+      entirely (asleep 06:10–08:59). The `schtasks` entry in [02](02_INFRASTRUCTURE.md) §2.3
+      survives a logout but not sleep; the choices are a sleep setting, a wake timer, or a
+      host that stays on (§5 there)
 - [ ] **One question a week from the Kaizen ledger** ([05](05_USER_STORIES.md) §11) — the
       questions a person actually asks, each with its honest status; the first five to pick are
       named in §11.3. Each is one PR: route, test, screen, and the status flipped in the ledger

@@ -188,10 +188,19 @@ def build_scheduler(jobs: list[ScheduledJob]):
     Imported lazily so that the API and the test suite do not pay for APScheduler, and so
     that a missing optional dependency surfaces here rather than at import of the package.
     """
+    from apscheduler.executors.pool import ThreadPoolExecutor
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
 
-    scheduler = BackgroundScheduler(timezone="UTC")  # TG21: schedules are UTC, like storage
+    # One worker, so jobs run one after another. `coalesce` and `max_instances` below stop
+    # *one* job running twice; they do nothing about twenty-four *different* jobs whose
+    # misfires all come due at once, which is what happened when the laptop woke at 03:15
+    # on 2026-09-16 and every EDGAR job fetched the shared ticker file simultaneously.
+    # Serial execution is also what the EDGAR connector's process-wide 10 req/s throttle
+    # assumes: parallel jobs would race past it and earn a ten-minute IP block.
+    scheduler = BackgroundScheduler(  # TG21: schedules are UTC, like storage
+        timezone="UTC", executors={"default": ThreadPoolExecutor(1)}
+    )
     for job in jobs:
         scheduler.add_job(
             _scheduled_run,

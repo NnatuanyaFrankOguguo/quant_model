@@ -220,3 +220,56 @@ def test_unknown_series_gives_an_empty_page(db_session: Session) -> None:
     assert page.points == []
     assert page.total_available == 0
     assert page.truncated is False
+
+
+# --- the staleness threshold has to cover a whole period (migration 0016) -----------------
+
+#: The longest a period of each frequency lasts, in days. A threshold below this flags every
+#: healthy series for the second half of every cycle, because `_staleness` measures the age
+#: of the newest *period held*, not the age of the last publication.
+PERIOD_DAYS: dict[str, int] = {"daily": 1, "monthly": 31, "quarterly": 92, "annual": 365}
+
+
+@pytest.mark.invariant
+def test_every_threshold_leaves_room_for_a_period_and_its_publication_lag(
+    db_session: Session,
+) -> None:
+    """Migration 0005 seeded these as [NEEDS VERIFICATION]; 0016 verified them.
+
+    A monthly series set to 20 days cries wolf from day 21 of every month, and a dashboard
+    that cries wolf is one a reader learns to ignore - which is the failure mode the flag
+    exists to prevent.
+    """
+    rows = db_session.execute(
+        select(MacroSeries.code, MacroSeries.frequency, MacroSeries.expected_lag_days)
+    ).all()
+    assert rows, "the seed migrations put series here"
+    for code, frequency, lag in rows:
+        if frequency == "irregular":
+            continue  # never judged stale by the rule; there is no cadence to judge against
+        period = PERIOD_DAYS[frequency]
+        assert lag > period, (
+            f"{code} is {frequency} with a {lag}-day threshold: a period alone is {period} "
+            f"days, so this flags a healthy series before the next release is even due"
+        )
+
+
+def test_a_monthly_series_awaiting_its_next_release_is_not_stale(
+    db_session: Session, document_id: int
+) -> None:
+    """The false alarm the operator found on 2026-09-15, as a test.
+
+    US CPI for August is dated 2026-08-01 and published mid-September; September's figure is
+    not due until mid-October. On 2026-09-16 the August figure is 46 days old and perfectly
+    fresh - and on 2026-11-01 it is 92 days old, and genuinely overdue.
+    """
+    _add(db_session, "US_CPI_INDEX", "2026-08-01", "2026-09-11", "329.4", document_id)
+    db_session.flush()
+
+    healthy = macro.series_summary(db_session, "US_CPI_INDEX", on=dt.date(2026, 9, 16))
+    assert healthy is not None
+    assert healthy.days_since_as_of == 46
+    assert healthy.is_stale is False, "the next release is not due yet"
+
+    overdue = macro.series_summary(db_session, "US_CPI_INDEX", on=dt.date(2026, 11, 1))
+    assert overdue is not None and overdue.is_stale is True, "two releases missed: say so"
