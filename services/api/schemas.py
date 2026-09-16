@@ -316,6 +316,24 @@ class Figure(BaseModel):
             "measured across a loss or a zero misleads"
         ),
     )
+    correction_type: str = Field(
+        default="none",
+        description=(
+            "'none' on an untouched figure. 'transcription' or 'extraction' means we "
+            "misread it and fixed it, and the row keeps the ORIGINAL known_as_of so a "
+            "point-in-time read before the fix does not return the error. 'restatement' "
+            "means the company republished, and carries the new publication date."
+        ),
+    )
+    corrected_by: str | None = Field(
+        default=None, description="Who corrected this figure by hand, when one did"
+    )
+    corrected_at: dt.datetime | None = Field(
+        default=None, description="When the correction was applied (not when it took effect)"
+    )
+    correction_reason: str | None = Field(
+        default=None, description="Why it was corrected - required of every correction"
+    )
 
 
 class StatementPeriod(BaseModel):

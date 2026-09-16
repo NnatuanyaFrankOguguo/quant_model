@@ -307,6 +307,10 @@ async def company_statements(
                         previous_known_as_of=i.previous_known_as_of,
                         prior_value=i.prior_value,
                         change_yoy=i.change_yoy,
+                        correction_type=i.correction_type,
+                        corrected_by=i.corrected_by,
+                        corrected_at=i.corrected_at,
+                        correction_reason=i.correction_reason,
                     )
                     for key, i in p.items.items()
                 },

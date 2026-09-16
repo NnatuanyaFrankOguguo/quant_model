@@ -1836,11 +1836,35 @@ disagree, and the disagreement will be silent.
 |---|---|
 | **Add a nullable column** | Alembic migration. Safe. |
 | **Add a NOT NULL column** | Three steps: add nullable → backfill → set NOT NULL. |
-| **Change a financial value** | **Never `UPDATE`.** Insert a new version, set `superseded_by`, record `corrected_by` and `correction_reason` ([CLAUDE.md](../CLAUDE.md)). |
+| **Change a financial value** | **Never `UPDATE`.** Insert a new version, set `superseded_by`, record `corrected_by` and `correction_reason` ([CLAUDE.md](../CLAUDE.md)). **Which `known_as_of` the new row gets depends on whose mistake it was — see below.** |
 | **Change the chart of accounts** | New `chart_version`. Old mappings stay valid for old rows. This is what stops a vocabulary change from forcing a re-extraction (TG7). |
 | **Change an API response shape** | Additive only within a version. Removing or retyping a field requires a new path version. |
 | **Change a cost-model parameter** | New `cost_model_params` on the run. Historical `backtest_runs` are never retro-fitted — they record what was believed at the time. |
 | **Change a regulatory threshold** | Dated configuration in `system_config`, never a constant. The NGX movement rule and Nigerian CGT both moved during planning ([TEAM_BRIEF.md Part 3](../TEAM_BRIEF.md)). |
+
+> **The `known_as_of` of a corrected figure** ([10](10_PRE_BUILD_CORRECTIONS.md) §2.10 asked
+> for this rule to be stated here; implemented in `packages/normalize/corrections.py`, TG10).
+> The two cases are opposite and getting them the wrong way round is silent:
+>
+> | `correction_type` | Whose mistake | `known_as_of` of the new version |
+> |---|---|---|
+> | `restatement` | The company republished | **The new publication date.** Both figures were true in their day, and a reader before that date must still get the earlier one |
+> | `transcription`, `extraction` | Ours — we misread or mistyped | **The original date, unchanged.** The market always had the right number |
+>
+> The second is the one that bites. If a correction of ours took a new date, every
+> point-in-time query with a decision date before the day somebody noticed would return the
+> error **forever**, baked into every backtest over that period. So the corrected row carries
+> the date the company first published, and `packages/common/pit.py` picks it because it
+> orders by `known_as_of DESC, version DESC` — the later version at the same date wins.
+>
+> **A correction versions the statement, not the line item alone.** `one_current_version` is
+> unique per `(statement_id, canonical_key)` among un-superseded rows, so two current
+> versions of one figure cannot share a statement. The corrected figure therefore lands on a
+> new statement version with every sibling carried across unchanged — the same shape
+> `StatementWriter` uses for a restatement, and what §2.3's "as known after this filing is
+> the whole statement" already implies. `restatement_flag` stays false for our own
+> corrections: it drives the page's "restated" marker, and a typo of ours is not the company
+> changing its mind.
 
 **The rule underneath all of them:** a contract change that silently alters the meaning of stored
 data is the most expensive kind of change in this project, because every derived value must be

@@ -119,6 +119,14 @@ class LineItem:
     #: has turned negative, because a change measured across a loss or a zero misleads.
     prior_value: Decimal | None = None
     change_yoy: Decimal | None = None
+    #: A figure somebody corrected by hand (TG10, `docs/03` P3.5). `correction_type` is
+    #: 'none' on an untouched figure; otherwise it is why, and `corrected_by` and
+    #: `correction_reason` are the note `PROJECT_CONTEXT.md` §7 requires. Distinct from
+    #: `restated`, which is the company republishing rather than us fixing a misreading.
+    correction_type: str = "none"
+    corrected_by: str | None = None
+    corrected_at: dt.datetime | None = None
+    correction_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -522,6 +530,10 @@ def statements_as_known_on(
                         previous_known_as_of=previous.get(_vintage_key(i), (None, None))[1],
                         prior_value=prior_year.get(i.canonical_key),
                         change_yoy=year_on_year(i.value, prior_year.get(i.canonical_key)),
+                        correction_type=i.correction_type,
+                        corrected_by=i.corrected_by,
+                        corrected_at=i.corrected_at,
+                        correction_reason=i.correction_reason,
                     )
                     for i in group
                 },

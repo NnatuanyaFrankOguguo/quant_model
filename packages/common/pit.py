@@ -48,6 +48,14 @@ class LineItemAsKnown:
     extraction_method: str
     #: True when this version changed the figure - not when it carried it forward.
     restatement_flag: bool
+    #: 'none' on an untouched figure; otherwise which kind of correction produced this
+    #: version (`docs/10` §2.10). A `'transcription'` or `'extraction'` row carries the
+    #: *original* `known_as_of`, which is what stops a typo being baked into every
+    #: point-in-time read before the day it was fixed.
+    correction_type: str
+    corrected_by: str | None
+    corrected_at: dt.datetime | None
+    correction_reason: str | None
 
 
 def line_items_as_known_on(
@@ -85,6 +93,10 @@ def line_items_as_known_on(
             StatementLineItem.chart_version,
             StatementLineItem.extraction_method,
             StatementLineItem.restatement_flag,
+            StatementLineItem.correction_type,
+            StatementLineItem.corrected_by,
+            StatementLineItem.corrected_at,
+            StatementLineItem.correction_reason,
         )
         .join(Statement, Statement.id == StatementLineItem.statement_id)
         .where(StatementLineItem.security_id == security_id)

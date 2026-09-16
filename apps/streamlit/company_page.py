@@ -164,6 +164,11 @@ BLANKS: dict[str | None, str] = {
 }
 
 
+#: The correction kinds that are *ours* rather than the company republishing. A
+#: 'restatement' already shows as one, and marking it twice would say the same thing twice.
+CORRECTED_BY_US = frozenset({"transcription", "extraction"})
+
+
 def _millions(value: str | None) -> str:
     """Display only. The API's Decimal string becomes a millions figure, or a visible blank."""
     if value is None:
@@ -185,7 +190,39 @@ def _cell(figure: dict[str, Any] | None, *, with_change: bool) -> str:
     text = _millions(figure["value"])
     if with_change and figure.get("change_yoy") is not None:
         text += f"  ({_fraction(figure['change_yoy'], percent=True, signed=True)})"
-    return text + ("  ↻" if figure.get("restated") else "")
+    if figure.get("restated"):
+        text += "  ↻"
+    # A correction of ours is not the company changing its mind, so it gets its own mark
+    # and its own list. `PROJECT_CONTEXT.md` §7 wants the note visible, not merely stored.
+    if figure.get("correction_type", "none") in CORRECTED_BY_US:
+        text += "  ✎"
+    return text
+
+
+def _corrections(periods: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Every figure in view that somebody corrected by hand, with who and why (TG10).
+
+    Separate from the restatement list on purpose. A restatement is the company
+    republishing and both figures were true in their day; a correction is us fixing a
+    misreading, and the corrected figure carries the *original* date so a point-in-time
+    read from before the fix returns it too (`docs/10` §2.10).
+    """
+    rows = []
+    for p in periods:
+        for key, figure in p["items"].items():
+            if figure.get("correction_type", "none") in CORRECTED_BY_US:
+                rows.append(
+                    {
+                        "period": p["period_label"],
+                        "line item": key,
+                        "now": _millions(figure["value"]),
+                        "kind": figure["correction_type"],
+                        "corrected by": figure.get("corrected_by") or "—",
+                        "on": (figure.get("corrected_at") or "—")[:10],
+                        "why": figure.get("correction_reason") or "—",
+                    }
+                )
+    return rows
 
 
 def _restatements(periods: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -390,6 +427,17 @@ def main() -> None:
             for p in periods
         ]
     ).set_index("period")
+    corrected = _corrections(periods)
+    if corrected:
+        with st.expander(f"✎ Corrected by hand — {len(corrected)} figure(s)", expanded=True):
+            st.caption(
+                "Somebody read one of these wrong and fixed it. The previous value is kept "
+                "and is never deleted, and because the mistake was ours rather than the "
+                "company's, the corrected figure carries the date the company originally "
+                "published - so a point-in-time view from before the fix shows the "
+                "corrected number, not the error."
+            )
+            st.table(pd.DataFrame(corrected).set_index(["period", "line item"]))
     restated = _restatements(periods)
     if restated:
         with st.expander(f"↻ Restated in what you see — {len(restated)} figure(s)", expanded=True):
