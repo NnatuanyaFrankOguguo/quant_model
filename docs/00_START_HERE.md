@@ -579,8 +579,18 @@ Ordered. The first four are the difference between P0.4 running and not running.
       purchase: one paid month, fetcher built first. Family tier: own + family capital, no
       fee, capped at 6. Extraction: 95% headline / 90% all / 85% abandon. Universe:
       [UNIVERSE.md](UNIVERSE.md)
-- [ ] **Verify every ticker and delisting date in [UNIVERSE.md](UNIVERSE.md)** against NGX's
-      listing directory — half a day, and it gates PDF collection
+- [~] **Verify every ticker and delisting date in [UNIVERSE.md](UNIVERSE.md)** — **researched
+      2026-09-16, awaiting the operator's confirmation.** 22 of 25 ticker strings were right;
+      three were not, and each would have failed silently. `WAPCO` became **`HBMNG`** in July
+      2026 when Holcim sold Lafarge Africa to Huaxin. `11PLC` was never a ticker — the symbol
+      stayed `MOBIL` through the 2017 rename to delisting. And **`FLOURMILL` has been delisted
+      since 30 Dec 2024**, so the split is 21 live and 4 delisted. Also found: two non-December
+      year ends the draft never flagged (GUINNESS closes June, AIRTELAFRI March), and a 1-for-4
+      TRANSCORP consolidation on 28 Oct 2024 that the corporate-actions backfill needs.
+      `UNIVERSE.md` §4 now holds the dated rename rows for the alias table and §5 what is still
+      a question. **What is left is the operator opening the exchange's own directory once**:
+      its company pages are a JavaScript application and could not be read, so the rows resting
+      on secondary sources are marked `CONSISTENT` rather than `CONFIRMED`
 - [ ] Decide the remaining open questions in `PROJECT_CONTEXT.md` §8
 - [ ] Begin P0 per [03_ROADMAP_PART1](03_ROADMAP_PART1_PHASES_0-6.md), **split per
       [10](10_PRE_BUILD_CORRECTIONS.md) §6.1** — the spine in a week, not the whole of P0 in
