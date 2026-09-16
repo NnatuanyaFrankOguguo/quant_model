@@ -128,11 +128,19 @@ Concretely, in `statement_line_items`:
 
 | Situation | `value` | `as_printed` | Why |
 |---|---|---|---|
-| The statement prints "Revenue 3,360,000" (in thousands) | `3360000000000` | `"3,360,000"` | Present, scaled exactly once (§9). |
+| The statement prints "Revenue 3,360,000" (in **millions**) | `3360000000000` | `"3,360,000"` | Present, scaled exactly once (§9). |
 | The statement prints "Revenue —" or a dash | `NULL` | `"—"` | The company reported nothing there. We record nothing. |
 | The line item does not appear at all | no row at all, or a row with `value = NULL` and `as_printed = NULL` | | Either is acceptable; be consistent per statement template. |
 | The extractor could not read the number | `NULL`, `needs_review = TRUE`, low `confidence` | the raw OCR string if any | Absence of *knowledge*, not absence of *fact* — flagged for a human. |
 | The statement prints "0" | `0` | `"0"` | Zero is a value. It is not the same as missing. |
+
+> **Corrected 2026-09-16, while implementing §1.5 in `packages/common/units.py`.** The first
+> row read "(in thousands)" against a value of `3360000000000`. Those disagree by exactly
+> 1,000×: 3,360,000 thousands is ₦3.36 **billion**, and `3360000000000` is ₦3.36 **trillion**,
+> which is the millions reading. [10](10_PRE_BUILD_CORRECTIONS.md) §2.8 frames the same
+> figure as telling "a correct ₦3.36tn from a misread ₦3.36bn", so the value was right and
+> the label was wrong. The worked example illustrating the 1,000× error contained one — which
+> is the section's own argument for why the multiplication needs a single home and a test.
 
 The distinction between `NULL` (unknown or absent) and `0` (reported as zero) has to survive
 every layer. A ratio engine that treats `NULL` as `0` will publish a debt-to-equity of 0.0 for a

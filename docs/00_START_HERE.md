@@ -234,7 +234,7 @@ below. **P1 and P2 are closed**, both verified by eye on 2026-09-15.
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: remote exists, `main` never pushed, CI never run |
 | P1 Macro Backdrop | ✅ Complete | 2026-09-03 | 2026-09-15 | 13/13 | Check 11 confirmed 2026-09-15 · 10 of 13 series live · 28,053 rows · staleness thresholds verified (0016) |
 | P2 US Company Data | ✅ Complete | 2026-09-13 | 2026-09-15 | 15/15 | 24 companies · 1,662 filings · 7,917 statement versions · 53,710 line items · 269,216 price bars · 3,270 corporate actions |
-| P3 NG Manual Analyzer | 🔨 In progress | 2026-09-16 | — | — | P3.3 first: identity history ✅ 0018 (`no_overlapping_ids`, `resolve_security`). Four of TG2's six paths done. P3.1/P3.2/P3.4 wait on the operator's B2 account and ticker verification |
+| P3 NG Manual Analyzer | 🔨 In progress | 2026-09-16 | — | — | P3.3 first: identity history ✅ 0018 (`no_overlapping_ids`, `resolve_security`) and unit conversion ✅ `common/units.py`. Five of TG2's six paths done; the calendar is due in P6. P3.1/P3.2/P3.4 wait on the operator's B2 account and ticker verification |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
 | P5 News & Daily Brief | ⬜ Not started | — | — | — | |
 | P6 Scenarios & Indicators | ⬜ Not started | — | — | — | Blocked by gap G1 until scheduled |
@@ -541,11 +541,17 @@ Ordered. The first four are the difference between P0.4 running and not running.
       entirely (asleep 06:10–08:59). The `schtasks` entry in [02](02_INFRASTRUCTURE.md) §2.3
       survives a logout but not sleep; the choices are a sleep setting, a wake timer, or a
       host that stays on (§5 there)
-- [ ] **P3.3, the remaining TG2 paths, in `OPERATIONS.md`'s own priority order.** Identity
-      landed 2026-09-16 (0018). Next: **§1.6 one conversion point for units** — first band
-      there, and the error class no balance-sheet tie-out catches, since a figure off by
-      1,000× on *one* line item among forty looks plausible. Then **§1.2 the trading
-      calendar**, which that order defers to "before v0.7 indicators" (P6)
+- [ ] **P3.3's last TG2 path: §1.2 the trading calendar.** Identity (0018) and units
+      (`packages/common/units.py`) landed 2026-09-16. `OPERATIONS.md`'s priority order defers
+      the calendar to "before v0.7 indicators", so it is due in P6 and not before — and
+      `docs/08` §2.1 already carries its DDL
+- [ ] **The magnitude check `OPERATIONS.md` §1.6 asks for, in P4 beside the other validators.**
+      Not built with `units.py` on purpose: `docs/06` R-22 weighs it as approach (2), "catches
+      gross errors, misses a plausible one", against the conversion function as (1), and
+      `docs/` outranks `OPERATIONS`. It is also unretrofittable — `needs_review` is set at
+      insert and `forbid_update_except_supersession` allows no later UPDATE — so it belongs
+      where its siblings live: P4.2's arithmetic validation, beside the cross-year identity
+      tie R-22 names as the real backstop
 - [ ] **Migrate `companies.cik` into the identity table** — the half of
       [10](10_PRE_BUILD_CORRECTIONS.md) §2.11 that 0018 deliberately left, since it touches
       the EDGAR connector, four API responses and the company page, and one task is one PR.
@@ -662,7 +668,7 @@ the stories each one blocks are in [05_USER_STORIES](05_USER_STORIES.md) §9.
 | ID | Gap | Why it bites | Lands in |
 |---|---|---|---|
 | **TG1** | **Price-history ingestion has no task.** T9 (indicators) computes on `price_history` and T11 (backtest) needs OHLCV bars — nothing fills either. | Hard blocker for P6 and P7, and invisible until the morning you start P6. | P2 (US), P4 (NGX) |
-| **TG2** | **All six `OPERATIONS.md` Part 1 correctness tables are unscheduled** — corporate actions (§1.1, "the highest-priority gap"), trading calendar, FX, ticker history, fiscal alignment, unit conversion. | Un-adjusted prices silently corrupt every indicator and backtest downstream. | **Four of six done**: corporate actions ✅ 0015, fiscal alignment ✅ P2, FX ✅ 0017 (6,059 rates to 2001), ticker history ✅ 0018 (`docs/10` §2.11's three defects; `resolve_security` is the one resolution point). Remaining: **unit conversion** (§1.6, first band of `OPERATIONS`' priority order — next), **trading calendar** (§1.2, due "before v0.7 indicators") |
+| **TG2** | **All six `OPERATIONS.md` Part 1 correctness tables are unscheduled** — corporate actions (§1.1, "the highest-priority gap"), trading calendar, FX, ticker history, fiscal alignment, unit conversion. | Un-adjusted prices silently corrupt every indicator and backtest downstream. | **Five of six done**: corporate actions ✅ 0015, fiscal alignment ✅ P2, FX ✅ 0017 (6,059 rates to 2001), ticker history ✅ 0018 (`docs/10` §2.11's three defects; `resolve_security` is the one resolution point), unit conversion ✅ `packages/common/units.py` (`docs/06` R-22's recommended mechanism; the magnitude check it ranks second belongs with P4's deterministic validators). Remaining: **trading calendar** (§1.2, which `OPERATIONS`' priority order defers to "before v0.7 indicators") |
 | **TG3** | **Auth/identity has no task.** "auth" is one word inside T16 (P9). | Multi-user is mandated from day one and mode derives from the principal in P0. | P0 |
 | **TG4** | **Backup and disaster recovery is unscheduled** (`OPERATIONS.md` §2.1). | The dataset is the moat. Losing it is the only unrecoverable failure. | P0 |
 | **TG5** | **The data-licensing gate has no enforcing task.** | `PROJECT_CONTEXT.md` §9.3 calls it "the one that kills deals". | P0, enforced every phase |
