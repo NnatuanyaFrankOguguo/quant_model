@@ -611,6 +611,27 @@ class AdjustmentFactor(Base):
     )
 
 
+class FxRate(Base):
+    """One rate for one pair on one day, at the vintage it became knowable (TG2).
+
+    `known_as_of` is in the primary key, so a corrected rate is a second row - and
+    `packages.common.fx` refuses to convert without a decision date.
+    """
+
+    __tablename__ = "fx_rates"
+
+    base_currency: Mapped[str] = mapped_column(CHAR(3), primary_key=True)
+    quote_currency: Mapped[str] = mapped_column(CHAR(3), primary_key=True)
+    rate_type: Mapped[str] = mapped_column(Text, primary_key=True)
+    as_of_date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    known_as_of: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    rate: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    data_source_id: Mapped[int] = mapped_column(ForeignKey("data_sources.id"), nullable=False)
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+
+
 # ---------------------------------------------------------------------------
 # §2.14 #50–54 The entity graph (P2, migration 0014; populated from P3/P4)
 # ---------------------------------------------------------------------------

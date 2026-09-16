@@ -57,12 +57,18 @@ from decimal import Decimal, InvalidOperation
 
 import httpx
 import structlog
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import Session
 
+from packages.common.fx import NFEM_OFFICIAL
+from packages.common.models import FxRate
 from packages.ingestion.base import (
     Connector,
     DataSourceLicence,
     MacroRecord,
     RawResponse,
+    _data_source_id,
 )
 
 __all__ = [
@@ -135,13 +141,85 @@ class CbnConnector(Connector):
 
 
 class CbnExchangeRateConnector(CbnConnector):
-    """Daily NFEM USD/NGN, from `centralrate` — the official mid rate."""
+    """Daily NFEM USD/NGN, from `centralrate` — the official mid rate.
+
+    Writes the rate twice, from one fetch: as a `macro_observations` row, which is the
+    published indicator a dashboard plots, and as an `fx_rates` row, which is the substrate
+    `packages.common.fx` converts with (TG2, migration 0017). One source, one document, two
+    shapes - not two sources that can disagree.
+    """
 
     name = "cbn_fx"
     path = "/api/GetAllExchangeRates"
     series_code = "NG_FX_NFEM_USDNGN"
     #: Normalised comparison target. See trap 1 in the module docstring.
     currency = "US DOLLAR"
+    #: The pair this endpoint quotes: one US dollar buys this many naira.
+    base_currency = "USD"
+    quote_currency = "NGN"
+
+    def write(
+        self, session: Session, records: list[MacroRecord], *, source_document_id: int
+    ) -> int:
+        """The macro observation, then the same rate as a conversion rate."""
+        written = super().write(session, records, source_document_id=source_document_id)
+        return written + self._write_fx_rates(
+            session, records, source_document_id=source_document_id
+        )
+
+    def _write_fx_rates(
+        self, session: Session, records: list[MacroRecord], *, source_document_id: int
+    ) -> int:
+        """Insert the rates `fx_rates` does not already hold at these figures.
+
+        The vintage rule every figure table here follows: a rate republished unchanged is
+        the same vintage and is skipped; a changed rate for the same day is a second row.
+        """
+        if not records:
+            return 0
+        data_source_id = _data_source_id(session, self)
+        held: dict[dt.date, Decimal] = {}
+        stored = session.execute(
+            select(FxRate.as_of_date, FxRate.known_as_of, FxRate.rate)
+            .where(FxRate.base_currency == self.base_currency)
+            .where(FxRate.quote_currency == self.quote_currency)
+            .where(FxRate.rate_type == NFEM_OFFICIAL)
+            .order_by(FxRate.as_of_date, FxRate.known_as_of)
+        ).all()
+        for as_of_date, _known, rate in stored:
+            held[as_of_date] = rate  # ordered by vintage: the newest wins
+
+        rows: list[dict[str, object]] = []
+        for record in records:
+            if record.value is None or record.value <= 0:
+                continue  # a rate is a positive number or it is not a rate
+            if held.get(record.as_of_date) == record.value:
+                continue
+            rows.append(
+                {
+                    "base_currency": self.base_currency,
+                    "quote_currency": self.quote_currency,
+                    "rate_type": NFEM_OFFICIAL,
+                    "as_of_date": record.as_of_date,
+                    "known_as_of": record.known_as_of,
+                    "rate": record.value,
+                    "data_source_id": data_source_id,
+                    "source_document_id": source_document_id,
+                }
+            )
+        if not rows:
+            return 0
+        inserted = 0
+        for start in range(0, len(rows), 2000):
+            statement = (
+                pg_insert(FxRate)
+                .values(rows[start : start + 2000])
+                .on_conflict_do_nothing()
+                .returning(FxRate.as_of_date)
+            )
+            inserted += len(session.execute(statement).fetchall())
+        _log.info("cbn_fx_rates_written", rows=inserted, of=len(records))
+        return inserted
 
     def parse(self, raw: RawResponse) -> list[MacroRecord]:
         payload = json.loads(raw.data.decode("utf-8"))

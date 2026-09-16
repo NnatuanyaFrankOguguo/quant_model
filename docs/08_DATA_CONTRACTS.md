@@ -767,6 +767,20 @@ Converting a 2023 Naira figure at the 2024 rate is not a rounding error — it i
 multiple. **Every conversion takes a date.** A conversion function without a date parameter is a
 defect ([OPERATIONS.md §1.3](../OPERATIONS.md)).
 
+> **Built 2026-09-16, migration 0017**, with the two deviations this schema takes everywhere:
+> `known_as_of` joins the primary key (a corrected rate is a second row, not an UPDATE the
+> `no_update` trigger would refuse), and `source_document_id` is NOT NULL beside
+> `data_source_id` (§2.13: provenance on every figure). `packages/common/fx.py` converts, and
+> takes **two** dates without defaults: `on`, the date the money is measured at, and
+> `decision_date`, so a rate published later is invisible — a `TypeError` if either is
+> missing. A rate is carried at most seven days to cover a weekend or a holiday, and beyond
+> that the answer is None rather than a silently stale number; the inverse direction is served
+> by inverting the stored pair, to twelve places so that the rate shown reproduces the figure
+> shown, and `inverted` says that is what happened. Filled from the fetch that already
+> happens: `CbnExchangeRateConnector` writes the NFEM central rate as a macro observation
+> *and* as an `fx_rates` row from the same response and document — one source, two shapes.
+> **6,059 daily rates, 2001-12-10 to date.** The other rate types have no source yet.
+
 ### 2.5 Macro tables
 
 ```sql

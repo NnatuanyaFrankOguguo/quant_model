@@ -93,6 +93,7 @@ FIGURE_TABLES: set[str] = {
     "shareholdings",  # P2, migration 0014 - units and pct_held are figures off a page
     "corporate_actions",  # TG2, migration 0015 - a ratio or a cash amount off a document
     "adjustment_factors",  # TG12, migration 0015 - carries the action's document too
+    "fx_rates",  # TG2, migration 0017 - a rate is a figure with a source document
     # --- later phases ---
     # "fx_rates"
 }
@@ -127,6 +128,7 @@ MODEL_READABLE_TABLES: set[str] = {
     # --- the point-in-time adjustment, TG2/TG12 migration 0015 ---
     "corporate_actions",  # a backtest reads splits and dividends; known_as_of + ex_date
     "adjustment_factors",  # P7 check 19: only factors known by the decision date apply
+    "fx_rates",  # a naira figure is converted at the rate known on the decision date
     # --- later phases ---
     # "indicators", "ml_features", "news_sentiment"
 }
