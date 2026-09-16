@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from packages.common.models import AccountMapping, ChartAccount
 from packages.common.pit import LineItemAsKnown
+from packages.ingestion.edgar import _chart_template
 from packages.normalize.chart import SOURCE_SYSTEM_BY_METHOD, load_chart, resolve
 from packages.valuation.snapshot import _absent_because
 
@@ -537,3 +538,47 @@ def test_a_blank_on_a_hand_typed_statement_is_not_blamed_on_the_company(
     assert unmapped == "no_mapping", (
         "no Nigerian label maps to R&D, so this blank is ours and must say so"
     )
+
+
+def test_an_insurer_is_not_resolved_against_the_bank_chart(ngx, xbrl) -> None:
+    """`companies.statement_template` uses a sector vocabulary; the chart uses its own.
+
+    `insurance` used to translate to `financial` "until the chart grows a third shape". v1
+    grew one and an insurer still does not go there, because every `insurance` mapping is
+    `ng_ifrs_label` - IFRS 17 "Insurance revenue" is the release of the contractual service
+    margin plus expected claims, not a US health insurer's total revenues.
+
+    What it must not keep doing is route to the bank chart. UnitedHealth was stored with no
+    `revenue` row at all - 117 NULL rows each of `gross_earnings` and `net_interest_income`,
+    keys a health insurer will never report - while the tags it does file were all mapped and
+    none of them reachable.
+    """
+    assert _chart_template("insurance") != "financial", "the bank chart is not an insurer's"
+    assert _chart_template("bank") == "financial"
+    assert _chart_template("non_financial") == "non_financial"
+    assert _chart_template("both") == "both"
+    assert _chart_template("something_new") == "non_financial", "an unknown sector is not a bank"
+
+    # The keys UnitedHealth's own filings can fill, under the template it now gets.
+    template = _chart_template("insurance")
+    income = xbrl.keys_for("income", template)
+    for key in ("revenue", "operating_profit", "income_tax", "profit_after_tax"):
+        assert key in income, f"{key} unreachable for an insurer"
+    assert "gross_earnings" not in income, "a bank KPI, and permanently NULL for an insurer"
+    assert "net_interest_income" not in income
+
+    resolved = resolve(
+        {
+            "Revenues": Decimal("447567000000"),
+            "OperatingIncomeLoss": Decimal("18964000000"),
+            "IncomeTaxExpenseBenefit": Decimal("1890000000"),
+            "NetIncomeLoss": Decimal("12056000000"),
+        },
+        xbrl,
+        ("revenue", "operating_profit", "income_tax", "profit_after_tax"),
+    )
+    assert resolved["revenue"] == Decimal("447567000000"), "UnitedHealth FY2025, as filed"
+    assert all(v is not None for v in resolved.values())
+
+    # The Nigerian insurer keeps its own template, which is the one built for it.
+    assert "insurance_revenue" in ngx.keys_for("income", "insurance")

@@ -1403,9 +1403,30 @@ def _write_share_counts(
 
 
 def _chart_template(company_template: str) -> str:
-    """`companies.statement_template` vocabulary → the chart's. Insurers are banks here until
-    the chart grows a third shape (`docs/08` §2.1 says it must, in P3)."""
-    return {"bank": "financial", "insurance": "financial", "both": "both"}.get(
+    """`companies.statement_template` vocabulary → the chart's.
+
+    Insurers used to route to `financial` "until the chart grows a third shape". Chart v1
+    grew one (migration `0020`), and it still does not belong here: every `insurance` mapping
+    is `ng_ifrs_label`, because the template was built from AIICO's IFRS 17 and pre-IFRS 17
+    statements. IFRS 17 "Insurance revenue" is a specific construct - the release of the
+    contractual service margin plus expected claims - and not a US health insurer's total
+    revenues. Mapping the two onto one key would repeat the `gross_earnings` → `revenue`
+    error this chart exists to avoid.
+
+    Routing to the bank chart was doing real damage in the meantime. UnitedHealth's stored
+    statements carry no `revenue` row at all: 117 rows each of `gross_earnings` and
+    `net_interest_income`, every one NULL, because those are bank keys a health insurer will
+    never report. It does file `Revenues`, `OperatingIncomeLoss`, `IncomeTaxExpenseBenefit`,
+    `NetIncomeLoss`, `Assets` and `InterestExpense`, all already mapped under `non_financial`
+    and `both`, and none of them reachable from the template it was given.
+
+    So a US insurer resolves as a profit and loss account, which is accurate as far as it
+    goes and strictly better than two permanently empty bank keys. It does not capture
+    medical costs or a loss ratio; that needs a US GAAP insurance template, which v1 does not
+    have (`docs/08` §4.1). This changes only what future runs write - the statements already
+    stored keep their template until something re-extracts them.
+    """
+    return {"bank": "financial", "insurance": "non_financial", "both": "both"}.get(
         company_template, "non_financial"
     )
 
