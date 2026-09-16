@@ -234,7 +234,7 @@ below. **P1 and P2 are closed**, both verified by eye on 2026-09-15.
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: remote exists, `main` never pushed, CI never run |
 | P1 Macro Backdrop | ✅ Complete | 2026-09-03 | 2026-09-15 | 13/13 | Check 11 confirmed 2026-09-15 · 10 of 13 series live · 28,053 rows · staleness thresholds verified (0016) |
 | P2 US Company Data | ✅ Complete | 2026-09-13 | 2026-09-15 | 15/15 | 24 companies · 1,662 filings · 7,917 statement versions · 53,710 line items · 269,216 price bars · 3,270 corporate actions |
-| P3 NG Manual Analyzer | 🔨 In progress | 2026-09-16 | — | — | P3.3 first: identity history ✅ 0018 (`no_overlapping_ids`, `resolve_security`) and unit conversion ✅ `common/units.py`. Five of TG2's six paths done; the calendar is due in P6. P3.1/P3.2/P3.4 wait on the operator's B2 account and ticker verification |
+| P3 NG Manual Analyzer | 🔨 In progress | 2026-09-16 | — | — | P3.3 first: identity history ✅ 0018 + 0019 (`no_overlapping_ids`, `resolve_security`, and `companies.cik` moved in) and unit conversion ✅ `common/units.py`. Five of TG2's six paths done, `docs/10` §2.11 fully applied; the calendar is due in P6. P3.1/P3.2/P3.4 wait on the operator's B2 account and ticker verification |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
 | P5 News & Daily Brief | ⬜ Not started | — | — | — | |
 | P6 Scenarios & Indicators | ⬜ Not started | — | — | — | Blocked by gap G1 until scheduled |
@@ -552,10 +552,12 @@ Ordered. The first four are the difference between P0.4 running and not running.
       insert and `forbid_update_except_supersession` allows no later UPDATE — so it belongs
       where its siblings live: P4.2's arithmetic validation, beside the cross-year identity
       tie R-22 names as the real backstop
-- [ ] **Migrate `companies.cik` into the identity table** — the half of
-      [10](10_PRE_BUILD_CORRECTIONS.md) §2.11 that 0018 deliberately left, since it touches
-      the EDGAR connector, four API responses and the company page, and one task is one PR.
-      A mutable scalar outside identity history is the shape §1.4 exists to remove
+- [x] ~~**Migrate `companies.cik` into the identity table**~~ — **done 2026-09-16,
+      migration 0019.** The half of [10](10_PRE_BUILD_CORRECTIONS.md) §2.11 that 0018 left.
+      The column carried no unique constraint and no index, so nothing but the connector's
+      own `WHERE cik = ?` stopped two companies claiming one CIK; `no_overlapping_ids` now
+      refuses it at the row. All 24 CIKs preserved, `valid_from` derived from filing dates
+      and predecessor bounds rather than invented, and both successions came out gap-free
 - [ ] **Dated *ticker* resolution is unavailable until identifier intervals are real.**
       `resolve_security` takes a date and is tested on real intervals, but every live ticker
       row holds `valid_from = 2026-09-13`, the day EDGAR was first observed — a lower bound,

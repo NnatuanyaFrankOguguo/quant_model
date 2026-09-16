@@ -20,6 +20,7 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from packages.common.identity import company_for_identifier
 from packages.common.models import (
     Company,
     Filing,
@@ -31,6 +32,7 @@ from packages.common.models import (
 )
 from packages.common.pit import line_items_as_known_on
 from packages.common.storage import LocalDiskBackend
+from packages.common.timez import utctoday
 from packages.ingestion import base as ingestion_base
 from packages.ingestion.base import RawResponse, register
 from packages.ingestion.edgar import (
@@ -347,8 +349,17 @@ def apple(db_session: Session, local_store: LocalDiskBackend) -> Iterator[Compan
     connector.fetch = lambda **params: _submissions_raw()  # type: ignore[method-assign]
     result = connector.run(db_session, cik=APPLE_CIK)
     assert result.status == "ok", result.error
-    company = db_session.execute(select(Company).where(Company.cik == APPLE_CIK)).scalar_one()
+    company = _company_by_cik(db_session, APPLE_CIK)
     yield company
+
+
+def _company_by_cik(session: Session, cik: str) -> Company:
+    """The company a CIK identifies, since 0019 moved it into identity history."""
+    company_id = company_for_identifier(session, value=cik, as_of=utctoday())
+    assert company_id is not None, f"CIK {cik} identifies no company"
+    company = session.get(Company, company_id)
+    assert company is not None
+    return company
 
 
 def _facts_connector(raw: RawResponse) -> EdgarCompanyFactsConnector:
@@ -367,10 +378,17 @@ def test_submissions_register_company_security_ticker_and_industry(
         select(Security).where(Security.company_id == apple.id)
     ).scalar_one()
     assert security.currency == "USD"
-    ticker = db_session.execute(
-        select(SecurityIdentifier).where(SecurityIdentifier.security_id == security.id)
-    ).scalar_one()
-    assert (ticker.id_type, ticker.id_value, ticker.valid_to) == ("ticker", "AAPL", None)
+    identifiers = {
+        (row.id_type, row.id_value, row.valid_to)
+        for row in db_session.execute(
+            select(SecurityIdentifier).where(SecurityIdentifier.security_id == security.id)
+        )
+        .scalars()
+        .all()
+    }
+    # Two identifiers since 0019: the ticker, and the registrant's own CIK. The CIK used to
+    # be a column on `companies` with no unique constraint (`docs/10` §2.11).
+    assert identifiers == {("ticker", "AAPL", None), ("cik", APPLE_CIK, None)}
     assert apple.industry_id is not None
 
 
@@ -629,7 +647,7 @@ def test_two_tickers_on_one_exchange_share_one_security(
     result = connector.run(db_session, cik="0001652044")
     assert result.status == "ok", result.error
 
-    company = db_session.execute(select(Company).where(Company.cik == "0001652044")).scalar_one()
+    company = _company_by_cik(db_session, "0001652044")
     securities = (
         db_session.execute(select(Security).where(Security.company_id == company.id))
         .scalars()
@@ -640,12 +658,25 @@ def test_two_tickers_on_one_exchange_share_one_security(
         db_session.execute(
             select(SecurityIdentifier.id_value)
             .where(SecurityIdentifier.security_id == securities[0].id)
+            .where(SecurityIdentifier.id_type == "ticker")
             .order_by(SecurityIdentifier.id_value)
         )
         .scalars()
         .all()
     )
     assert tickers == ["GOOG", "GOOGL"]
+    # Filtered by type since 0019: the registrant's CIK is an identifier of the same
+    # security, and one of them, however many tickers the security carries.
+    ciks = (
+        db_session.execute(
+            select(SecurityIdentifier.id_value)
+            .where(SecurityIdentifier.security_id == securities[0].id)
+            .where(SecurityIdentifier.id_type == "cik")
+        )
+        .scalars()
+        .all()
+    )
+    assert ciks == ["0001652044"]
     assert company.fiscal_year_end == 12
 
 
@@ -932,7 +963,7 @@ def test_the_refresh_runs_identity_then_statements_and_records_all_three(
     assert result.connector_name == "edgar:AAPL"
     assert result.rows_written > 0 and result.records_parsed == 620 + 1
 
-    company = db_session.execute(select(Company).where(Company.cik == APPLE_CIK)).scalar_one()
+    company = _company_by_cik(db_session, APPLE_CIK)
     assert (
         db_session.execute(
             select(func.count()).select_from(Statement).where(Statement.company_id == company.id)
@@ -963,7 +994,7 @@ def test_a_failing_statements_load_fails_the_job_and_names_the_stage(
     assert result.status == "error"
     assert result.error is not None and result.error.startswith("companyfacts:")
     # Identity still landed: the failure was the second stage, and the first is kept.
-    assert db_session.execute(select(Company).where(Company.cik == APPLE_CIK)).scalar_one()
+    assert _company_by_cik(db_session, APPLE_CIK)
 
 
 def test_an_unknown_ticker_fails_the_job_without_inventing_a_company(

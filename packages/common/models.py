@@ -110,7 +110,9 @@ class Company(Base):
     statement_template: Mapped[str] = mapped_column(Text, nullable=False)
     # Month, 1-12. NOT every company is December.
     fiscal_year_end: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    cik: Mapped[str | None] = mapped_column(Text, nullable=True)  # US only, zero-padded to 10
+    # `cik` moved into `security_identifiers` in migration 0019 (`docs/10` §2.11): it is a
+    # dated identifier like every other, and the column carried no unique constraint.
+    # Read it through `identity.current_identifiers(CIK)`.
     rc_number: Mapped[str | None] = mapped_column(Text, nullable=True)  # Nigerian CAC
     created_at: Mapped[dt.datetime] = mapped_column(
         TZDateTime, nullable=False, server_default=func.now()
@@ -187,6 +189,15 @@ class SecurityIdentifier(Base):
             "security_id",
             unique=True,
             postgresql_where=text("is_primary AND id_type = 'ticker' AND valid_to IS NULL"),
+        ),
+        # Migration 0019. `no_overlapping_ids` keys on the value, so it would allow one
+        # security to carry two different current CIKs - and then "this company's CIK",
+        # which four API responses print, would have two answers.
+        Index(
+            "one_current_cik_per_security",
+            "security_id",
+            unique=True,
+            postgresql_where=text("id_type = 'cik' AND valid_to IS NULL"),
         ),
     )
 

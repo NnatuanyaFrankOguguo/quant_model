@@ -29,7 +29,9 @@ from sqlalchemy import select
 
 from packages.common.console import configure_logging, error, step, success
 from packages.common.db import get_session
+from packages.common.identity import company_for_identifier
 from packages.common.models import Company, Filing
+from packages.common.timez import utctoday
 from packages.ingestion.base import register
 from packages.ingestion.edgar import (
     CLASS_COUNTED_CIKS,
@@ -85,7 +87,13 @@ def ingest_one(cik: str, *, label: str) -> bool:
             # dimensioned fact: read the count from every 10-K and 10-Q instance held,
             # oldest first, so each count's known_as_of is its own filing date.
             with step(f"Ingest {label}: per-class share counts from every report") as classes:
-                company = session.execute(select(Company).where(Company.cik == cik)).scalar_one()
+                company_id = company_for_identifier(session, value=cik, as_of=utctoday())
+                if company_id is None:
+                    raise LookupError(
+                        f"CIK {cik} is not registered; the submissions step runs first"
+                    )
+                company = session.get(Company, company_id)
+                assert company is not None
                 accessions = (
                     session.execute(
                         select(Filing.accession_no)

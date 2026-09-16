@@ -16,8 +16,10 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from packages.common.models import Company, PriceHistory, Security
+from packages.common.identity import CIK, resolve_security
+from packages.common.models import PriceHistory
 from packages.common.storage import LocalDiskBackend
+from packages.common.timez import utctoday
 from packages.ingestion import base as ingestion_base
 from packages.ingestion.base import RawResponse, register
 from packages.ingestion.edgar import EdgarSubmissionsConnector
@@ -115,9 +117,10 @@ def apple_security(db_session: Session, local_store: LocalDiskBackend) -> Iterat
         url="s",
     )
     assert connector.run(db_session, cik=APPLE_CIK).status == "ok"
-    security_id = db_session.execute(
-        select(Security.id).join(Company).where(Company.cik == APPLE_CIK)
-    ).scalar_one()
+    # The CIK is a dated identifier since 0019, so the security comes from the resolver.
+    resolved = resolve_security(db_session, value=APPLE_CIK, as_of=utctoday(), id_type=CIK)
+    assert resolved is not None, f"CIK {APPLE_CIK} identifies no security"
+    security_id = resolved.security_id
     yield security_id
 
 

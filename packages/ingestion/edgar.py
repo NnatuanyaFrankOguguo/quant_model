@@ -55,6 +55,7 @@ from packages.common.console import step
 from packages.common.identity import (
     CIK,
     TICKER,
+    company_for_identifier,
     has_primary_ticker,
     identifier_exists,
     resolve_security,
@@ -135,14 +136,57 @@ def successor_of(cik: str) -> str | None:
 
 
 def _company_for_cik(session: Session, cik: str) -> Company | None:
-    """The company a CIK's filings belong to: its own row, or its successor's."""
-    company = session.execute(select(Company).where(Company.cik == cik)).scalar_one_or_none()
-    if company is not None:
-        return company
-    successor = successor_of(cik)
-    if successor is None:
-        return None
-    return session.execute(select(Company).where(Company.cik == successor)).scalar_one_or_none()
+    """The company a CIK's filings belong to: its own row, or its successor's.
+
+    Since migration 0019 the CIK is a dated identifier rather than a column on `companies`,
+    so this resolves through `packages.common.identity` like every other identifier. The
+    date is today because the question is "who files under this number now"; a CIK whose
+    interval has closed is a predecessor, and the map below is what carries it forward.
+    """
+    company_id = company_for_identifier(session, value=cik, as_of=utcnow().date())
+    if company_id is None:
+        successor = successor_of(cik)
+        if successor is None:
+            return None
+        company_id = company_for_identifier(session, value=successor, as_of=utcnow().date())
+        if company_id is None:
+            return None
+    return session.get(Company, company_id)
+
+
+def _record_cik(session: Session, company: Company, cik: str, *, observed_on: dt.date) -> int:
+    """The company's own CIK, as a current identifier of its primary security.
+
+    Written here because since 0019 nothing else records it, and a company whose CIK
+    resolves to nothing is invisible to the next run - which would then create a duplicate.
+    `_primary_security` raises when the company has no security at all, and that raise is
+    deliberate: failing the run is visible in `connector_runs`, and a second company row
+    for one registrant is silent corruption.
+
+    `valid_from` is the day the CIK was first observed, a lower bound on its validity and
+    never a claim about when it was issued - the same honesty `valid_from` carries for a
+    ticker, and the reason migration 0019 derived the backfill from filing dates instead.
+    """
+    if identifier_exists(session, value=cik, id_type=CIK):
+        return 0
+    security = _primary_security(session, company)
+    session.add(
+        SecurityIdentifier(
+            security_id=security.id,
+            id_type=CIK,
+            id_value=cik,
+            valid_from=observed_on,
+            valid_to=None,
+            # A CIK names a registrant, not a listing, so it carries no exchange; and
+            # `is_primary` is a ticker concept - `one_current_cik_per_security` is what
+            # holds a security to one current CIK.
+            exchange_id=None,
+            is_primary=False,
+            source="edgar_submissions",
+        )
+    )
+    session.flush()
+    return 1
 
 
 CHART_VERSION = "v0.1"
@@ -423,9 +467,7 @@ class EdgarSubmissionsConnector(EdgarConnector):
                 continue
             industry_id, added = _upsert_industry(session, record)
             inserted += added
-            company = session.execute(
-                select(Company).where(Company.cik == record.cik)
-            ).scalar_one_or_none()
+            company = _company_for_cik(session, record.cik)
             if company is None:
                 company = Company(
                     legal_name=record.name,
@@ -433,7 +475,6 @@ class EdgarSubmissionsConnector(EdgarConnector):
                     industry_id=industry_id,
                     statement_template=_template_for_sic(record.sic),
                     fiscal_year_end=record.fiscal_year_end_month,
-                    cik=record.cik,
                 )
                 session.add(company)
                 session.flush()
@@ -502,6 +543,9 @@ class EdgarSubmissionsConnector(EdgarConnector):
                     )
                     session.flush()
                     inserted += 1
+
+            # After the securities, because the CIK hangs off the primary one (0019).
+            inserted += _record_cik(session, company, record.cik, observed_on=observed_on)
         session.flush()
         return inserted
 
@@ -515,7 +559,8 @@ def _record_predecessor(session: Session, record: CompanyRecord, successor: str)
     day alone: coherent, and honest about what was seen.
     """
     cik = record.cik
-    company = session.execute(select(Company).where(Company.cik == successor)).scalar_one_or_none()
+    successor_company_id = company_for_identifier(session, value=successor, as_of=utcnow().date())
+    company = session.get(Company, successor_company_id) if successor_company_id else None
     if company is None:
         raise LookupError(
             f"CIK {cik} is the predecessor of {successor}, which is not registered yet. "
@@ -1374,7 +1419,7 @@ def _primary_security(session: Session, company: Company) -> Security:
         .all()
     )
     if not securities:
-        raise LookupError(f"company {company.id} ({company.cik}) has no security")
+        raise LookupError(f"company {company.id} ({company.legal_name}) has no security")
     return securities[0]
 
 

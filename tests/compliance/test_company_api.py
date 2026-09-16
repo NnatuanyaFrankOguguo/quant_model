@@ -18,6 +18,7 @@ import pytest
 from sqlalchemy import delete, func, select
 
 from packages.common import db as common_db
+from packages.common.identity import company_for_identifier
 from packages.common.models import (
     AdjustmentFactor,
     Company,
@@ -33,6 +34,7 @@ from packages.common.models import (
     StatementLineItem,
 )
 from packages.common.storage import LocalDiskBackend
+from packages.common.timez import utctoday
 from packages.compliance.response_types import BANNED_PUBLIC_FIELD_NAMES
 from packages.ingestion import base as ingestion_base
 from packages.ingestion.base import RawResponse, register
@@ -79,9 +81,8 @@ def apple_loaded(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     finally:
         ingestion_base.get_storage = original_storage  # type: ignore[assignment]
         with common_db.SessionLocal() as session:
-            company_id = session.execute(
-                select(Company.id).where(Company.cik == APPLE_CIK)
-            ).scalar_one()
+            company_id = company_for_identifier(session, value=APPLE_CIK, as_of=utctoday())
+            assert company_id is not None
             security_ids = select(Security.id).where(Security.company_id == company_id)
             session.execute(
                 delete(StatementLineItem).where(StatementLineItem.security_id.in_(security_ids))

@@ -31,6 +31,8 @@ from packages.common.identity import (
     CIK,
     TICKER,
     AmbiguousIdentifierError,
+    company_for_identifier,
+    current_identifiers,
     has_primary_ticker,
     identifier_exists,
     primary_tickers,
@@ -433,3 +435,174 @@ def test_only_the_identity_module_queries_the_identity_table() -> None:
         "these modules query security_identifiers directly; route them through "
         f"packages.common.identity instead: {offenders}"
     )
+
+
+# --------------------------------------------------------------------------------------
+# The CIK, since migration 0019 moved it out of `companies`
+# --------------------------------------------------------------------------------------
+
+
+def test_a_cik_reaches_its_company_through_the_security_that_carries_it(
+    db_session: Session,
+) -> None:
+    """`companies.cik` is gone (0019); the hop is CIK to security to company.
+
+    A CIK names a registrant rather than a listing, so it hangs off the registrant's
+    primary security - the compromise 0011 made for predecessor CIKs, which 0019 follows.
+    """
+    company = _company(db_session, "Registrant Plc", "US")
+    security = _security(db_session, company, "NYSE", "USD")
+    _identifier(db_session, security, "TICK", valid_from=dt.date(2015, 1, 1))
+    _identifier(
+        db_session,
+        security,
+        "0000123456",
+        id_type=CIK,
+        valid_from=dt.date(2015, 1, 1),
+        exchange_id=None,
+        is_primary=False,
+    )
+    assert company_for_identifier(db_session, value="0000123456", as_of=TODAY) == company.id
+
+
+def test_a_cik_that_identifies_nothing_reaches_no_company(db_session: Session) -> None:
+    """The registration path depends on this: None is "not registered", not an error."""
+    assert company_for_identifier(db_session, value="0009999999", as_of=TODAY) is None
+
+
+def test_a_predecessor_cik_reaches_no_company_today_but_did_in_its_window(
+    db_session: Session,
+) -> None:
+    """Why the connector keeps a successor map: an expired CIK resolves to nothing now.
+
+    `_company_for_cik` tries the CIK as of today, and on None falls back to the successor
+    it recorded. This is the first half of that, stated as a test.
+    """
+    company = _company(db_session, "Continuing Plc", "US")
+    security = _security(db_session, company, "NYSE", "USD")
+    _identifier(db_session, security, "CONT", valid_from=dt.date(2019, 1, 1))
+    _identifier(
+        db_session,
+        security,
+        "0001001039",
+        id_type=CIK,
+        valid_from=dt.date(2012, 2, 13),
+        valid_to=dt.date(2019, 3, 20),
+        exchange_id=None,
+        is_primary=False,
+    )
+    assert company_for_identifier(db_session, value="0001001039", as_of=TODAY) is None
+    inside = company_for_identifier(db_session, value="0001001039", as_of=dt.date(2015, 1, 1))
+    assert inside == company.id
+
+
+def test_a_security_has_at_most_one_current_cik(db_session: Session) -> None:
+    """`one_current_cik_per_security` (0019), and why the exclusion constraint is not enough.
+
+    `no_overlapping_ids` keys on the identifier *value*, so two *different* current CIKs on
+    one security do not collide with each other. Then "this company's CIK", which four API
+    responses print and every filing URL is built from, would have two answers.
+    """
+    company = _company(db_session, "Two Ciks Plc", "US")
+    security = _security(db_session, company, "NYSE", "USD")
+    _identifier(db_session, security, "TWOC", valid_from=dt.date(2020, 1, 1))
+    _identifier(
+        db_session,
+        security,
+        "0000111111",
+        id_type=CIK,
+        valid_from=dt.date(2020, 1, 1),
+        exchange_id=None,
+        is_primary=False,
+    )
+    matches = "one_current_cik_per_security"
+    with pytest.raises(IntegrityError, match=matches), db_session.begin_nested():
+        _identifier(
+            db_session,
+            security,
+            "0000222222",
+            id_type=CIK,
+            valid_from=dt.date(2020, 1, 1),
+            exchange_id=None,
+            is_primary=False,
+        )
+
+
+def test_one_cik_cannot_identify_two_registrants_at_once(db_session: Session) -> None:
+    """The constraint `companies.cik` never had.
+
+    The dropped column carried no unique key and no index, so nothing but the connector's
+    own `WHERE cik = ?` stopped two companies holding one CIK. `no_overlapping_ids` refuses
+    it at the row, whichever security each points at.
+    """
+    first = _security(db_session, _company(db_session, "Claimant One Plc", "US"), "NYSE", "USD")
+    second = _security(db_session, _company(db_session, "Claimant Two Plc", "US"), "NYSE", "USD")
+    for security, ticker in ((first, "CLM1"), (second, "CLM2")):
+        _identifier(db_session, security, ticker, valid_from=dt.date(2020, 1, 1))
+    _identifier(
+        db_session,
+        first,
+        "0000333333",
+        id_type=CIK,
+        valid_from=dt.date(2020, 1, 1),
+        exchange_id=None,
+        is_primary=False,
+    )
+    with pytest.raises(IntegrityError, match="no_overlapping_ids"), db_session.begin_nested():
+        _identifier(
+            db_session,
+            second,
+            "0000333333",
+            id_type=CIK,
+            valid_from=dt.date(2020, 1, 1),
+            exchange_id=None,
+            is_primary=False,
+        )
+
+
+def test_the_current_identifiers_subquery_answers_one_row_per_security(
+    db_session: Session,
+) -> None:
+    """What `snapshot` joins to for the CIK column the API prints."""
+    company = _company(db_session, "Subquery Plc", "US")
+    security = _security(db_session, company, "NYSE", "USD")
+    _identifier(db_session, security, "SUBQ", valid_from=dt.date(2020, 1, 1))
+    _identifier(
+        db_session,
+        security,
+        "0000444444",
+        id_type=CIK,
+        valid_from=dt.date(2020, 1, 1),
+        valid_to=dt.date(2021, 1, 1),
+        exchange_id=None,
+        is_primary=False,
+    )
+    ciks = current_identifiers(CIK)
+    expired = (
+        db_session.execute(select(ciks.c.id_value).where(ciks.c.security_id == security.id))
+        .scalars()
+        .all()
+    )
+    assert expired == [], "an expired CIK is not the current one"
+
+    _identifier(
+        db_session,
+        security,
+        "0000555555",
+        id_type=CIK,
+        valid_from=dt.date(2021, 1, 2),
+        exchange_id=None,
+        is_primary=False,
+    )
+    ciks = current_identifiers(CIK)
+    current = (
+        db_session.execute(select(ciks.c.id_value).where(ciks.c.security_id == security.id))
+        .scalars()
+        .all()
+    )
+    assert current == ["0000555555"]
+
+
+def test_the_subquery_refuses_an_identifier_type_outside_the_contract() -> None:
+    with pytest.raises(ValueError, match="not an identifier type"):
+        current_identifiers("bloomberg")

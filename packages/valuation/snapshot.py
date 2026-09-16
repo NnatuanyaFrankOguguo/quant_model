@@ -20,7 +20,7 @@ from sqlalchemy import Select, and_, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
 from packages.common.adjust import cumulative_factor, factors_known
-from packages.common.identity import primary_tickers, resolve_security
+from packages.common.identity import CIK, current_identifiers, primary_tickers, resolve_security
 from packages.common.models import (
     Company,
     CorporateAction,
@@ -330,12 +330,13 @@ def find_security(session: Session, ticker: str) -> SecurityRef | None:
     resolved = resolve_security(session, value=ticker, as_of=utctoday())
     if resolved is None:
         return None
+    ciks = current_identifiers(CIK)
     row = session.execute(
         select(
             Security.id,
             Company.id,
             Company.legal_name,
-            Company.cik,
+            ciks.c.id_value,
             Exchange.code,
             Security.currency,
             Company.fiscal_year_end,
@@ -343,6 +344,7 @@ def find_security(session: Session, ticker: str) -> SecurityRef | None:
         )
         .join(Company, Company.id == Security.company_id)
         .join(Exchange, Exchange.id == Security.exchange_id)
+        .outerjoin(ciks, ciks.c.security_id == Security.id)
         .where(Security.id == resolved.security_id)
     ).first()
     if row is None:
@@ -357,11 +359,12 @@ def _filings_query(decision_date: dt.date) -> Select[tuple[Any, ...]]:
         .subquery()
     )
     primary = primary_tickers()
+    ciks = current_identifiers(CIK)
     return (
         select(
             primary.c.ticker,
             Company.legal_name,
-            Company.cik,
+            ciks.c.id_value,
             Filing.filing_type,
             Filing.filing_date,
             Filing.period_end,
@@ -372,6 +375,7 @@ def _filings_query(decision_date: dt.date) -> Select[tuple[Any, ...]]:
         .join(Company, Company.id == Filing.company_id)
         .join(Security, Security.company_id == Company.id)
         .join(primary, primary.c.security_id == Security.id)
+        .outerjoin(ciks, ciks.c.security_id == Security.id)
         .outerjoin(versions, versions.c.filing_id == Filing.id)
         .where(Filing.known_as_of <= decision_date)
         .order_by(Filing.filing_date.desc(), Filing.id.desc())
@@ -409,6 +413,7 @@ def list_companies(session: Session, *, today: dt.date) -> list[CompanySummary]:
     id. Share classes as securities of their own are TG2 (P3) work.
     """
     primary = primary_tickers()
+    ciks = current_identifiers(CIK)
     periods = (
         select(
             Statement.company_id,
@@ -424,7 +429,7 @@ def list_companies(session: Session, *, today: dt.date) -> list[CompanySummary]:
         select(
             primary.c.ticker,
             Company.legal_name,
-            Company.cik,
+            ciks.c.id_value,
             Exchange.code,
             periods.c.periods,
             periods.c.latest_period_end,
@@ -434,6 +439,7 @@ def list_companies(session: Session, *, today: dt.date) -> list[CompanySummary]:
         .join(Security, Security.id == primary.c.security_id)
         .join(Company, Company.id == Security.company_id)
         .join(Exchange, Exchange.id == Security.exchange_id)
+        .outerjoin(ciks, ciks.c.security_id == Security.id)
         .outerjoin(periods, periods.c.company_id == Company.id)
         .order_by(primary.c.ticker)
     ).all()

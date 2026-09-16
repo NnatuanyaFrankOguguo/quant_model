@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from sqlalchemy import Subquery, or_, select
 from sqlalchemy.orm import Session
 
-from packages.common.models import Exchange, SecurityIdentifier
+from packages.common.models import Exchange, Security, SecurityIdentifier
 
 __all__ = [
     "AmbiguousIdentifierError",
@@ -52,6 +52,8 @@ __all__ = [
     "ID_TYPES",
     "ResolvedIdentifier",
     "TICKER",
+    "company_for_identifier",
+    "current_identifiers",
     "has_primary_ticker",
     "identifier_exists",
     "primary_tickers",
@@ -189,6 +191,51 @@ def primary_tickers() -> Subquery:
         .where(SecurityIdentifier.is_primary)
         .subquery()
     )
+
+
+def current_identifiers(id_type: str) -> Subquery:
+    """`(security_id, id_value)` for each security's current identifier of this type.
+
+    The read side of migration 0019, which moved `companies.cik` in here. Four API
+    responses print a company's CIK and every filing URL is built from it, so a caller
+    joins to this subquery rather than reaching into the identifier table itself - the same
+    arrangement as `primary_tickers`, and for the same reason.
+
+    Single-valued for `cik` by `one_current_cik_per_security`. For `ticker` it is not:
+    `primary_tickers` is the subquery that answers "the one ticker to show".
+    """
+    if id_type not in ID_TYPES:
+        raise ValueError(f"{id_type!r} is not an identifier type: {sorted(ID_TYPES)}")
+    return (
+        select(
+            SecurityIdentifier.security_id.label("security_id"),
+            SecurityIdentifier.id_value.label("id_value"),
+        )
+        .where(SecurityIdentifier.id_type == id_type)
+        .where(SecurityIdentifier.valid_to.is_(None))
+        .subquery()
+    )
+
+
+def company_for_identifier(
+    session: Session,
+    *,
+    value: str,
+    as_of: dt.date,
+    id_type: str = CIK,
+) -> int | None:
+    """The `company_id` this identifier reaches, through the security that carries it.
+
+    A CIK names a registrant, but since 0011 it has been stored against that registrant's
+    primary security, so "which company do these filings belong to" is one hop further than
+    it used to be. Kept here rather than in the connector so the hop is written once.
+    """
+    resolved = resolve_security(session, value=value, as_of=as_of, id_type=id_type)
+    if resolved is None:
+        return None
+    return session.execute(
+        select(Security.company_id).where(Security.id == resolved.security_id)
+    ).scalar_one_or_none()
 
 
 def _normalise(value: str) -> str:

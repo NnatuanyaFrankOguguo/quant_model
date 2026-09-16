@@ -328,7 +328,8 @@ CREATE TABLE companies (
                                                -- reserves — neither a bank nor a normal
                                                -- company. See §4.
   fiscal_year_end SMALLINT NOT NULL,           -- month, 1-12. NOT every company is December.
-  cik             TEXT,                        -- US only, zero-padded to 10
+  -- cik: DROPPED by migration 0019 (docs/10 §2.11). It is a dated identifier and now lives
+  -- in security_identifiers; read it through identity.current_identifiers('cik').
   rc_number       TEXT,                        -- Nigerian CAC registration
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -374,6 +375,8 @@ CREATE TABLE security_identifiers (
 CREATE INDEX ON security_identifiers (id_type, id_value, valid_from, valid_to);
 CREATE UNIQUE INDEX one_primary_ticker_per_security ON security_identifiers (security_id)
   WHERE is_primary AND id_type = 'ticker' AND valid_to IS NULL;
+CREATE UNIQUE INDEX one_current_cik_per_security ON security_identifiers (security_id)
+  WHERE id_type = 'cik' AND valid_to IS NULL;                      -- migration 0019
 ```
 
 > **The `UNIQUE (id_type, id_value, valid_from)` this block used to carry was the defect,
@@ -390,11 +393,29 @@ CREATE UNIQUE INDEX one_primary_ticker_per_security ON security_identifiers (sec
 > a one-day interval (`valid_from = valid_to`, which `_record_predecessor` writes) is an
 > *empty* range under a half-open bound on the raw value, and an empty range overlaps nothing.
 >
+> **The current CIK lives here too, since migration 0019** — the second half of §2.11,
+> which 0018 left. `companies.cik` is dropped. It was the shape §1.4 exists to remove, and
+> the live column turned out to carry **no unique constraint and no index**, so nothing but
+> the connector's own `WHERE cik = ?` stopped two companies claiming one CIK;
+> `no_overlapping_ids` now refuses that at the row. A CIK names a registrant rather than a
+> listing, so it hangs off the registrant's *primary* security with `exchange_id` NULL —
+> the compromise 0011 already made for predecessor CIKs. `one_current_cik_per_security` is
+> what keeps "this company's CIK" single-valued, because the exclusion constraint keys on
+> the value and would allow one security two different current CIKs.
+>
+> 0019's backfill **derives `valid_from` and never invents it**: the later of the earliest
+> filing held for the company and the day after any predecessor CIK's last valid day. The
+> second term is what makes it correct — Exxon's filings run to 2009 under the predecessor
+> registrant, so the filing date alone would claim the 2026 CIK identified it in 2009. The
+> two successions came out gap-free and non-overlapping: 2019-12-18→2026-07-01 then
+> 2026-07-02→current, and 2012-02-13→2019-03-20 then 2019-03-21→current.
+>
 > **Read it through one function.** `packages/common/identity.py::resolve_security(value,
 > as_of, id_type, exchange)` is the only code that queries this table, per `OPERATIONS.md`
 > §1.4's "no `WHERE ticker = ?` anywhere else in the codebase"; a test walks the repository's
 > AST to enforce it. Given no `exchange`, a value live on two exchanges raises rather than
-> choosing.
+> choosing. `current_identifiers('cik')` is the subquery a caller joins for the column the
+> API prints, and `company_for_identifier` is the CIK-to-company hop.
 
 > **`id_type = 'cik'`** (added 2026-09-14). A predecessor registrant's CIK, attached to the
 > continuing company's primary security, `valid_to` the successor's 8-K12B date and
