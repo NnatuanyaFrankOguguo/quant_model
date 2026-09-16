@@ -77,7 +77,15 @@ class ChartVersion:
 #: `statement_line_items.extraction_method` -> the `account_mappings.source_system` its
 #: labels were resolved through. A reader asking "why is this blank?" needs the chart the
 #: figure went through, and the line item records the method, not the system.
-SOURCE_SYSTEM_BY_METHOD: dict[str, str] = {"xbrl": "us_gaap_xbrl"}
+#: `manual` and `llm_hybrid` both read the label printed on the page, so they resolve through
+#: the same Nigerian vocabulary; only `xbrl` reads a machine tag. The three methods are
+#: `docs/08`'s whole enum for the column, so a method absent here is a method that does not
+#: exist.
+SOURCE_SYSTEM_BY_METHOD: dict[str, str] = {
+    "xbrl": "us_gaap_xbrl",
+    "manual": "ng_ifrs_label",
+    "llm_hybrid": "ng_ifrs_label",
+}
 
 
 def load_chart(session: Session, *, version: str, source_system: str) -> ChartVersion:

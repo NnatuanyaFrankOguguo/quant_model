@@ -1599,32 +1599,141 @@ ways. One internal key ties them together:
 > manufacturer's revenue. [TEAM_BRIEF.md Part 3](../TEAM_BRIEF.md) item 2 warns: *"GTCO's income
 > statement has no 'revenue' line… A schema built on MTN will not survive a bank."* Mapping them
 > together produces a number that looks comparable and is not — a silent error no test catches.
+>
+> **Reading GTCO's actual filing made this stronger still.** Its income statement does not print
+> "Gross earnings" either: the statement opens with two interest-income lines, and "Gross
+> Earnings" appears in the **Directors' Report** as a computed KPI. So `gross_earnings` is
+> `[built]` but **not required** — marking it required forced every bank into either an
+> off-statement derivation or a false `not_in_filing`.
 
-Hence **two templates** ([DATA_FOUNDATION.md §3.4](../DATA_FOUNDATION.md)): `non_financial` and
-`financial`, with the bank chart covering gross earnings, net interest income, impairments and
-deposits.
+### 4.1 Templates — three, not two
 
-Mappings from [DATA_FOUNDATION.md §3.4](../DATA_FOUNDATION.md):
+[DATA_FOUNDATION.md §3.4](../DATA_FOUNDATION.md) specifies `non_financial` and `financial`.
+[docs/10 §2.7](10_PRE_BUILD_CORRECTIONS.md) widened the enum for insurers, and migration `0020`
+seeded it. A key marked `both` belongs to every template.
 
-| Canonical key | US GAAP XBRL | Nigerian IFRS labels |
+| Template | Keys in v1 | Shape |
 |---|---|---|
-| `revenue` | `Revenues`, `RevenueFromContractWithCustomerExcludingAssessedTax` | "Revenue", "Turnover" |
-| `operating_profit` | `OperatingIncomeLoss` | "Results from operating activities" |
-| `profit_after_tax` | `NetIncomeLoss` | "Profit/(loss) for the year" |
-| `total_assets` | `Assets` | "Total assets" |
-| `total_equity` | `StockholdersEquity` | "Total equity" |
-| `cash_from_ops` | `NetCashProvidedByUsedInOperatingActivities` | "Net cash from operating activities" |
-| `gross_earnings` | — | "Gross earnings" (banks only) |
-| `net_interest_income` | — | "Net interest income" (banks only) |
-| `fx_loss_net` | — | "Net foreign exchange loss" |
+| `both` | 11 | what all three print: `profit_before_tax` through `dividends_paid` |
+| `non_financial` | 14 | revenue, cost of sales, operating profit, finance income and costs |
+| `financial` | 21 | interest income, the earning-asset base, impairments, deposits |
+| `insurance` | 19 | **both IFRS 17 eras** — see §4.3 |
+
+**Known gap: the `insurance` template is IFRS 17 shaped, and a US insurer does not fit it.**
+`companies.statement_template` uses a sector vocabulary (`bank`, `insurance`, `non_financial`,
+`both`) which `_chart_template` in `packages/ingestion/edgar.py` translates into the chart's.
+It currently sends `insurance` to `financial`, i.e. the bank chart — a placeholder its own
+docstring flagged as lasting *"until the chart grows a third shape"*.
+
+The third shape now exists, but **routing US insurers into it would not help**, because every
+`insurance` mapping is `ng_ifrs_label`: the template was built from AIICO's IFRS 17 and
+pre-IFRS 17 statements, and IFRS 17 "Insurance revenue" is a specific construct (release of the
+contractual service margin plus expected claims), not a US health insurer's total revenues.
+Mapping them to one key would repeat the `gross_earnings` → `revenue` error exactly.
+
+The live consequence is visible today. **UnitedHealth Group is stored with no `revenue` row at
+all** — its 308 statements carry `gross_earnings` and `net_interest_income`, 117 rows each,
+every one NULL, because those are bank keys a health insurer will never report. Meanwhile
+UnitedHealth does file `Revenues` ($447,567m FY2025), `OperatingIncomeLoss` ($18,964m),
+`IncomeTaxExpenseBenefit`, `NetIncomeLoss`, `Assets` and `InterestExpense` — all of them
+already mapped under `non_financial` and `both`, and none of them reachable from the template it
+was given.
+
+So `insurance` → `non_financial` is right for the XBRL path: it fits UnitedHealth *as a profit
+and loss account*, which is accurate as far as it goes, and it is strictly better than two
+permanently-empty bank keys. It does not capture medical costs or a loss ratio; a US GAAP
+insurance template would, and is not in scope for v1. Changing the routing only affects what
+future runs write — **repopulating UnitedHealth's stored statements needs a re-run, which is a
+data operation, not a code change.**
+
+### 4.2 Mappings — v1, as read off the filings
+
+Migration `0020` seeded **65 keys and 135 mappings** as chart version `v1`. v0.1 is untouched and
+keeps its 23 keys, so line items already stored resolve exactly as before — that is what
+`chart_version` in the primary key buys.
+
+The Nigerian labels below are transcribed from audited filings (GTCO FY2025 and Q3 2025, AIICO
+FY2025/FY2024/FY2022, Nestlé Nigeria FY2025, MTN Nigeria FY2025, Dangote Cement FY2025), and
+the XBRL tags from JPMorgan's and Bank of America's `companyfacts`. Where several labels are
+listed they are alternates in priority order, and the first present one wins.
+
+| Canonical key | US GAAP XBRL | Nigerian IFRS labels, as printed |
+|---|---|---|
+| `revenue` | `Revenues`, `RevenueFromContractWithCustomerExcludingAssessedTax`, `SalesRevenueNet` | "Revenue" (all three industrials); "Turnover" is legacy and no 2025 filing read used it |
+| `operating_profit` | `OperatingIncomeLoss` | **three wordings, none standard**: "Operating profit" (MTN), "Results from operating activities" (Nestlé), "Profit from operating activities" (Dangote) |
+| `profit_before_tax` | `IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest` | "Profit before income tax expense" (GTCO), "Profit/(loss) before taxation" (MTN), and four more |
+| `profit_after_tax` | `NetIncomeLoss` | "Profit for the year", "Profit/(loss) for the year" |
+| `finance_costs` | — | "Finance costs" — **not** mapped to `interest_expense`; see below |
+| `finance_income` | — | "Finance income" |
+| `net_monetary_gain` | — | "Gain on net monetary position" (Dangote, IAS 29) |
+| `interest_income` | `InterestIncomeOperating` (JPM), `InterestAndDividendIncomeOperating` (BAC) | "Interest income calculated using the effective interest rate" |
+| `net_interest_income` | `InterestIncomeExpenseNet` | "Net interest income" |
+| `loan_impairment_charges` | `FinancingReceivableExcludingAccruedInterestCreditLossExpenseReversal` | "Loan impairment charges" (GTCO's exact wording) |
+| `credit_loss_provision` | `ProvisionForLoanLeaseAndOtherLosses` | — |
+| `gross_earnings` | — | "Gross earnings" — a Directors' Report KPI, not a face line |
+| `fx_loss_net` | — | "Net foreign exchange gain/(loss)" and three sign variants |
+
+**Three mapping decisions that are not obvious, and cost real money if reversed:**
+
+1. **"Finance costs" is not `interest_expense`.** All three industrials print "Finance costs"
+   paired with "Finance income"; none prints "Interest expense". Finance costs include lease
+   interest and discount unwinding, so mapping them together yields a number that looks like
+   interest and is not — the same failure mode as `gross_earnings` → `revenue`.
+2. **The total provision and the loans component are two keys.** JPMorgan files
+   `ProvisionForLoanLeaseAndOtherLosses` at $14,212m *and*
+   `FinancingReceivableExcludingAccruedInterestCreditLossExpenseReversal` at $11,264m for the
+   same year; Bank of America stopped filing the first in 2019. Ranked as alternates on one key,
+   JPMorgan would report the total and Bank of America the component, and a screen would rank
+   them against each other. §2.3 permits alternates only where they name the same measure.
+3. **MTN prints no cost of sales at all** — it presents expenses by nature — so
+   `cost_of_revenue` and `gross_profit` are optional and resolve to `not_in_filing` for a
+   telecom. Requiring them would manufacture two missing figures for a correctly filed statement.
 
 `fx_loss_net` is its own key deliberately: [DATA_FOUNDATION.md §3.3](../DATA_FOUNDATION.md)
 requires FX loss captured as a **distinct line**, because post-float Nigerian year-on-year
 comparisons are distorted by devaluation and must be annotated as such.
 
-**Building this is a manual, accounting-knowledge task** — [TEAM_BRIEF.md §2.2-G](../TEAM_BRIEF.md)
-budgets ~2 days. Draft it in P2 against XBRL; **freeze v1 in P3** once Nigerian statements have
-shown what it is missing.
+`manual` and `llm_hybrid` extractions both resolve through source system `ng_ifrs_label`; only
+`xbrl` reads `us_gaap_xbrl`. Without that mapping the 98 Nigerian rows are unreachable, and a
+hand-typed statement resolves every key to `None`.
+
+### 4.3 The IFRS 17 discontinuity — one company, two statement shapes
+
+**AIICO adopted IFRS 17 with FY2023 as the changeover year, and the face of its income statement
+changed completely.** Through FY2022 it opens with "Gross premium written" and runs through
+claims and underwriting expenses. From FY2023 it opens with "Insurance Revenue" and "Insurance
+service result". Deferred acquisition costs stop existing, folded into the contract balances.
+
+Both shapes sit **inside the extraction window**, so a FY2022 read from the FY2022 report differs
+in shape from the same year restated as a comparative inside the FY2023 report. Anyone comparing
+an insurer across 2022 and 2023 is comparing two presentations, not two years of trading.
+
+The `insurance` template therefore carries **both vocabularies at once**, and each filing fills
+whichever it prints while the other era stays honestly absent. One key set with dated mappings
+would have made the changeover invisible in the data, which is the opposite of what this schema
+is for.
+
+One mapping matches an issuer's typo on purpose: AIICO prints "Fair value through other
+**comprehesive** income" [sic], identically in FY2024 and FY2025. Both spellings are mapped. This
+is the clearest argument for mappings being rows in a table rather than logic in code — nobody
+would type that string into a parser, and a reviewer can add it in seconds without a deploy.
+
+### 4.4 Freeze status
+
+**Building this is a manual, accounting-knowledge task** —
+[TEAM_BRIEF.md §2.2-G](../TEAM_BRIEF.md) budgets ~2 days. Drafted in P2 against XBRL as v0.1;
+v1 was seeded in P3 once Nigerian statements had shown what it was missing.
+
+[docs/03](03_EXECUTION_PLAN.md) check 16 gates the freeze: *"confirm it can express 'interest
+income', 'net interest margin', and 'loan loss provision'. If it cannot, freezing now guarantees
+re-extraction later."* **v0.1 failed all three.** v1 passes all three, proven in
+`tests/integration/test_chart_v1.py`.
+
+**v1 is created, not yet frozen.** The other half of a freeze is that something has been
+extracted *through* it, and nothing has been yet. Typing a company-year against v1
+([TEAM_BRIEF.md task D](../TEAM_BRIEF.md)) is what turns "drafted from real labels" into
+"proven". Until then no row is keyed to v1, so amending it costs nothing; after the extractor
+runs, changing it means re-extracting everything.
 
 ---
 
