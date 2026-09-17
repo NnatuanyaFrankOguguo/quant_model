@@ -59,6 +59,11 @@ packages = ["packages", "services"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The repo root, so a test can import a module from `scripts/` the way it imports one
+# from `packages/`. Without it `from scripts.collect_dmo import ...` resolves when run
+# as `python -m pytest` (which adds the cwd) and fails under the bare `pytest` console
+# script that CI uses - green locally, red in CI, for a reason nothing in the test says.
+pythonpath = ["."]
 markers = [
   "invariant: SPEC 4.1 invariants — NEVER skip",
   "slow: excluded from the fast loop",
