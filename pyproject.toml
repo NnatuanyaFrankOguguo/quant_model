@@ -46,6 +46,11 @@ ui = [
 ]
 dev = [
   "pytest",
+  # P3 reads PDFs, so the test suite now exercises this and CI must have it. The comment
+  # above keeps the `data` extra out of CI because CI did not exercise it; that stopped
+  # being true when `packages/ingestion/documents.py` landed. The heavy members of `data`
+  # (pandas, numpy, pymupdf, anthropic) are still absent.
+  "pdfplumber",
   "pytest-cov",
   "hypothesis",
   "ruff",

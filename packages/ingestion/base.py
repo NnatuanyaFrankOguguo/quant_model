@@ -63,6 +63,7 @@ __all__ = [
     "record_run",
     "register",
     "store_raw",
+    "upsert_document",
     "write_macro_records",
 ]
 
@@ -429,12 +430,8 @@ def store_raw(session: Session, raw: RawResponse, *, connector: Connector) -> So
     """
     storage = get_storage()
     stored = storage.put(raw.data, media_type=raw.media_type)
-    existing = session.execute(
-        select(SourceDocument).where(SourceDocument.sha256 == stored.sha256)
-    ).scalar_one_or_none()
-    if existing is not None:
-        return existing
-    document = SourceDocument(
+    return upsert_document(
+        session,
         data_source_id=_data_source_id(session, connector),
         url=raw.url,
         storage_key=stored.storage_key,
@@ -445,6 +442,50 @@ def store_raw(session: Session, raw: RawResponse, *, connector: Connector) -> So
         etag=raw.etag,
         last_modified=raw.last_modified,
     )
+
+
+def upsert_document(
+    session: Session,
+    *,
+    data_source_id: int,
+    url: str | None,
+    storage_key: str,
+    sha256: str,
+    media_type: str,
+    retrieved_at: dt.datetime,
+    http_status: int | None = None,
+    etag: str | None = None,
+    last_modified: dt.datetime | None = None,
+    page_count: int | None = None,
+) -> SourceDocument:
+    """The `source_documents` row for already-stored bytes, existing or new.
+
+    Separate from `store_raw` because an operator uploading a PDF has no connector to derive
+    a licence from (`docs/03` P3.1), and needs this behaviour exactly: keyed on the hash,
+    idempotent on content, and safe against a second writer of the same bytes.
+
+    **Never an edit.** If a row for these bytes exists it is returned untouched, `page_count`
+    and all. A reissued report has different bytes, so it is a different hash and a new row -
+    which is P3.1's requirement in one sentence: *"If a company reissues its report, that is
+    a new document, not an edit."*
+    """
+    existing = session.execute(
+        select(SourceDocument).where(SourceDocument.sha256 == sha256)
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    document = SourceDocument(
+        data_source_id=data_source_id,
+        url=url,
+        storage_key=storage_key,
+        sha256=sha256,
+        media_type=media_type,
+        retrieved_at=retrieved_at,
+        http_status=http_status,
+        etag=etag,
+        last_modified=last_modified,
+        page_count=page_count,
+    )
     try:
         with session.begin_nested():
             session.add(document)
@@ -452,11 +493,11 @@ def store_raw(session: Session, raw: RawResponse, *, connector: Connector) -> So
     except IntegrityError:
         # Another writer inserted this exact document between the select and the insert.
         won = session.execute(
-            select(SourceDocument).where(SourceDocument.sha256 == stored.sha256)
+            select(SourceDocument).where(SourceDocument.sha256 == sha256)
         ).scalar_one_or_none()
         if won is None:
             raise  # the violation was not the one we can absorb
-        _log.info("source_document_already_written_by_another_run", sha256=stored.sha256[:12])
+        _log.info("source_document_already_written_by_another_run", sha256=sha256[:12])
         return won
     return document
 
