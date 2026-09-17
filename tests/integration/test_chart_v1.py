@@ -35,8 +35,12 @@ from sqlalchemy.orm import Session
 
 from packages.common.models import AccountMapping, ChartAccount
 from packages.common.pit import LineItemAsKnown
-from packages.ingestion.edgar import _chart_template
-from packages.normalize.chart import SOURCE_SYSTEM_BY_METHOD, load_chart, resolve
+from packages.normalize.chart import (
+    SOURCE_SYSTEM_BY_METHOD,
+    chart_template_for,
+    load_chart,
+    resolve,
+)
 from packages.valuation.snapshot import _absent_because
 
 pytestmark = pytest.mark.invariant
@@ -553,14 +557,14 @@ def test_an_insurer_is_not_resolved_against_the_bank_chart(ngx, xbrl) -> None:
     keys a health insurer will never report - while the tags it does file were all mapped and
     none of them reachable.
     """
-    assert _chart_template("insurance") != "financial", "the bank chart is not an insurer's"
-    assert _chart_template("bank") == "financial"
-    assert _chart_template("non_financial") == "non_financial"
-    assert _chart_template("both") == "both"
-    assert _chart_template("something_new") == "non_financial", "an unknown sector is not a bank"
+    assert chart_template_for("insurance") != "financial", "the bank chart is not an insurer's"
+    assert chart_template_for("bank") == "financial"
+    assert chart_template_for("non_financial") == "non_financial"
+    assert chart_template_for("both") == "both"
+    assert chart_template_for("something_new") == "non_financial", "an unknown sector is not a bank"
 
     # The keys UnitedHealth's own filings can fill, under the template it now gets.
-    template = _chart_template("insurance")
+    template = chart_template_for("insurance")
     income = xbrl.keys_for("income", template)
     for key in ("revenue", "operating_profit", "income_tax", "profit_after_tax"):
         assert key in income, f"{key} unreachable for an insurer"

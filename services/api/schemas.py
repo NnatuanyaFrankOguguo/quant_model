@@ -32,9 +32,12 @@ __all__ = [
     "CompanyRatios",
     "CompanyStatements",
     "DcfAssumptionsUsed",
+    "DocumentStored",
     "ErrorBody",
     "Figure",
     "Health",
+    "ManualEntryAccepted",
+    "ManualStatementIn",
     "MacroObservationPoint",
     "MacroObservations",
     "MacroSeriesInfo",
@@ -45,6 +48,7 @@ __all__ = [
     "PublicPing",
     "SharesUsed",
     "StatementPeriod",
+    "TypedFigureIn",
 ]
 
 
@@ -124,6 +128,76 @@ class PersonalSignal(BaseModel):
     calibrated_prob: float
     position_size: float
     backtest_run_id: int
+
+
+class TypedFigureIn(BaseModel):
+    """One figure as the operator read it off the page.
+
+    `printed` is what the page shows, verbatim - brackets, currency mark, dash and all. An
+    **empty string means the line is not on the page**, which is stored as NULL. It is not a
+    zero, and `SPEC.md` 4.1 is why: a debt-to-equity of 0.0 for a company whose debt line was
+    never read is an answer, confidently wrong, and indistinguishable from a real one.
+    """
+
+    canonical_key: str = Field(min_length=1)
+    printed: str = ""
+    page: int = Field(ge=1)
+
+
+class ManualStatementIn(BaseModel):
+    """One statement typed from one uploaded document. P3.2.
+
+    There is deliberately no `reviewed_by` field. The name attached to a hand-typed figure is
+    the authenticated principal's, taken by the server - a caller who could name the reviewer
+    could attribute their typing to somebody else, and the whole value of the column is that
+    it says who to ask.
+    """
+
+    #: The ticker, as every other company route is addressed. Not the internal
+    #: `security_id`: that is a surrogate key, no client can obtain one from the public API,
+    #: and widening a public response to expose it would be the wrong way round.
+    ticker: str = Field(min_length=1, max_length=32)
+    #: Which market, when a ticker is listed on more than one. Omitted searches them all and
+    #: is refused if two answer, rather than picking whichever sorted first.
+    exchange: str | None = None
+    statement_type: str = Field(pattern="^(income|balance|cashflow)$")
+    period_type: str = Field(min_length=1)
+    period_end: dt.date
+    #: When the **issuer published**, not when this was typed. It decides whether a
+    #: point-in-time read on some past date is allowed to see these figures.
+    known_as_of: dt.date
+    currency: str = Field(min_length=3, max_length=3)
+    #: As the statement's own column heading declares it: units, thousands or millions.
+    scale: str
+    source_document_id: int
+    figures: list[TypedFigureIn] = Field(min_length=1)
+    period_start: dt.date | None = None
+    is_audited: bool = True
+    is_consolidated: bool = True
+    chart_version: str = "v1"
+
+
+class ManualEntryAccepted(BaseModel):
+    """What was written. Not registered public-legal: a personal-tier surface only."""
+
+    statement_id: int
+    line_items_written: int
+    #: Figures stored as NULL because the company did not report them. Worth returning: a
+    #: form that silently absorbed a mistyped key would show "12 written" either way.
+    figures_absent: int
+    keys: list[str]
+    #: The name the server attached, echoed back so the operator can see whose it was.
+    reviewed_by: str
+
+
+class DocumentStored(BaseModel):
+    """An uploaded report's place in the store. P3.1."""
+
+    document_id: int
+    sha256: str
+    page_count: int
+    #: False when these exact bytes were already held, which makes the upload a no-op.
+    created: bool
 
 
 class MacroSeriesInfo(BaseModel):

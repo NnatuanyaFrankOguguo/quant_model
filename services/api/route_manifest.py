@@ -37,9 +37,11 @@ from services.api.schemas import (
     CompanyRatios,
     CompanyStatements,
     ConnectorHealthReport,
+    DocumentStored,
     Health,
     MacroObservations,
     MacroSeriesList,
+    ManualEntryAccepted,
     PersonalPing,
     PublicPing,
     RecentFilings,
@@ -102,6 +104,15 @@ MANIFEST: dict[str, RouteSpec] = {
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyDcf
     ),
     "GET /v1/personal/ping": RouteSpec(RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, PersonalPing),
+    # P3.1 and P3.2's write surfaces. Personal-tier because they change the record:
+    # an anonymous caller must not be able to add a figure, and the name on a typed
+    # figure is the authenticated principal's.
+    "POST /v1/personal/documents": RouteSpec(
+        RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, DocumentStored
+    ),
+    "POST /v1/personal/statements": RouteSpec(
+        RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, ManualEntryAccepted
+    ),
 }
 
 
