@@ -181,6 +181,21 @@ STRUCTURAL_ONLY: dict[str, str] = {
         "valid_to window is its time dimension (TG2)"
     ),
     "extraction_jobs": "operational record of how a document was processed; holds no figure",
+    # --- TG2, migration 0023 ---
+    "trading_calendar": (
+        "market structure: which days an exchange traded. No user data and no figure - "
+        "`is_open` is a fact about the venue, not a measurement of anything. It does not sit "
+        "comfortably in any of the four sets, and the honest reason is worth stating. A "
+        "backtest WILL read it, so 'nothing a model reads' is not quite true; but it is read "
+        "for date arithmetic (`settlement_date`, `add_trading_days`) rather than joined on "
+        "`known_as_of <= decision_date`, and `docs/08` §2.1 keys it `(exchange_id, date)`, "
+        "which leaves no room for a vintage. **The open question:** a holiday announced days "
+        "in advance was not knowable earlier, so a backtest deciding before the announcement "
+        "should arguably not see it. That is a real look-ahead, though a small one - knowing "
+        "a market holiday early is not much of an edge - and settling it means either a "
+        "`known_as_of` column (a `docs/08` change) or a stated decision that calendars are "
+        "exempt. Raise it before P7 check 19, not after."
+    ),
     "persons": "identity of a director or officer; the dated facts about them are in entity_roles",
     "chart_of_accounts": "the canonical vocabulary, versioned; reference data (TG7)",
     "account_mappings": "source label -> canonical key, versioned; reference data (TG7)",
