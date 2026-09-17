@@ -233,7 +233,7 @@ given) and their DDL here is this document's proposal, written in the same style
 | 2 | `securities` | A tradeable instrument; **retains delisted rows** | P2 | Doc A |
 | 3 | `security_identifiers` | Ticker history, time-bounded | P2 (0011) / P3 (0018) | **[built]** TG2 · §2.1 |
 | 4 | `exchanges` | NGX, NASDAQ, NYSE | P2 | Doc A |
-| 5 | `trading_calendar` | Which days each exchange was open | P3 | **[proposed]** TG2 |
+| 5 | `trading_calendar` | Which days each exchange was open | P3 | `[built]` migration `0023` TG2 |
 | 6 | `industries` | Sector classification; drives the statement template | P2 | Doc A |
 | 7 | `data_sources` | Licensing register — the redistribution gate | P0 | **[proposed]** TG5 |
 | 8 | `source_documents` | Every raw file ever fetched, immutable | P1 | Doc A |
@@ -435,18 +435,51 @@ Sample — a rename, correctly modelled:
 Both rows point at `security_id` 44. The price history never splits.
 
 ```sql
--- [proposed] TG2 — OPERATIONS §1.2
+-- [built] migration 0023 — TG2, OPERATIONS §1.2
 CREATE TABLE trading_calendar (
   exchange_id INT NOT NULL REFERENCES exchanges(id),
   date        DATE NOT NULL,
   is_open     BOOLEAN NOT NULL,
   session_note TEXT,                           -- 'public holiday: Eid al-Fitr'
+  source      TEXT NOT NULL,                   -- how the day was established; see below
   PRIMARY KEY (exchange_id, date)
 );
 ```
 
 Without this, a missing price row is ambiguous — closed market or failed scraper? You cannot
 alert on one without false-alarming on the other.
+
+**`source` is added to the DDL above.** Days arrive three ways and they are not equally
+strong, so each row says which it is. A reader deciding whether to trust a settlement date
+needs to know what it rests on:
+
+| `source` | Strength | How the day was established |
+|---|---|---|
+| `weekend` | definitional | no exchange here trades on a Saturday or a Sunday |
+| `observed_bars` | inferred | `price_history` holds a bar for that day |
+| `statute_fixed` | statute | a Public Holidays Act fixed date, **not** an NGX notice |
+| `announced` | primary | an exchange notice or gazette, entered by a person |
+
+**A date with no row is unknown, not closed.** `packages/common/calendars.py` raises
+`UnknownTradingDayError` rather than answer for it, and that refusal is the point of the
+table. Defaulting to open would settle trades on days the exchange was shut; defaulting to
+closed is quieter and worse, because it reads as a legitimate non-trading day and lets a
+volatility estimate absorb a zero return that never happened.
+
+**What is seeded, as of 2026-09-17** (`scripts/seed_trading_calendar.py`, re-runnable and
+idempotent): 32,072 days. Weekends for all three exchanges across 2015–2027; 14,298 NYSE and
+13,626 NASDAQ open days inferred from real price bars back to 1970; and Nigeria's eight
+fixed-date statutory closures a year, Good Friday and Easter Monday included since Western
+Easter is computable exactly.
+
+**What is deliberately absent.** Nigeria's moving holidays — Eid al-Fitr, Eid al-Adha and
+Maulid — are *"announced only days in advance by the Federal Government"*
+([OPERATIONS.md §1.2](../OPERATIONS.md)), so they cannot be computed and are not guessed;
+[docs/03](03_ROADMAP_PART1_PHASES_0-6.md) line 1540 makes them the operator's work. US
+weekday holidays are absent too: inferring a closure from the *absence* of a bar is the
+ambiguity this table exists to end, so `pandas-market-calendars` (already in the `data`
+extra) is the way in. Until then arithmetic across a US holiday refuses, which is correct
+rather than convenient.
 
 ### 2.2 Source and extraction tables
 
