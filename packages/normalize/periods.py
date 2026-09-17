@@ -18,10 +18,14 @@ from __future__ import annotations
 
 import calendar
 import datetime as dt
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 __all__ = [
+    "COMPARISON_WINDOW_DAYS",
+    "Comparability",
     "ExpectedFiling",
+    "comparability_of",
     "fiscal_year_of",
     "next_expected_filing",
     "period_label",
@@ -141,3 +145,79 @@ def period_label(period_type: str, fiscal_year: int) -> str:
     if period_type == "YTD":
         return f"9M-FY{fiscal_year}"
     return f"{period_type}-FY{fiscal_year}"
+
+
+#: `OPERATIONS.md` §1.5's default tolerance window, in days: *"cross-company comparisons
+#: align on `period_end` within a tolerance window (default ±92 days), never on
+#: fiscal-year label."* 92 days is a quarter, so two companies a quarter apart still compare
+#: and two companies half a year apart do not.
+COMPARISON_WINDOW_DAYS = 92
+
+
+@dataclass(frozen=True)
+class Comparability:
+    """Whether a set of period ends may be put in one comps table, and by how much it misses.
+
+    `spread_days` is the full width of the set, earliest to latest - not a pairwise distance.
+    A screen adding a fourth company to three comparable ones can widen the spread past the
+    window without any single pair being far apart, and it is the set that gets displayed.
+    """
+
+    period_ends: tuple[dt.date, ...]
+    spread_days: int
+    window_days: int
+    comparable: bool
+    #: Plain words for a UI to print beside the figures. Never empty.
+    reason: str
+
+
+def comparability_of(
+    period_ends: Iterable[dt.date], *, window_days: int = COMPARISON_WINDOW_DAYS
+) -> Comparability:
+    """`OPERATIONS.md` §1.5's rule, as a function. `docs/03` P3 check 8.
+
+    The rule: *"cross-company comparisons align on `period_end` within a tolerance window
+    (default ±92 days), never on fiscal-year label. Any comps table or screen displays each
+    company's actual `period_end` next to its figure, and flags when the spread across the
+    comparison set exceeds the window. Never silently align `FY2024` to `FY2024`."*
+
+    **Why the label is not enough.** Guinness Nigeria's year ends in June and Nestlé
+    Nigeria's in December, so both file an "FY2025" whose periods end 184 days apart. During
+    a currency collapse that is not a like-for-like comparison of two companies; it is a
+    comparison of two different economies, and the naira moved far enough between mid-2023
+    and end-2024 for the difference to swamp anything the ratio was meant to show. Three of
+    the twenty-five names in `docs/UNIVERSE.md` are off-December - Airtel Africa and Flour
+    Mills in March, Guinness in June - so this is the ordinary case, not the exotic one.
+
+    Takes period ends rather than statements or securities so that it stays pure and the
+    caller cannot accidentally pass a fiscal-year label. Raises on an empty set: comparing
+    nothing is a caller bug, and returning "comparable" for it would be a quiet lie.
+    """
+    ends = tuple(sorted(period_ends))
+    if not ends:
+        raise ValueError("a comparison set needs at least one period end")
+    if window_days < 0:
+        raise ValueError(f"window_days must not be negative, got {window_days}")
+
+    spread = (ends[-1] - ends[0]).days
+    comparable = spread <= window_days
+    if len(ends) == 1:
+        reason = f"one period, ending {ends[0]}: nothing to align"
+    elif comparable:
+        reason = (
+            f"{len(ends)} periods spanning {spread} days, from {ends[0]} to {ends[-1]}, "
+            f"within the {window_days}-day window"
+        )
+    else:
+        reason = (
+            f"{len(ends)} periods spanning {spread} days, from {ends[0]} to {ends[-1]}, "
+            f"which exceeds the {window_days}-day window by {spread - window_days} days - "
+            f"not comparable"
+        )
+    return Comparability(
+        period_ends=ends,
+        spread_days=spread,
+        window_days=window_days,
+        comparable=comparable,
+        reason=reason,
+    )

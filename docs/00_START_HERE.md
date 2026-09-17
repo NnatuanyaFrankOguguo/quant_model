@@ -224,10 +224,11 @@ Backblaze B2 account; the UNIVERSE.md tickers verified against NGX's listing dir
 The P0 spine from [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §6.1 is built and
 verified on 2026-09-02: 17 tables migrated on Neon PostgreSQL 18.6, the mode gate enforced and
 adversarially tested, a backup dumped and actually restored. **It is 🧪 and not ✅ for one
-reason: check 13 (CI green on a PR) cannot run — there is no GitHub remote yet.** The
-workflow is written and waiting, and the remote now exists but holds only `p0-spine`:
-`main` has never been pushed. That one is the operator's; see "the immediate next actions"
-below. **P1 and P2 are closed**, both verified by eye on 2026-09-15.
+reason: check 13 (CI green on a PR) has not been confirmed.** The workflow is written,
+and `main` has since been pushed — `git ls-remote origin` on 2026-09-17 shows it at
+`89a83b0` beside a `ci/first-run` branch. What is missing is evidence that a run passed:
+nothing in the repo records one, and it takes someone opening the Actions tab to say.
+That one is the operator's; see "the immediate next actions" below. **P1 and P2 are closed**, both verified by eye on 2026-09-15.
 
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
@@ -509,11 +510,11 @@ describes the source's lag, not ours.
 | Docker | ✅ 29.6.1 (Desktop must be *running* for backup/restore) |
 | Node (needed at P9) | ✅ v24.14.0 |
 | Monorepo scaffold | ✅ 4 packages (`common`, `compliance`, `ingestion`, `scheduler`), the rest reserved — `packages/README.md` |
-| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 33 tables + `alembic_version`, at migration 0015 ([ADR-0008](adr/0008-neon-managed-postgres.md)). The rest are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
+| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 34 tables + `alembic_version`, at migration 0021 ([ADR-0008](adr/0008-neon-managed-postgres.md)), verified against the live database on 2026-09-17. The rest are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
 | FastAPI service | ✅ `/health`, ping, the macro series routes, `/v1/public/companies{,/{t}/statements,/ratios,/ratios/history,/dividends,/filings,/dcf}`, `/v1/public/filings/recent` and `/v1/public/operations/connectors` — mode gate, bearer auth, audit row per request, every response type registered |
 | Screens | ✅ Three thin Streamlit clients: the company page, the macro dashboard, and the operations page (every job judged ok / warning / error / never ran, every data set's as-of) — `python -m streamlit run apps/streamlit/<page>.py` |
 | Any application code | ✅ The spine. No financial logic, by design |
-| CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed** — the remote exists but holds only `p0-spine`; `main` has never been pushed |
+| CI pipeline | 🧪 `.github/workflows/ci.yml` written. **`main` has been pushed** — `git ls-remote origin` on 2026-09-17 shows `main` at `89a83b0`, plus `ci/first-run`, `p0-spine` and `p2-us-company-data`. Whether a run has ever gone green is still unconfirmed: nothing in the repo records one, so check 13 stays open until someone reads the Actions tab |
 | Test suite | ✅ 412 passing, 0 skipped (`tests/unit`, `tests/known_answer`, `tests/compliance`; live-network tests are opt-in) |
 | Backup | ✅ Dumped, verified, copied, **and restored** 2026-09-02 — [REVIEW_CADENCE](REVIEW_CADENCE.md) row 2. Off-site: still zero |
 | ADR log | ✅ [0001–0010](adr/README.md) |
