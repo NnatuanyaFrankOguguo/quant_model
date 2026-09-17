@@ -41,8 +41,8 @@ states, which is that the constraint "is the only mechanism that makes
    `valid_to` is **inclusive** in this schema - the last day the identifier was valid. Two
    independent facts in the document set fix that reading:
 
-   * `docs/08` §2.1's own worked sample runs `GUARANTY` to 2021-07-31 and starts `GTCO` on
-     2021-08-01. Those two rows are gap-free only if 2021-07-31 belongs to `GUARANTY`.
+   * `docs/08` §2.1's own worked sample runs `GUARANTY` to 2021-06-23 and starts `GTCO` on
+     2021-06-24. Those two rows are gap-free only if 2021-06-23 belongs to `GUARANTY`.
    * `_record_predecessor` in `packages/ingestion/edgar.py` writes `valid_from == valid_to`
      when a payload shows no filing, calling it "the succession day alone". Under the
      half-open `'[)'` bound in the literal SQL that interval is the **empty range** - and an

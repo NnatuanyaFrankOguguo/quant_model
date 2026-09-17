@@ -235,7 +235,7 @@ That one is the operator's; see "the immediate next actions" below. **P1 and P2 
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: remote exists, `main` never pushed, CI never run |
 | P1 Macro Backdrop | ✅ Complete | 2026-09-03 | 2026-09-15 | 13/13 | Check 11 confirmed 2026-09-15 · 10 of 13 series live · 28,053 rows · staleness thresholds verified (0016) |
 | P2 US Company Data | ✅ Complete | 2026-09-13 | 2026-09-15 | 15/15 | 24 companies · 1,662 filings · 7,917 statement versions · 53,710 line items · 269,216 price bars · 3,270 corporate actions |
-| P3 NG Manual Analyzer | 🔨 In progress | 2026-09-16 | — | — | **P3.3 ✅** identity history (0018 + 0019) and unit conversion (`common/units.py`) — five of TG2's six paths, `docs/10` §2.11 fully applied, the calendar due in P6. **P3.5 ✅** the manual override (TG10). P3.1/P3.2/P3.4 wait on the operator's B2 account and ticker verification |
+| P3 NG Manual Analyzer | 🔨 In progress | 2026-09-16 | — | — | **Code complete; the gate now waits on data, not code.** P3.1 ✅ the document store (0022, `ingestion/documents.py`) — a PDF is verified by content, page-counted from the file and stored once by hash. P3.2 ✅ entry rules, write endpoint and form (`normalize/manual.py`, `/v1/personal/statements`, `entry_page.py`). P3.3 ✅ **all six** TG2 paths: identity (0018, 0019), units, corporate actions, FX, fiscal alignment, and the trading calendar (0023, 32,072 days). P3.5 ✅ the manual override (TG10). TG7 ✅ chart v1 (0020, 65 keys) — created, not frozen. Checks 4, 5, 8 and 16 closed this phase. **Open:** P3.4 the golden set and ≥10 typed company-years (TEAM_BRIEF B, C, D), the NGX universe (no Nigerian company is in the database yet), and `index_membership` |
 | P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
 | P5 News & Daily Brief | ⬜ Not started | — | — | — | |
 | P6 Scenarios & Indicators | ⬜ Not started | — | — | — | Blocked by gap G1 until scheduled |
@@ -510,12 +510,12 @@ describes the source's lag, not ours.
 | Docker | ✅ 29.6.1 (Desktop must be *running* for backup/restore) |
 | Node (needed at P9) | ✅ v24.14.0 |
 | Monorepo scaffold | ✅ 4 packages (`common`, `compliance`, `ingestion`, `scheduler`), the rest reserved — `packages/README.md` |
-| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 34 tables + `alembic_version`, at migration 0021 ([ADR-0008](adr/0008-neon-managed-postgres.md)), verified against the live database on 2026-09-17. The rest are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
+| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 35 tables + `alembic_version`, at migration 0023 ([ADR-0008](adr/0008-neon-managed-postgres.md)), verified against the live database on 2026-09-17. The rest are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
 | FastAPI service | ✅ `/health`, ping, the macro series routes, `/v1/public/companies{,/{t}/statements,/ratios,/ratios/history,/dividends,/filings,/dcf}`, `/v1/public/filings/recent` and `/v1/public/operations/connectors` — mode gate, bearer auth, audit row per request, every response type registered |
-| Screens | ✅ Three thin Streamlit clients: the company page, the macro dashboard, and the operations page (every job judged ok / warning / error / never ran, every data set's as-of) — `python -m streamlit run apps/streamlit/<page>.py` |
+| Screens | ✅ Four thin Streamlit clients: the company page, the macro dashboard, the operations page, and the statement entry form (P3.2) (every job judged ok / warning / error / never ran, every data set's as-of) — `python -m streamlit run apps/streamlit/<page>.py` |
 | Any application code | ✅ The spine. No financial logic, by design |
 | CI pipeline | 🧪 `.github/workflows/ci.yml` written. **`main` has been pushed** — `git ls-remote origin` on 2026-09-17 shows `main` at `89a83b0`, plus `ci/first-run`, `p0-spine` and `p2-us-company-data`. Whether a run has ever gone green is still unconfirmed: nothing in the repo records one, so check 13 stays open until someone reads the Actions tab |
-| Test suite | ✅ 412 passing, 0 skipped (`tests/unit`, `tests/known_answer`, `tests/compliance`; live-network tests are opt-in) |
+| Test suite | ✅ 509 passing in `tests/unit` + `tests/known_answer` and 199 in `tests/compliance`, 0 skipped; live-network tests are opt-in. Run with `-p no:randomly`: `test_edgar.py` has real isolation leakage under random ordering, which is a known defect of that file rather than of the code it tests |
 | Backup | ✅ Dumped, verified, copied, **and restored** 2026-09-02 — [REVIEW_CADENCE](REVIEW_CADENCE.md) row 2. Off-site: still zero |
 | ADR log | ✅ [0001–0010](adr/README.md) |
 

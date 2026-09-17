@@ -1,6 +1,6 @@
 """`packages.common.identity`: which security a ticker meant on a date. TG2, `OPERATIONS` §1.4.
 
-The bug under test is a silent one. Guaranty Trust Bank became GTCO on 2021-08-01; if the
+The bug under test is a silent one. Guaranty Trust Bank became GTCO on 2021-06-24; if the
 ticker is the join key, a rename or a reuse joins one company's new prices onto another
 company's old history and **nothing raises**. So these tests do two things: they check that
 resolution answers the dated question correctly, and they check that the database physically
@@ -42,9 +42,12 @@ from packages.common.models import Company, Exchange, Security, SecurityIdentifi
 
 pytestmark = pytest.mark.invariant
 
-#: The real rename `docs/08` §2.1 uses as its worked example.
-RENAMED_ON = dt.date(2021, 8, 1)
-LAST_DAY_AS_GUARANTY = dt.date(2021, 7, 31)
+#: The real rename `docs/08` §2.1 uses as its worked example. 24 June 2021 is the exchange
+#: event: `GUARANTY` was suspended on 18 June, its 29,431,179,224 shares delisted and the
+#: holdco's identical count listed on the 24th (`docs/UNIVERSE.md` §4). The example carried
+#: 2021-08-01 until 2026-09-17, which no source supports.
+RENAMED_ON = dt.date(2021, 6, 24)
+LAST_DAY_AS_GUARANTY = dt.date(2021, 6, 23)
 TODAY = dt.date(2026, 9, 16)
 
 
@@ -100,7 +103,7 @@ def _identifier(
 
 @pytest.fixture
 def gtco(db_session: Session) -> Security:
-    """One security, two ticker eras: GUARANTY through 2021-07-31, then GTCO.
+    """One security, two ticker eras: GUARANTY through 2021-06-23, then GTCO.
 
     Both rows point at the same `security_id`, which is the whole point - the price history
     never splits, and a reader asking under either name reaches the same series.
@@ -137,8 +140,8 @@ def test_a_renamed_company_resolves_under_both_names_to_one_security(
 def test_the_last_day_of_validity_still_resolves(db_session: Session, gtco: Security) -> None:
     """`valid_to` is inclusive, and the boundary day is where an off-by-one would hide.
 
-    `docs/08` §2.1's sample runs GUARANTY to 2021-07-31 and starts GTCO on 2021-08-01. Those
-    two rows leave no gap only if 2021-07-31 belongs to GUARANTY, so it must resolve - and
+    `docs/08` §2.1's sample runs GUARANTY to 2021-06-23 and starts GTCO on 2021-06-24. Those
+    two rows leave no gap only if 2021-06-23 belongs to GUARANTY, so it must resolve - and
     the day after must not.
     """
     on_the_day = resolve_security(db_session, value="GUARANTY", as_of=LAST_DAY_AS_GUARANTY)

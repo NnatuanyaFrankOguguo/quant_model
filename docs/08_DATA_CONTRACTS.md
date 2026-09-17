@@ -97,7 +97,7 @@ and lies. There are six distinct date concepts here and they are **not** interch
 | `known_as_of` | *From what date could a person outside the company have KNOWN this?* This is the point-in-time guard. MTN's FY2024 revenue was not knowable on 31 Dec 2024 — it became knowable when the audited statement was published. | If the annual financial statement published on 2025-03-14, then `known_as_of = 2025-03-14`. |
 | `release_date` / `vintage` | The macro equivalent of `known_as_of`. NBS publishes January CPI in mid-February, so the January figure has `ts = 2025-01-31` and `release_date ≈ 2025-02-18`. A **vintage** is a snapshot of what a series looked like at a given release — revisions create a new vintage and never overwrite the old one ([DATA_FOUNDATION.md §4.2](../DATA_FOUNDATION.md); this is what FRED's ALFRED does). | `ts=2025-01-31`, `release_date=2025-02-18` |
 | `retrieved_at` | *When did WE fetch this?* Provenance and cache invalidation only. Never used in a feature join. | `2026-08-14T22:04:11Z` |
-| `valid_from` / `valid_to` | *Over what window was this attribute true?* Used for time-bounded attributes such as tickers and name aliases ([OPERATIONS.md §1.4](../OPERATIONS.md)). `valid_to IS NULL` means "still current". | GTBank became GTCO in 2021: ticker `GTB` valid until the changeover, ticker `GTCO` valid from it. **[NEEDS VERIFICATION]** — take the exact changeover date from the NGX announcement, never from memory. |
+| `valid_from` / `valid_to` | *Over what window was this attribute true?* Used for time-bounded attributes such as tickers and name aliases ([OPERATIONS.md §1.4](../OPERATIONS.md)). `valid_to IS NULL` means "still current". | GTBank became GTCO in 2021: ticker `GUARANTY` valid until 2021-06-23, ticker `GTCO` valid from 2021-06-24 (§2.1 and [UNIVERSE.md](UNIVERSE.md) §4). This row said `GTB` until 2026-09-17; the symbol was `GUARANTY`, and the date came from the exchange event rather than from memory. |
 
 **The one rule that follows from this table, and the only one you must never break:**
 
@@ -429,10 +429,27 @@ Sample — a rename, correctly modelled:
 
 | id | security_id | id_type | id_value | valid_from | valid_to |
 |---|---|---|---|---|---|
-| 1 | 44 | ticker | GUARANTY | 1996-01-01 | 2021-07-31 |
-| 2 | 44 | ticker | GTCO | 2021-08-01 | NULL |
+| 1 | 44 | ticker | GUARANTY | 1996-01-01 | 2021-06-23 |
+| 2 | 44 | ticker | GTCO | 2021-06-24 | NULL |
 
 Both rows point at `security_id` 44. The price history never splits.
+
+**Corrected 2026-09-17, from [UNIVERSE.md](UNIVERSE.md) §4.** This example ran to 2021-07-31
+and started on 2021-08-01, and no source supports either date. Four 2021 dates are
+defensible and 1 August is not among them: the exchange suspended `GUARANTY` on **18 June**,
+delisted its 29,431,179,224 shares and listed the holdco's identical count on **24 June**,
+GTCO's own history page calls **1 July** the day it became the parent, and the closing-gong
+ceremony was **13 July**. A ticker interval is an exchange event, so 24 June is the one that
+belongs here.
+
+The `1996-01-01` start is still illustrative and is left alone deliberately — §1.8 already
+says the sample rows carry real tickers *"because abstract placeholders make contracts harder
+to read, not because the attached numbers are real"*, and inventing a listing date to replace
+an invented one would be no improvement.
+
+Note that the two rows remain gap-free **only** under the inclusive reading of `valid_to`:
+23 June belongs to `GUARANTY` and 24 June to `GTCO`. That is the same argument the old dates
+carried, which is why re-dating the example costs nothing but the dates.
 
 ```sql
 -- [built] migration 0023 — TG2, OPERATIONS §1.2

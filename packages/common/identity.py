@@ -1,6 +1,6 @@
 """Which security a ticker meant on a date. TG2, `OPERATIONS.md` §1.4.
 
-**The bug this module exists to prevent.** Guaranty Trust Bank became GTCO on 2021-08-01,
+**The bug this module exists to prevent.** Guaranty Trust Bank became GTCO on 2021-06-24,
 and Nigerian corporate reorganisations are common. If the ticker is the join key, a rename
 silently joins one company's new prices onto another company's old history: the series is
 wrong, plausible, and already feeding a ratio. Nothing raises. So `securities.id` is the
@@ -22,7 +22,7 @@ that ticker no longer identifies anything. A resolver without a date can only an
 the present, which is the wrong answer to every historical question a backtest asks.
 
 **`valid_to` is inclusive** - the last day the identifier was valid. `docs/08` §2.1's
-sample runs GUARANTY to 2021-07-31 and starts GTCO on 2021-08-01, which is gap-free only
+sample runs GUARANTY to 2021-06-23 and starts GTCO on 2021-06-24, which is gap-free only
 under that reading. Migration 0018 converts it to an exclusive bound once, inside the
 exclusion constraint, so this module and the database agree on the boundary day.
 

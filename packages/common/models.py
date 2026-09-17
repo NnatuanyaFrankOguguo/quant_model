@@ -148,7 +148,7 @@ class Security(Base):
 class SecurityIdentifier(Base):
     """A ticker, ISIN, CUSIP, SEDOL, CIK, LEI or FIGI, dated. `docs/08` §2.1, TG2.
 
-    Tickers get reused and companies rename; GUARANTY became GTCO on 2021-08-01 and both
+    Tickers get reused and companies rename; GUARANTY became GTCO on 2021-06-24 and both
     rows point at the same security, so the price history never splits.
 
     **Read nothing here directly.** `packages/common/identity.py` is the only module that
