@@ -105,6 +105,7 @@ def write_statement(
     statement_type: str,
     period_end: dt.date,
     figures: dict[str, Decimal | None],
+    fiscal_year: int | None = None,
 ) -> int:
     """One statement and its figures, written straight in.
 
@@ -120,7 +121,7 @@ def write_statement(
         statement_type=statement_type,
         period_type="FY",
         period_end=period_end,
-        fiscal_year=period_end.year,
+        fiscal_year=fiscal_year if fiscal_year is not None else period_end.year,
         calendar_year=period_end.year,
         period_label=f"FY{period_end.year}",
         presentation_currency="NGN",
@@ -552,3 +553,96 @@ def test_profit_reported_once_cannot_be_cross_checked(
     report = validate_period(db_session, company_id=company, period_type="FY", period_end=FY2025)
     assert outcome_of(report, PROFIT_TIES) == NOT_CHECKABLE
     assert "two statements are needed" in detail_of(report, PROFIT_TIES)
+
+
+# --------------------------------------------------------------------------------------
+# Finding last year, which is not "this date minus one year"
+# --------------------------------------------------------------------------------------
+
+
+def test_a_leap_day_period_end_does_not_crash_the_check(
+    db_session: Session, company: int, document: int
+) -> None:
+    """29 February minus a year is not a date, and four such period ends are stored.
+
+    `dt.date(2024 - 1, 2, 29)` raises. The whole report died on it, which the review queue
+    found by sweeping every period in the database - the kind of input nobody writes a
+    fixture for because nobody thinks of it.
+    """
+    for period_end, fiscal_year in ((dt.date(2023, 2, 28), 2023), (dt.date(2024, 2, 29), 2024)):
+        write_statement(
+            db_session,
+            company_id=company,
+            document_id=document,
+            statement_type="income",
+            period_end=period_end,
+            figures={"revenue": Decimal("1000000000")},
+            fiscal_year=fiscal_year,
+        )
+    db_session.flush()
+
+    report = validate_period(
+        db_session, company_id=company, period_type="FY", period_end=dt.date(2024, 2, 29)
+    )
+    assert outcome_of(report, CROSS_YEAR_SWING) == PASSED, (
+        "the leap year compares against the ordinary one before it"
+    )
+
+
+def test_a_fifty_two_week_filer_is_compared_against_its_own_prior_year(
+    db_session: Session, company: int, document: int
+) -> None:
+    """Apple's fiscal years end 2025-09-27 and 2024-09-28. Neither is the other minus a year.
+
+    This is the quiet half of the same defect. Date arithmetic lands on a day with no
+    statement, so the check reported "nothing to compare against" and passed on - not
+    wrong, exactly, but silent about four years of comparable figures sitting beside it.
+    """
+    for period_end, fiscal_year, revenue in (
+        (dt.date(2024, 9, 28), 2024, Decimal("391035000000")),
+        (dt.date(2025, 9, 27), 2025, Decimal("416161000000")),
+    ):
+        write_statement(
+            db_session,
+            company_id=company,
+            document_id=document,
+            statement_type="income",
+            period_end=period_end,
+            figures={"revenue": revenue},
+            fiscal_year=fiscal_year,
+        )
+    db_session.flush()
+
+    report = validate_period(
+        db_session, company_id=company, period_type="FY", period_end=dt.date(2025, 9, 27)
+    )
+    assert outcome_of(report, CROSS_YEAR_SWING) == PASSED
+    assert "2024-09-28" in detail_of(report, CROSS_YEAR_SWING), (
+        "it found the prior fiscal year, not a date that does not exist"
+    )
+
+
+def test_a_unit_error_is_still_caught_across_a_fifty_two_week_boundary(
+    db_session: Session, company: int, document: int
+) -> None:
+    """The fix must not cost the check its teeth on the filers it just started seeing."""
+    for period_end, fiscal_year, revenue in (
+        (dt.date(2024, 9, 28), 2024, Decimal("391035000000")),
+        (dt.date(2025, 9, 27), 2025, Decimal("416161000")),  # read in thousands by mistake
+    ):
+        write_statement(
+            db_session,
+            company_id=company,
+            document_id=document,
+            statement_type="income",
+            period_end=period_end,
+            figures={"revenue": revenue},
+            fiscal_year=fiscal_year,
+        )
+    db_session.flush()
+
+    report = validate_period(
+        db_session, company_id=company, period_type="FY", period_end=dt.date(2025, 9, 27)
+    )
+    assert outcome_of(report, CROSS_YEAR_SWING) == FAILED
+    assert "revenue" in detail_of(report, CROSS_YEAR_SWING)

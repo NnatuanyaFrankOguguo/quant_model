@@ -350,6 +350,42 @@ def _profit_ties(figures: dict[tuple[str, str], Decimal | None]) -> IdentityResu
     )
 
 
+def _prior_period_end(
+    session: Session, *, company_id: int, period_type: str, period_end: dt.date
+) -> dt.date | None:
+    """The period end one fiscal year earlier, by the company's own year label.
+
+    **Not `period_end` minus a year.** That arithmetic is wrong twice over. It throws on
+    29 February - four leap-day period ends are stored, and each crashed this function until
+    the review queue swept the whole database and found them. And for a 52/53-week filer it
+    lands on a day with no statement: Apple's fiscal years end 2025-09-27, 2024-09-28,
+    2023-09-30 and 2022-09-24, never twice on the same date, so every Apple period reported
+    "nothing to compare against" while four years of comparable figures sat beside it.
+
+    `statements.fiscal_year` is the company's own label, so the year before is the row
+    carrying one less - which is exactly what the comparative column of a real report shows.
+    """
+    current_year = session.execute(
+        select(Statement.fiscal_year)
+        .where(Statement.company_id == company_id)
+        .where(Statement.period_type == period_type)
+        .where(Statement.period_end == period_end)
+        .where(Statement.superseded_by.is_(None))
+        .limit(1)
+    ).scalar_one_or_none()
+    if current_year is None:
+        return None
+    return session.execute(
+        select(Statement.period_end)
+        .where(Statement.company_id == company_id)
+        .where(Statement.period_type == period_type)
+        .where(Statement.fiscal_year == current_year - 1)
+        .where(Statement.superseded_by.is_(None))
+        .order_by(Statement.period_end.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
 def _cross_year_swing(
     session: Session,
     *,
@@ -364,7 +400,15 @@ def _cross_year_swing(
     any amount of staring at the number itself: 3,360,000 is as plausible in thousands as in
     millions until it sits beside last year's 3,400,000.
     """
-    previous_end = dt.date(period_end.year - 1, period_end.month, period_end.day)
+    previous_end = _prior_period_end(
+        session, company_id=company_id, period_type=period_type, period_end=period_end
+    )
+    if previous_end is None:
+        return IdentityResult(
+            CROSS_YEAR_SWING,
+            NOT_CHECKABLE,
+            f"no {period_type} statements for the fiscal year before {period_end}",
+        )
     previous = _figures(
         session, company_id=company_id, period_type=period_type, period_end=previous_end
     )
@@ -372,7 +416,7 @@ def _cross_year_swing(
         return IdentityResult(
             CROSS_YEAR_SWING,
             NOT_CHECKABLE,
-            f"no {period_type} statements for {previous_end} to compare against",
+            f"no {period_type} figures for {previous_end} to compare against",
         )
 
     swings: list[str] = []
