@@ -421,3 +421,99 @@ def test_a_window_with_nothing_written_has_no_rate(db_session: Session) -> None:
 def test_a_backwards_window_is_refused(db_session: Session) -> None:
     with pytest.raises(ValueError, match="is after end"):
         correction_rate(db_session, start=dt.date(2026, 2, 1), end=dt.date(2026, 1, 1))
+
+
+# --------------------------------------------------------------------------------------
+# One problem, one slot
+# --------------------------------------------------------------------------------------
+
+
+def test_a_finding_repeated_across_periods_takes_one_place_in_the_queue(
+    db_session: Session, company: int, document: int
+) -> None:
+    """The first full sweep put one company's mapping problem in positions one through eight.
+
+    Eight rows for one problem is the FIFO failure P4.4 warns about arriving by another
+    route: it spends the reviewer attention the ordering exists to protect. Caterpillar's
+    gross-profit gap holds the same sign across all seventeen periods that carry the
+    figures - one question about scope, not seventeen wrong numbers.
+    """
+    for year in (2021, 2022, 2023, 2024, 2025):
+        write(
+            db_session,
+            company_id=company,
+            document_id=document,
+            statement_type="income",
+            period_end=dt.date(year, 12, 31),
+            figures={
+                "revenue": Decimal("10000000000"),
+                "cost_of_revenue": Decimal("7000000000"),
+                "gross_profit": Decimal("2300000000"),  # 700m short, every year
+            },
+        )
+    queue = queue_for(db_session, company)
+    gross = [i for i in queue if i.finding == "revenue_less_cost_of_revenue_is_gross_profit"]
+    assert len(gross) == 1, "five periods, one entry"
+    assert gross[0].occurrences == 5
+    assert gross[0].first_period == dt.date(2021, 12, 31)
+    assert gross[0].period_end == dt.date(2025, 12, 31), "the latest is where a reviewer starts"
+    assert "systematic" in gross[0].why
+
+
+def test_the_same_finding_for_two_companies_stays_two_entries(
+    db_session: Session, company: int, document: int
+) -> None:
+    """Grouping is per company. Two issuers with the same fault are two conversations."""
+    other = Company(
+        legal_name="zz-test-review-other Plc",
+        country="NG",
+        statement_template="non_financial",
+        fiscal_year_end=12,
+    )
+    db_session.add(other)
+    db_session.flush()
+    exchange_id = db_session.execute(select(Exchange.id).order_by(Exchange.id)).scalars().first()
+    db_session.add(Security(company_id=other.id, exchange_id=exchange_id, currency="NGN"))
+    db_session.flush()
+
+    for company_id in (company, other.id):
+        write(
+            db_session,
+            company_id=company_id,
+            document_id=document,
+            statement_type="balance",
+            figures={"total_assets": Decimal("1000000"), "cash": Decimal("2000000")},
+        )
+    both = review_queue(db_session, limit=50)
+    mine = [
+        i
+        for i in both
+        if i.finding == "cash_within_total_assets" and i.company_id in {company, other.id}
+    ]
+    assert len(mine) == 2
+    assert {i.occurrences for i in mine} == {1}
+
+
+def test_a_grouped_entry_keeps_the_worst_priority_it_saw(
+    db_session: Session, company: int, document: int
+) -> None:
+    """The group is as urgent as its worst member, not its most recent one."""
+    write(
+        db_session,
+        company_id=company,
+        document_id=document,
+        statement_type="balance",
+        period_end=dt.date(2024, 12, 31),
+        figures={"total_assets": Decimal("1000000000"), "cash": Decimal("-900000000")},
+    )
+    write(
+        db_session,
+        company_id=company,
+        document_id=document,
+        statement_type="balance",
+        period_end=FY2025,
+        figures={"total_assets": Decimal("1000000000"), "cash": Decimal("-1000")},
+    )
+    item = next(i for i in queue_for(db_session, company) if i.finding == "cash_not_negative")
+    assert item.occurrences == 2
+    assert item.share_of_anchor > Decimal("0.5"), "the 900m year, not the 1,000 one"

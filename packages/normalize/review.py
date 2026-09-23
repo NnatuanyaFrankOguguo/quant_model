@@ -129,6 +129,12 @@ class QueueItem:
     #: The figure as a share of its statement's anchor, 0 when there is nothing to divide by.
     share_of_anchor: Decimal
     is_required: bool
+    #: How many periods share this finding. More than one means it is systematic - a mapping
+    #: or a definition, not a mistyped figure - which is the most useful thing a reviewer can
+    #: know before opening anything.
+    occurrences: int = 1
+    #: The earliest period it affects. `period_end` carries the latest.
+    first_period: dt.date | None = None
 
     @property
     def why(self) -> str:
@@ -138,6 +144,9 @@ class QueueItem:
             parts.append(f"{self.share_of_anchor:.1%} of the statement")
         if self.is_required:
             parts.append("required key")
+        if self.occurrences > 1:
+            span = f"{self.first_period} to {self.period_end}" if self.first_period else "several"
+            parts.append(f"{self.occurrences} periods ({span}) - systematic")
         return f"{self.detail} [{', '.join(parts)}]"
 
 
@@ -308,8 +317,43 @@ def review_queue(
             )
 
     items.extend(_flagged_items(session, required=required, since=since, company_id=company_id))
-    items.sort(key=lambda item: (-item.priority, item.company_name, item.period_end))
-    return items[:limit]
+    grouped = _collapse(items)
+    grouped.sort(key=lambda item: (-item.priority, item.company_name, item.period_end))
+    return grouped[:limit]
+
+
+def _collapse(items: list[QueueItem]) -> list[QueueItem]:
+    """One entry per `(company, finding, key)`, spanning however many periods it affects.
+
+    The first sweep of the whole database put one company's mapping problem in positions one
+    through eight - the same identity, eight consecutive quarters. Eight rows for one problem
+    is the FIFO failure `docs/03` P4.4 warns about wearing a different hat, so they become
+    one row that says how many periods it covers.
+
+    The surviving entry keeps the **worst** priority and the **latest** period, because that
+    is where a reviewer would start, and carries the earliest in `first_period` so the span
+    is visible without another query.
+    """
+    by_problem: dict[tuple[int, str, str | None], QueueItem] = {}
+    for item in items:
+        key = (item.company_id, item.finding, item.canonical_key)
+        seen = by_problem.get(key)
+        if seen is None:
+            by_problem[key] = QueueItem(**{**vars(item), "first_period": item.period_end})
+            continue
+        by_problem[key] = QueueItem(
+            **{
+                **vars(seen),
+                "priority": max(seen.priority, item.priority),
+                "severity": max(seen.severity, item.severity),
+                "share_of_anchor": max(seen.share_of_anchor, item.share_of_anchor),
+                "period_end": max(seen.period_end, item.period_end),
+                "first_period": min(seen.first_period or seen.period_end, item.period_end),
+                "detail": seen.detail if seen.priority >= item.priority else item.detail,
+                "occurrences": seen.occurrences + 1,
+            }
+        )
+    return list(by_problem.values())
 
 
 def _flagged_items(
