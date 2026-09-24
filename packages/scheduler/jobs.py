@@ -15,6 +15,7 @@ given ids equal to their connector names so their history reads continuously.
 
 from __future__ import annotations
 
+from packages.brief.job import deliver_daily_briefs
 from packages.ingestion.cbn import (
     CbnExchangeRateConnector,
     CbnInflationConnector,
@@ -31,17 +32,24 @@ from packages.ingestion.nigeria_data_portal import (
 )
 from packages.ingestion.rss import feed_connectors
 from packages.ingestion.yahoo import YahooChartConnector
-from packages.scheduler.runner import Expectation, ScheduledJob
+from packages.normalize.sentiment import score_new_articles
+from packages.scheduler.runner import Expectation, ScheduledCallable, ScheduledJob
 
 __all__ = [
+    "BRIEF_HOUR_UTC",
+    "BRIEF_MINUTE_UTC",
     "FRED_JOB_PARAMS",
+    "SENTIMENT_MINUTE_UTC",
     "US_UNIVERSE",
+    "build_internal_jobs",
     "build_jobs",
+    "daily_brief_job",
     "edgar_refresh_job",
     "expected_run_names",
     "expected_run_names_by_source",
     "expected_schedule",
     "price_job",
+    "sentiment_job",
 ]
 
 #: The US names P2 covers. `docs/UNIVERSE.md` keeps the US side "separate and unconstrained"
@@ -284,6 +292,95 @@ def _news_jobs() -> list[ScheduledJob]:
         )
         for offset, connector in enumerate(feed_connectors())
     ]
+
+
+#: 06:00 UTC is 07:00 WAT, which is the time `docs/03` P5.4 asks for by name. WAT is
+#: UTC+1 all year, so there is no daylight-saving drift to design around.
+#:
+#: **What that time costs, said out loud.** The morning macro pulls run 05:30-06:30 UTC
+#: and the FRED series land *after* this, so a figure released overnight reaches the
+#: reader in tomorrow's brief rather than today's. That is a delay, not an error: every
+#: figure in the brief carries the vintage it was read at, so a reader can always see how
+#: old the reading is. Moving the brief to 06:45 UTC would close the gap and break the
+#: stated 07:00 WAT; the spec wins until somebody decides otherwise, and this comment is
+#: the place that decision goes.
+BRIEF_HOUR_UTC = 6
+BRIEF_MINUTE_UTC = 0
+
+
+def daily_brief_job() -> ScheduledCallable:
+    """The P5.4 brief, once a morning, for every principal who owns a watchlist.
+
+    A `ScheduledCallable` rather than a `ScheduledJob` because it is not an ingestion -
+    see that class for why pretending otherwise would put a fabricated licence and a
+    fabricated `connector_runs` row into two tables. Its evidence is `alert_deliveries`.
+    """
+    return ScheduledCallable(
+        run=deliver_daily_briefs,
+        job_id="brief:daily",
+        hour=BRIEF_HOUR_UTC,
+        minute=BRIEF_MINUTE_UTC,
+    )
+
+
+#: Forty past, every hour. Two constraints, and they pin it between them.
+#:
+#: **After the feeds.** `_news_jobs()` staggers three RSS polls at :05, :15 and :25, so
+#: :40 is the first minute at which an hour's news is all stored. Run it earlier and the
+#: last feed's items wait an hour for a score.
+#:
+#: **Before the brief.** P5.4 fires at 06:00 UTC and reads `news_sentiment`. The 05:40
+#: pass covers everything published up to 05:25, so the brief is never printing a story
+#: the scorer has not reached. A once-daily job placed just before 06:00 would leave that
+#: same gap for every article of the preceding day that arrived after it ran.
+#:
+#: Hourly is affordable because the work is a dictionary lookup per headline and
+#: `unscored_articles` makes an hour with no new articles a single query and no writes.
+SENTIMENT_MINUTE_UTC = 40
+
+
+def sentiment_job() -> ScheduledCallable:
+    """The P5.3 bulk scorer, hourly, over whatever the feeds have added.
+
+    A `ScheduledCallable` and not a `ScheduledJob`, for the reason `daily_brief_job`
+    gives: this fetches nothing from anybody, so a `Connector` here would mean a licence
+    for a source that does not exist and `connector_runs` rows about a page nobody
+    loaded. Its evidence is `news_sentiment` - one row per article per scorer version.
+
+    **Only the bulk tier runs.** The escalation tier needs `ANTHROPIC_API_KEY`, which is
+    absent; `packages.normalize.sentiment.score_new_articles` says why it is not wired in
+    here, and every article that would have been escalated is counted and logged on each
+    pass rather than passing silently.
+    """
+    return ScheduledCallable(
+        run=score_new_articles,
+        job_id="sentiment:vader",
+        hour="*",
+        minute=SENTIMENT_MINUTE_UTC,
+    )
+
+
+def build_internal_jobs() -> list[ScheduledCallable]:
+    """Every scheduled thing that is not a data pull.
+
+    Kept apart from `build_jobs()` on purpose: that list is the connector schedule, and
+    `expected_run_names`, `expected_schedule` and `expected_run_names_by_source` are all
+    derived from it to answer questions about *sources* - which register a job belongs
+    to, how long its silence is normal. None of those questions has an answer for a job
+    that fetches nothing, and folding one in would give each of them a wrong one.
+
+    Ordered as the day runs them, which is also the order they depend on each other in:
+    the scorer writes what the brief reads. Nothing enforces that ordering - they are
+    separate cron entries - and it does not need to be enforced, because a brief that
+    runs before a score finds an article unscored rather than wrong.
+
+    **P5.2's tagger is deliberately absent.** It is the same shape as these and would
+    belong here, but it was never registered and adding it is a P5.2 decision with its
+    own consequences (`tag_articles` logs a coverage warning per exchange on every run,
+    and today every stored security is US-listed while every feed is Nigerian). Noted
+    here rather than fixed in passing.
+    """
+    return [sentiment_job(), daily_brief_job()]
 
 
 def expected_schedule() -> dict[str, Expectation]:

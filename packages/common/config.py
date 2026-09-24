@@ -135,7 +135,11 @@ def _known_secret_values() -> list[str]:
     # Every literal key this process can hold. An Anthropic error carries the request
     # context back in its message, so a key left out of this list is one that reaches the
     # log the first time the API refuses a call.
-    for candidate in (settings.fred_api_key, settings.anthropic_api_key):
+    for candidate in (
+        settings.fred_api_key,
+        settings.anthropic_api_key,
+        settings.telegram_bot_token,
+    ):
         if candidate:
             values.append(candidate)
     for url in (settings.database_url, settings.test_database_url):
@@ -184,6 +188,12 @@ class Settings(BaseSettings):
     # pipeline runs without it, the manual entry path (P3.2) needs no key at all, and
     # `ClaudeReconciler` refuses at the moment of use rather than at import.
     anthropic_api_key: str | None = None
+
+    # P5.4. The daily brief's only credential. Absent is a legitimate state and is the
+    # current one: `packages.brief.delivery.TelegramChannel` refuses at the moment of
+    # send, the delivery is recorded `suppressed` with no `delivered_at`, and the same
+    # content is retried once a token exists. Composing a brief needs no token at all.
+    telegram_bot_token: str | None = None
 
     def __repr__(self) -> str:
         """Credential-free repr. See the module docstring for why this is not optional."""

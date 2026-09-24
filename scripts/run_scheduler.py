@@ -24,8 +24,25 @@ import argparse
 import time
 
 from packages.common.console import configure_logging, error, info, step, success, warning
-from packages.scheduler.jobs import build_jobs
-from packages.scheduler.runner import build_scheduler, run_job
+from packages.scheduler.jobs import build_internal_jobs, build_jobs
+from packages.scheduler.runner import ScheduledCallable, ScheduledJob, build_scheduler, run_job
+
+
+def _run_one(job: ScheduledJob | ScheduledCallable) -> bool:
+    """Run one job now and say whether it worked.
+
+    A connector reports its own failure as a result rather than raising, so its status is
+    the answer. A `ScheduledCallable` owns its reporting - the daily brief logs every
+    suppressed delivery at error level - so here only an exception counts as a failure.
+    """
+    if isinstance(job, ScheduledJob):
+        return run_job(job).status == "ok"
+    try:
+        job.run()
+    except Exception as exc:  # noqa: BLE001 - one job's failure is not the run's
+        error("job raised", id=job.identity(), error_type=type(exc).__name__)
+        return False
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging()
 
     with step("Build the job list") as building:
-        jobs = build_jobs()
+        jobs: list[ScheduledJob | ScheduledCallable] = [*build_jobs(), *build_internal_jobs()]
         if args.job:
             wanted = set(args.job)
             unknown = wanted - {job.identity() for job in jobs}
@@ -54,13 +71,16 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             jobs = [job for job in jobs if job.identity() in wanted]
         for job in jobs:
-            building.note("job", id=job.identity(), at_utc=f"{job.hour:02d}:{job.minute:02d}")
+            # `job.clock`, not an f-string over `job.hour`: the hourly news jobs carry
+            # `hour="*"`, and `f"{'*':02d}"` raises. This line crashed the script for
+            # every invocation between the RSS jobs landing and this fix.
+            building.note("job", id=job.identity(), at_utc=job.clock)
         building.result(jobs=len(jobs))
 
     if args.once:
-        # Each `run_job` is its own top-level step, numbered after the one above, with the
+        # Each run is its own top-level step, numbered after the one above, with the
         # connector's fetch / store raw / parse / write / record stages nested beneath it.
-        failed = [job.identity() for job in jobs if run_job(job).status != "ok"]
+        failed = [job.identity() for job in jobs if not _run_one(job)]
         if failed:
             # Non-zero on any failure, so a one-shot run is usable as a scheduled task
             # whose exit code is the alert.

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import datetime as dt
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,6 +41,7 @@ from packages.ingestion.base import Connector, ConnectorRunResult, record_run, r
 
 __all__ = [
     "ConnectorHealth",
+    "ScheduledCallable",
     "ScheduledJob",
     "SourceHeartbeat",
     "build_scheduler",
@@ -109,6 +111,47 @@ class ScheduledJob:
 
     def identity(self) -> str:
         return self.job_id or f"{self.connector.name}:{sorted(self.params.items())}"
+
+
+@dataclass(frozen=True)
+class ScheduledCallable:
+    """Scheduled work that is **not** an ingestion: no connector, no source, no licence.
+
+    P5.4's daily brief is the first of these. It fetches nothing from anybody, so making
+    it a `Connector` would mean inventing a `declare_licence()` for a source that does
+    not exist and writing `connector_runs` rows about a page nobody loaded - a lie in two
+    tables to reuse one dataclass.
+
+    It carries the same `hour`/`minute`/`clock`/`identity()` surface as `ScheduledJob` so
+    that `build_scheduler` can hold both, and deliberately no `publishes_every_days`:
+    that field answers "how long is silence from this *source* normal", and there is no
+    source here.
+
+    **What this costs, stated plainly.** `expected_run_names()` is derived from
+    `build_jobs()` and keys the connector health check on `connector_runs`, so a
+    `ScheduledCallable` that stops firing is not reported there. For the brief, the
+    evidence of a run is `alert_deliveries`; for anything added later, the author owes
+    the same question an answer before adding it here.
+    """
+
+    run: Callable[[], Any]
+    job_id: str
+    hour: int | str = 6
+    minute: int = 0
+
+    @property
+    def runs_hourly(self) -> bool:
+        return isinstance(self.hour, str)
+
+    @property
+    def clock(self) -> str:
+        """When it runs, as the same fixed-width `HH:MM` string `ScheduledJob` renders."""
+        if isinstance(self.hour, str):
+            return f"**:{self.minute:02d}"
+        return f"{self.hour:02d}:{self.minute:02d}"
+
+    def identity(self) -> str:
+        return self.job_id
 
 
 @dataclass(frozen=True)
@@ -219,8 +262,13 @@ def _run_once(job: ScheduledJob) -> ConnectorRunResult:
     return result
 
 
-def build_scheduler(jobs: list[ScheduledJob]):
-    """A `BackgroundScheduler` with one job per connector.
+def build_scheduler(jobs: Sequence[ScheduledJob | ScheduledCallable]):
+    """A `BackgroundScheduler` with one entry per job.
+
+    Takes both kinds: a `ScheduledJob` runs a connector through `run_job`, a
+    `ScheduledCallable` calls its own function. Both are registered the same way and with
+    the same misfire policy, because the reasons for that policy - a laptop that slept
+    through 03:15 - do not care which kind of work missed its slot.
 
     Imported lazily so that the API and the test suite do not pay for APScheduler, and so
     that a missing optional dependency surfaces here rather than at import of the package.
@@ -239,8 +287,9 @@ def build_scheduler(jobs: list[ScheduledJob]):
         timezone="UTC", executors={"default": ThreadPoolExecutor(1)}
     )
     for job in jobs:
+        target = _scheduled_run if isinstance(job, ScheduledJob) else _scheduled_call
         scheduler.add_job(
-            _scheduled_run,
+            target,
             trigger=CronTrigger(hour=job.hour, minute=job.minute, timezone="UTC"),
             args=[job],
             id=job.identity(),
@@ -260,6 +309,25 @@ def _scheduled_run(job: ScheduledJob) -> ConnectorRunResult:
     """
     reset_steps()
     return run_job(job)
+
+
+def _scheduled_call(job: ScheduledCallable) -> Any:
+    """The same fresh console numbering for work that is not a connector run.
+
+    No retry wrapper: `run_job`'s retries exist for a connector caught by Neon scaling to
+    zero mid-statement, and a `ScheduledCallable` owns whatever transaction discipline it
+    needs. Exceptions are logged by the surrounding `step` and swallowed here, so one
+    broken internal job cannot take the scheduler thread down with it.
+    """
+    reset_steps()
+    try:
+        with step(f"Run {job.identity()}") as running:
+            result = job.run()
+            running.result(job=job.identity())
+            return result
+    except Exception as exc:  # noqa: BLE001 - the step already logged it, red and redacted
+        _log.error("scheduled_call_failed", job=job.identity(), error_type=type(exc).__name__)
+        return None
 
 
 @dataclass(frozen=True)
