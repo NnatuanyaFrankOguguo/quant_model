@@ -8,21 +8,29 @@ are written down rather than inferred from whichever page was read last.
 
 ---
 
+## 0. What changed, and why — read this first if you knew the old version
+
+The first version of this app optimised for teaching. It produced an essay: a narrow
+centred column, three paragraphs before the first figure, and four headline numbers per
+screen. It was rejected, correctly. It did not look like a financial product and it was
+exhausting to scan.
+
+**The idiom is now a stock research site** — think stockanalysis.com or TIKR. A fixed
+header with a ticker search, a persistent left rail, tabs on a company, and pages that are
+mostly dense tables. That familiarity is the product: somebody who has ever looked up a
+share price should not have to learn where anything is.
+
+**The explanations were not deleted. They were moved.** They live inside `<Disclose>`,
+which shows one line and swaps it for the full text when opened. See §4.
+
+---
+
 ## 1. What this app is for
 
-A person with no finance background should be able to read any page here and come away
-understanding what a number *means*. That is the whole product goal, and it decides most of
-the rules below.
-
-`DATA_FOUNDATION.md` §1.4 calls the system an **instrument, not a judgement**. It measures
-and it explains. It never tells anybody what to do.
-
-### The compliance line, which is not negotiable
+It measures and it explains. It never tells anybody what to do.
 
 `DATA_FOUNDATION.md` §6.5: *"No recommendations; no auto price targets; user-set
 assumptions only; persistent disclaimer."*
-
-In copy, that means:
 
 | Never write | Write instead |
 |---|---|
@@ -32,188 +40,186 @@ In copy, that means:
 | a price target the system produced | a value the **reader's own inputs** produced, labelled as theirs |
 
 Explaining what a ratio *is* is encouraged and is the point. Saying whether it is *good* is
-prohibited. The dividing line: **describe and define, never evaluate or advise.**
+prohibited. **Describe and define, never evaluate or advise.**
 
 ---
 
-## 2. Not too much at once
+## 2. Density is the default
 
-The single most common way to lose a beginner is to answer questions they have not asked
-yet. So:
+- **Data first, on every page.** The first thing below a heading is a figure, a table or a
+  metric row. Not a paragraph.
+- **Tables are the primary unit**, not cards. A card is for a small fixed set of headline
+  figures (`.metrics`); everything with rows is a table.
+- **Small type is correct here.** `--fs-small` (13px) for table bodies, `--fs-base` (14px)
+  for the working size. Do not scale anything up to fill space.
+- **No paragraph on a data page is longer than two sentences** outside a `<Disclose>`.
+- A page may open with one `.page-note` line of orientation. One, not three.
 
-- **One idea per screenful.** A page opens with the thing it is about, not with everything
-  known about it.
-- **Lead with at most 4 headline figures.** Anything else goes below, or into a
-  `<details class="more">`.
-- **Explain once, where it is needed.** One `.explain` block per idea. Two on a screen is
-  noise; the second stops being read.
-- **Secondary detail is folded by default.** Use `<details class="more">` — it is native,
-  keyboard-accessible, and works without JavaScript.
-- Prose lines cap at `--prose` (68 characters). Longer lines measurably slow reading.
-
-If a page feels full, the answer is to move something into `details`, not to shrink the
-type.
+The old rule "lead with at most 4 headline figures" is **withdrawn**. A metric row of
+eight to twelve figures is correct and expected; that is what `.metrics` is for.
 
 ---
 
-## 3. The palette
+## 3. Layout
 
-Defined in `src/app/globals.css`. **Never write a hex value in a page or a component** —
-use the variables.
+The shell is in `layout.tsx` and pages do not touch it.
 
-- **Light only.** No dark theme. Maximum contrast, no ambiguity about what is a surface.
-- **No gold, amber or orange.** Including the conventional amber warning.
-- **Blue means "you can act on this"** — links, buttons, focus. Blue is never a status
-  colour, so a reader never has to work out which sense is meant.
-- **Status is green / violet / red**, and every status colour is *always* accompanied by a
-  word. Colour is never the only signal (WCAG 1.4.1), and green/violet/red separates under
-  the common forms of colour blindness where green/amber/red does not.
+```
+┌─────────┬──────────────────────────────┐
+│ brand   │ search                       │
+├─────────┼──────────────────────────────┤
+│ rail    │ main                         │
+│         │                              │
+└─────────┴──────────────────────────────┘
+```
 
-| Token | Use |
-|---|---|
-| `--act`, `--act-deep`, `--act-wash` | anything interactive |
-| `--ok`, `--attention`, `--broken` (+ `-wash`) | status only, always with a label |
-| `--ink`, `--ink-soft`, `--ink-faint` | primary / secondary / tertiary text |
-| `--paper`, `--paper-sunk`, `--paper-raised` | page / recessed / card |
-| `--line`, `--line-strong` | borders |
-
-**"Never ran" is not a failure.** `.pill.never_ran` renders grey, not red. An absence of
-information is not a broken thing, and a page that paints fifty-six never-ran jobs red
-says "fifty-six things have failed" when the truth is that a scheduler is not running.
-Red is for something that ran and went wrong.
+- A company page opens with `.security-head` — symbol, legal name, exchange, price,
+  change — then `.tabs`, then content.
+- Group related tables in a `.panel` with a `.panel-head`.
+- `--measure` is 1440px. Wide is fine; this is a data product.
 
 ---
 
-## 4. Responsive
+## 4. The disclosure — where explanation lives now
 
-It must work on a phone. It is *better* on a large screen, and that is fine to say — a
-year-by-year table of figures wants width — but nothing may be unusable or invisible on a
-narrow one.
+Use `<Disclose brief="…">` from `@/components/disclose`.
 
-- Every grid uses `repeat(auto-fit, minmax(min(100%, Npx), 1fr))`, which collapses to one
-  column with no media query. `min(100%, …)` is what stops overflow at 320px.
-- **A wide table scrolls inside `.scroller`, never by widening the page.** A horizontally
-  scrolling *page* on a phone is the fastest way to lose somebody. `.scroll-hint` tells a
-  narrow-screen reader the table scrolls, and hides itself above 860px.
-- Type scales with `clamp()`. No fixed pixel font sizes for headings.
-- Touch targets are at least 40px. Buttons and nav links already are.
-- Test at **320px**, 768px and 1280px before calling a page done.
+Closed, it shows one line and a small arrow. Open, **the brief is replaced** by the
+children — not pushed down by them.
+
+```tsx
+<Disclose brief="A margin is the share of sales left after a set of costs.">
+  <p>Out of every 100 USD the company took from customers, how much…</p>
+</Disclose>
+```
+
+- It is a native `<details>`: keyboard-operable, correct for a screen reader, and working
+  with JavaScript off. Do not reimplement it as a client component.
+- **One per idea, placed after the data it explains** — never before.
+- The `brief` is a statement, not a question, and not "Learn more".
+- What goes inside explains what a figure *is*. §1 still applies inside a disclosure.
 
 ---
 
-## 5. Every figure carries its provenance
+## 5. The palette
 
-This is the project's core promise and the UI must not quietly drop it. Every displayed
-number shows, at minimum:
+Defined in `src/app/globals.css`. **Never write a hex value in a page or component.**
+
+- **Light only.** No dark theme. **No gold, amber or orange**, including the conventional
+  amber warning.
+- **Blue means "you can act on this"** — links, buttons, focus, the active nav item. Blue
+  is never a status colour.
+- **System status is green / violet / red**, always beside a word (WCAG 1.4.1).
+- **Market direction is `--up` / `--down`**, and is a *different pair of tokens* from
+  `--ok` / `--broken` on purpose: a price falling is not a failure, and a connector
+  failing is not a price. Always render a move with `.delta up|down|flat`, which supplies
+  an arrow — that glyph is what carries direction for a red-green-blind reader.
+
+**"Never ran" is not a failure.** `.pill.never_ran` renders grey. An absence of
+information is not a broken thing, and painting fifty-six never-ran jobs red says
+"fifty-six things have failed" when a scheduler is simply not running.
+
+---
+
+## 6. Every figure carries its provenance
+
+The project's core promise. Every displayed number shows:
 
 - **what period it is about** (`period_end` / `as_of`)
 - **when it became knowable** (`known_as_of`) — not the same thing, and the difference is
   the whole point of the schema
-- **where it came from** (the API's own `attribution` string, rendered verbatim)
+- **where it came from** (the API's own `attribution`, rendered verbatim)
 
-Use the `.source` block at the foot of the section. Never paraphrase an attribution.
-
-Where an endpoint sends no `attribution` of its own — `/v1/public/companies` does not —
-the `.source` block says that, rather than inventing one or being left off.
+Use `.source` at the foot of the section. Never paraphrase an attribution. Where an
+endpoint sends no attribution — `/v1/public/companies` does not — say so rather than
+inventing one or dropping the block.
 
 ### An absence says which kind of absence it is
 
-A missing figure is never a zero, never a bare dash and never an empty cell. It is one of
-two phrases, and which one is a fact about the world:
+Never a zero, never a bare dash, never an empty cell.
 
 | Phrase | Constant | Means |
 |---|---|---|
 | "not reported" | `NOT_REPORTED` | the filing does not contain this line. The filer's choice, not a fault |
 | "not loaded yet" | `NOT_LOADED` | we have not fetched it yet. Ours |
 
-This is the line the schema already draws between `not_in_filing` and `no_mapping`.
-Neither string is ever written into a page — import the constant.
+The line the schema already draws between `not_in_filing` and `no_mapping`. Import the
+constant; never write either string into a page. Render an absent figure with
+`.metric-value.absent` or `td.absent`, which makes it quieter than a real number so a
+column of them does not read as data.
+
+**When every headline figure in a section is absent, do not render the figures.** Render
+one `.notice` saying which lines are missing and why. A bank does not report the four
+margins; that is bank accounting, not a failure.
 
 ### Round what the system derived; print what it was given
 
-Two pages round differently and both are right, so the rule is worth stating rather than
-leaving each page to guess:
-
 - **A figure the system computed** is rounded. `gross_margin` arrives as
   `0.4690516410716044992202536999`; those digits come from Decimal division, not from a
-  measurement, and the filing behind them reports to the nearest million. Printing 28
-  places claims precision the inputs never had.
+  measurement.
 - **A figure the system was given** is printed verbatim, trailing zeros and all.
-  `16.7900%` is the datum exactly as the DMO published it. Rounding it edits a figure of
-  record.
+  `16.7900%` is the datum exactly as the DMO published it.
 
-**No figure is ever hard-coded.** The front page once printed "14 economic series" as a
-literal while `/macro` listed thirteen — on a site whose entire promise is that every
-number carries its source. If a count is needed, the API counts it:
-`/v1/public/summary`.
-
-**When every headline figure on a section is absent, do not render the figures.** Four
-cards reading "not reported" is four dead ends and a reader who concludes the site is
-broken. Render one `.notice` saying which lines are missing and why, and fold the
-explainer inside it. A bank does not report the four margins; that is a fact about bank
-accounting, not a failure, and the page should say so in a sentence.
+**No figure is ever hard-coded.** If a count is needed, the API counts it
+(`/v1/public/summary`).
 
 ---
 
-## 6. Components available
+## 7. Responsive
 
-From `globals.css`. Use these before writing anything new; if you need something new, add
-it here and to this list.
+It must work on a phone. It is *better* on a large screen and that is fine to say.
 
-`.wrap` `.card` `.grid.cols-2|3|4` `.stat-value` `.stat-name` `.stat-note` `.explain`
-`details.more` `.scroller` `table` `.pill.ok|attention|broken|neutral` `.source` `.notice`
-`.notice.bad` `.assumptions` `button` `.button.quiet` `.lede` `.muted` `.faint` `.num`
-
-### One formatting module
-
-`src/lib/format.ts` is the only one. Dates, numbers, money, units and the absence
-vocabulary all come from there, so the same fact is written the same way on every page.
-Do not add a second module beside a page: there were two, and before anyone noticed they
-had drifted to two date formatters and two words for a missing value.
-
-`.wrap-cell` is not scoped to `td` — a `<th scope="row">` is the cell most likely to hold
-the long text it exists for. It is not automatic, though: its 18rem floor buys even
-columns in a table that was going to scroll anyway, and forces scrolling on a narrow one
-that would otherwise fit. Use it when the row header holds prose **and** the table scrolls
-regardless; leave it off when the label is short, or when dropping the floor is what lets
-a two-column table fit at 320px with its value still beside its label.
+- The rail becomes a horizontal strip under the header below 860px. Nothing is hidden;
+  there are five destinations and none needs a menu button.
+- **A wide table scrolls inside `.scroller`, never by widening the page.** `.scroll-hint`
+  tells a narrow reader it scrolls and hides above 900px.
+- Grids use `repeat(auto-fit, minmax(min(100%, Npx), 1fr))`. The `min(100%, …)` is what
+  stops overflow at 320px.
+- `.wrap-cell` is not automatic: its 18rem floor buys even columns in a table that was
+  going to scroll anyway, and forces scrolling on a narrow one that would otherwise fit.
+- Test at **320px**, 768px and 1280px before calling a page done.
 
 ---
 
-## 7. Data fetching
+## 8. Data fetching
 
 - All fetching happens **server-side**, through `src/lib/api.ts`. Nothing else calls the
-  API.
-- The browser never holds a token. `docs/01` ADR-0006 derives mode on the server; a token
-  in the browser is one devtools tab from anyone.
-- **The client computes nothing.** AD-3: Streamlit and Next.js are both thin clients.
-  Arithmetic in a component is a defect — if a number is needed, the API should return it.
-- Every page handles four states explicitly: **loading**, **empty**, **slow** and
-  **failed**. A blank page tells a reader nothing. Use `.notice` and say what happened
-  and what to do.
+  API. The browser never holds a token.
+- **The client computes nothing.** AD-3: arithmetic in a component is a defect. If a
+  number is needed, the API returns it. The one client component that filters —
+  `_search.tsx` — selects rows, it does not derive figures.
+- Every page handles four states: **loading**, **empty**, **slow** and **failed**.
 - **Slow is not failed.** `ApiTimeout` means our budget expired, not that the service
-  died, and a page that writes "it did not answer" when the truth is "we stopped
-  waiting" is telling a reader something untrue about data that is fine. Branch on it,
-  use the shared `SERVICE_IS_SLOW` sentence so one event cannot read as two problems,
-  and render it as `.notice`, never `.notice bad` — painting a slow answer red sends
-  the reader hunting a fault that does not exist. `/ratios` has a measured 52s tail
-  against a 60s budget, so this is a live case and not a hypothetical.
-- **A page that catches its own failure calls `failTheBuildInstead(error)` first.**
-  Rendering an error state is right at runtime and wrong during `next build`: a static
-  route is prerendered, so the caught failure is baked into the HTML as a static
-  artifact. The build exits 0, nothing warns, and every visitor is told the data could
-  not be loaded — `revalidate` heals it only *after* somebody has already been shown the
-  error. Verified in both directions: with the API unreachable the build now exits 1, and
-  a healthy build still exits 0.
+  died. Use the shared `SERVICE_IS_SLOW` sentence and render it `.notice`, never
+  `.notice.bad`.
+- **A page that catches its own failure calls `failTheBuildInstead(error)` first.** A
+  static route prerenders, so a caught failure is baked into the HTML: the build exits 0
+  and every visitor is told the data could not be loaded.
 
 ---
 
-## 8. Accessibility, briefly
+## 9. Accessibility
 
 - One `<h1>` per page, headings in order, no levels skipped.
 - Every table has a `<caption>`.
-- A row label is `<th scope="row">`, which is styled for the job (not uppercase, not
-  sticky). Do not demote a row header to `<td>` to escape the column-header styling.
+- A row label is `<th scope="row">`, styled for the job. Do not demote one to `<td>`.
+- The active nav item carries `aria-current="page"` — that attribute drives the styling,
+  so the visual state and the announced state cannot diverge.
 - Colour is never the only signal.
 - Interactive elements are real `<button>` and `<a>`, never a `<div>` with a handler.
 - `:focus-visible` is styled globally — do not remove it.
+
+---
+
+## 10. Components available
+
+From `globals.css`, plus `<Disclose>` from `@/components/disclose`.
+
+`.shell` `.brand` `.topbar` `.rail` `.main` `.search` `.security-head` `.delta.up|down|flat`
+`.tabs` `.metrics` `.metric` `.metric-name` `.metric-value` `.absent` `.panel` `.panel-head`
+`.panel-body` `.grid` `.scroller` `table` `.wrap-cell` `.scroll-hint` `.disclose`
+`.pill.ok|attention|broken|neutral` `.notice` `.notice.bad` `.source` `.page-note` `.prose`
+`.muted` `.faint` `.num` `button` `.button.quiet`
+
+Use these before writing anything new. If you need something new, add it here and to
+`globals.css` — not as an inline style in a page.

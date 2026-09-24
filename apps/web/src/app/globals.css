@@ -1,49 +1,55 @@
 /* ===========================================================================
-   The design system. Every page reads from this file and none of them invents
-   a colour, a size or a spacing of its own.
+   The design system.
 
-   WHY PLAIN CSS AND NOT A FRAMEWORK
-   The readers of this app are people with no finance background, and the next
-   person to change it may have no React background. A hundred named rules can
-   be read top to bottom; a page of utility classes cannot.
+   WHAT THIS LOOKS LIKE, AND WHY
+   The idiom is the one a reader already knows from a stock research site - a
+   fixed header with a ticker search, a persistent left rail, and pages that
+   are mostly dense, scannable tables. That familiarity is the point: somebody
+   who has ever looked up a share price should not have to learn where things
+   are here.
 
-   THE PALETTE, AND WHY THESE COLOURS
-   The product is an *instrument* - `DATA_FOUNDATION` 1.4's word - not an
-   adviser. It measures and it explains; it never tells you what to do. So the
-   palette is calm, cool and quiet: a near-white page, cool grey ink, and one
-   blue that means "you can act on this".
+   An earlier version of this file optimised for teaching and produced an
+   essay. The explanations survive, but they now sit inside a disclosure and
+   the data comes first. See `.disclose` at the bottom.
 
-   - No dark theme. A financial page read by a beginner wants maximum contrast
-     and no ambiguity about what is a surface and what is a control.
-   - No gold, amber or orange anywhere, including the conventional amber
-     warning. Status is carried by green / violet / red, which are separable
-     for the common forms of colour blindness in a way green/amber/red is not.
-   - **Blue is reserved for interaction.** Links, buttons, focus. It is never a
-     status colour, so "blue" never has to be read twice.
-   - Every status colour is paired with a word. Colour is never the only
-     signal - that is WCAG 1.4.1, and it is also just kinder.
+   THE PALETTE
+   Carried forward unchanged, because it was not the problem.
+   - No dark theme. No gold, amber or orange anywhere.
+   - **Blue means "you can act on this"** - links, buttons, focus, the active
+     nav item. It is never a status colour, so blue never reads two ways.
+   - Status is green / violet / red, always beside a word. Colour is never the
+     only signal (WCAG 1.4.1).
+
+   THE ONE ADDITION: market direction
+   `--up` and `--down` are green and red, because that convention is older
+   than any of us and fighting it would cost a reader more than it bought.
+   They are *always* rendered with an arrow (`.delta` below), so a
+   red-green-blind reader gets the direction from the glyph. They are separate
+   tokens from `--ok` and `--broken` on purpose: a price falling is not a
+   failure, and a connector failing is not a price.
    =========================================================================== */
 
 :root {
-  /* Surfaces: a page, a recessed panel, and a raised card. Three, not seven. */
+  /* Surfaces: page, recessed panel, raised card. */
   --paper: #ffffff;
-  --paper-sunk: #f5f7f9;
+  --paper-sunk: #f7f9fb;
   --paper-raised: #ffffff;
+  --paper-rail: #fbfcfd;
 
   /* Ink, cool-leaning so it sits with the blue rather than fighting it. */
-  --ink: #191d24;
-  --ink-soft: #565f6d;
-  --ink-faint: #838c99;
+  --ink: #131820;
+  --ink-soft: #545d6b;
+  --ink-faint: #828c99;
 
-  --line: #e1e6ec;
-  --line-strong: #cbd3dc;
+  --line: #e3e8ee;
+  --line-strong: #c9d2dc;
 
   /* Interaction. One blue, three weights. */
   --act: #1f5edb;
   --act-deep: #1748ab;
   --act-wash: #eef3ff;
 
-  /* Status. Never blue, always beside a word. */
+  /* Status: the system's own health. Never blue, always beside a word. */
   --ok: #157048;
   --ok-wash: #e9f5ef;
   --attention: #5b46b8;
@@ -51,26 +57,40 @@
   --broken: #b4283f;
   --broken-wash: #fdecef;
 
-  /* Spacing, on a 4px rhythm. Named for intent so a page does not pick 13px. */
+  /* Market direction. Always paired with an arrow - see `.delta`. */
+  --up: #10794a;
+  --down: #c0392f;
+
+  /* Spacing on a 4px rhythm, named for intent. */
   --gap-xs: 4px;
   --gap-sm: 8px;
   --gap: 16px;
-  --gap-lg: 28px;
-  --gap-xl: 48px;
+  --gap-lg: 24px;
+  --gap-xl: 40px;
 
-  --radius: 10px;
-  --radius-sm: 6px;
+  --radius: 6px;
+  --radius-sm: 4px;
 
-  /* 1120px: wide enough for a year-by-year table, narrow enough that prose
-     never runs past the ~75 characters a line can be read at comfortably. */
-  --measure: 1120px;
-  --prose: 68ch;
+  /* Layout. The rail is fixed; the main column breathes. */
+  --rail: 208px;
+  --header: 56px;
+  --measure: 1440px;
+  --prose: 74ch;
 
-  --shadow: 0 1px 2px rgba(25, 29, 36, 0.04), 0 2px 8px rgba(25, 29, 36, 0.04);
+  --shadow-card: 0 1px 2px rgb(19 24 32 / 6%);
+  --shadow-pop: 0 6px 24px rgb(19 24 32 / 12%);
+
+  /* Type. Smaller than prose defaults: this is a data product. */
+  --fs-micro: 0.6875rem; /* 11px - table headers, tags */
+  --fs-small: 0.8125rem; /* 13px - table body, notes */
+  --fs-base: 0.875rem; /* 14px - the working size */
+  --fs-body: 0.9375rem; /* 15px - explanatory prose only */
+
+  /* Light only, and stated rather than left to chance: a reader whose OS is
+     in dark mode still gets this page, because a half-themed financial table
+     is worse than an unthemed one. */
+  color-scheme: light;
 }
-
-/* The palette is deliberately not redefined for `prefers-color-scheme: dark`.
-   See the header: this app has one theme on purpose. */
 
 *,
 *::before,
@@ -86,20 +106,23 @@ body {
   margin: 0;
   background: var(--paper);
   color: var(--ink);
-  font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  font-size: var(--fs-base);
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
 }
 
-/* Every figure on this site is a number in a column. Tabular digits stop the
-   columns dancing as values change. */
+/* Every figure in this app is tabular. Lining, fixed-width digits so a column
+   of numbers forms a column rather than a ragged edge. */
 .num,
 td.num,
 th.num,
-.stat-value,
-input[type="number"] {
-  font-variant-numeric: tabular-nums;
+.metric-value,
+.delta,
+table {
+  font-variant-numeric: tabular-nums lining-nums;
 }
 
 a {
@@ -109,528 +132,802 @@ a {
 a:hover {
   text-decoration: underline;
 }
+
 :focus-visible {
   outline: 2px solid var(--act);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
 
-/* A keyboard user should not have to tab through the whole nav to reach the
-   page. Visible only when focused. */
-.skip {
-  position: absolute;
-  left: -9999px;
-}
-.skip:focus {
-  left: var(--gap);
-  top: var(--gap);
-  z-index: 100;
-  background: var(--paper);
-  padding: var(--gap-sm) var(--gap);
-  border: 1px solid var(--act);
-  border-radius: var(--radius-sm);
-}
+/* ---------------------------------------------------------------------------
+   THE SHELL
+   Header across the top, rail down the left, content in the rest. A grid
+   rather than fixed positioning, so the content column can never slide under
+   the rail at an awkward width.
+   --------------------------------------------------------------------------- */
 
-/* --------------------------------------------------------------------------
-   Layout
-   -------------------------------------------------------------------------- */
-
-.wrap {
-  max-width: var(--measure);
-  margin-inline: auto;
-  padding-inline: var(--gap);
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail) minmax(0, 1fr);
+  grid-template-rows: var(--header) minmax(0, 1fr) auto;
+  grid-template-areas:
+    "brand header"
+    "rail  main"
+    "rail  footer";
+  min-height: 100vh;
 }
 
-main {
-  padding-block: var(--gap-lg) var(--gap-xl);
-}
-
-/* --------------------------------------------------------------------------
-   Masthead
-   -------------------------------------------------------------------------- */
-
-.masthead {
+.brand {
+  grid-area: brand;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: 0 var(--gap);
   border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
   background: var(--paper);
-  position: sticky;
-  top: 0;
-  z-index: 20;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--ink);
 }
-.masthead .wrap {
+.brand a {
+  color: inherit;
+}
+.brand a:hover {
+  text-decoration: none;
+}
+
+.topbar {
+  grid-area: header;
   display: flex;
   align-items: center;
   gap: var(--gap);
-  min-height: 60px;
-  flex-wrap: wrap;
-}
-.brand {
-  font-weight: 650;
-  letter-spacing: -0.015em;
-  color: var(--ink);
-  font-size: 1.02rem;
-}
-.brand small {
-  display: block;
-  font-weight: 400;
-  font-size: 0.74rem;
-  color: var(--ink-faint);
-  letter-spacing: 0;
-}
-.nav {
-  display: flex;
-  gap: var(--gap);
-  margin-left: auto;
-  flex-wrap: wrap;
-}
-.nav a {
-  color: var(--ink-soft);
-  font-size: 0.94rem;
-  padding-block: var(--gap-xs);
-}
-.nav a:hover,
-.nav a[aria-current="page"] {
-  color: var(--act);
-}
-
-/* --------------------------------------------------------------------------
-   The disclaimer. Persistent, never dismissible - `DATA_FOUNDATION` 6.5.
-   -------------------------------------------------------------------------- */
-
-.disclaimer {
-  background: var(--paper-sunk);
+  padding: 0 var(--gap-lg);
   border-bottom: 1px solid var(--line);
-  color: var(--ink-soft);
-  font-size: 0.82rem;
-}
-.disclaimer .wrap {
-  padding-block: var(--gap-sm);
-}
-.disclaimer b {
-  color: var(--ink);
-  font-weight: 620;
+  background: var(--paper);
 }
 
-/* --------------------------------------------------------------------------
-   Type
-   -------------------------------------------------------------------------- */
+.rail {
+  grid-area: rail;
+  border-right: 1px solid var(--line);
+  background: var(--paper-rail);
+  padding: var(--gap) var(--gap-sm);
+}
 
-h1,
-h2,
-h3 {
-  letter-spacing: -0.018em;
-  line-height: 1.25;
-  margin: 0;
+.main {
+  grid-area: main;
+  min-width: 0; /* lets a wide table scroll instead of stretching the grid */
+  padding: var(--gap-lg);
+  width: 100%;
+  max-width: var(--measure);
 }
-h1 {
-  font-size: clamp(1.5rem, 1.2rem + 1.4vw, 2rem);
-  margin-bottom: var(--gap-sm);
-}
-h2 {
-  font-size: clamp(1.1rem, 1rem + 0.5vw, 1.28rem);
-  margin-block: var(--gap-lg) var(--gap);
-}
-h3 {
-  font-size: 1rem;
-  margin-bottom: var(--gap-xs);
-}
-p {
-  margin: 0 0 var(--gap);
-  max-width: var(--prose);
-}
-.lede {
-  color: var(--ink-soft);
-  font-size: clamp(1rem, 0.96rem + 0.2vw, 1.08rem);
+
+/* The rail's links. The active one is blue and carries a left marker, so the
+   current section is legible without relying on colour alone. */
+.rail-group {
   margin-bottom: var(--gap-lg);
 }
-.muted {
-  color: var(--ink-soft);
-}
-.faint {
-  color: var(--ink-faint);
-  font-size: 0.83rem;
-}
-
-/* --------------------------------------------------------------------------
-   The explainer. The component this whole app exists for: it says, in plain
-   words, what the thing above or below it actually means. Used once per idea,
-   never twice on a screen - the point is to unblock a reader, not to lecture.
-   -------------------------------------------------------------------------- */
-
-.explain {
-  background: var(--act-wash);
-  border-left: 3px solid var(--act);
-  border-radius: 0 var(--radius) var(--radius) 0;
-  padding: var(--gap) calc(var(--gap) + 2px);
-  margin-bottom: var(--gap-lg);
-  max-width: var(--prose);
-  font-size: 0.94rem;
-}
-.explain > :last-child {
-  margin-bottom: 0;
-}
-.explain .tag {
-  display: block;
-  font-size: 0.72rem;
-  font-weight: 650;
+.rail-label {
+  font-size: var(--fs-micro);
   text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--act-deep);
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  padding: 0 var(--gap-sm);
   margin-bottom: var(--gap-xs);
 }
+.rail a {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  padding: 7px var(--gap-sm);
+  border-radius: var(--radius-sm);
+  color: var(--ink-soft);
+  font-size: var(--fs-base);
+  border-left: 2px solid transparent;
+}
+.rail a:hover {
+  background: var(--paper-sunk);
+  color: var(--ink);
+  text-decoration: none;
+}
+.rail a[aria-current="page"] {
+  background: var(--act-wash);
+  border-left-color: var(--act);
+  color: var(--act-deep);
+  font-weight: 600;
+}
 
-/* Secondary detail, folded away by default. Native `<details>`: keyboard and
-   screen-reader behaviour for free, and it works with JavaScript switched off. */
-details.more {
+/* ---------------------------------------------------------------------------
+   SEARCH
+   The header's main job. A ticker box that looks like a ticker box.
+   --------------------------------------------------------------------------- */
+
+.search {
+  position: relative;
+  flex: 1 1 auto;
+  max-width: 420px;
+}
+.search input {
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--gap-sm) 0 30px;
+  font: inherit;
+  font-size: var(--fs-base);
+  color: var(--ink);
+  background: var(--paper-sunk);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 0;
-  margin-bottom: var(--gap);
-  max-width: var(--prose);
 }
-details.more > summary {
-  cursor: pointer;
-  padding: var(--gap-sm) var(--gap);
-  font-size: 0.9rem;
-  color: var(--act);
+.search input::placeholder {
+  color: var(--ink-faint);
+}
+.search input:focus {
+  background: var(--paper);
+  border-color: var(--act);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--act-wash);
+}
+.search-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-faint);
+  pointer-events: none;
+  line-height: 0;
+}
+/* The results list, when the box has matches. */
+.search-results {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--gap-xs);
+  margin: 0;
   list-style: none;
 }
-details.more > summary::-webkit-details-marker {
-  display: none;
-}
-details.more > summary::before {
-  content: "＋ ";
-  color: var(--ink-faint);
-}
-details.more[open] > summary::before {
-  content: "－ ";
-}
-details.more > :not(summary) {
-  padding: 0 var(--gap) var(--gap);
-  font-size: 0.92rem;
-  color: var(--ink-soft);
-}
-
-/* --------------------------------------------------------------------------
-   Grids. Every one collapses to a single column on a narrow screen without a
-   media query, because `auto-fit` + `minmax` already does it.
-   -------------------------------------------------------------------------- */
-
-.grid {
-  display: grid;
+.search-results a {
+  display: flex;
+  justify-content: space-between;
   gap: var(--gap);
-}
-.grid.cols-2 {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
-}
-.grid.cols-3 {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 215px), 1fr));
-}
-.grid.cols-4 {
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr));
-}
-
-.card {
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--paper-raised);
-  padding: var(--gap);
-  box-shadow: var(--shadow);
-}
-.card h3 a {
+  padding: 7px var(--gap-sm);
+  border-radius: var(--radius-sm);
   color: var(--ink);
 }
-
-.stat-value {
-  font-size: clamp(1.3rem, 1.1rem + 0.7vw, 1.6rem);
-  font-weight: 640;
-  letter-spacing: -0.02em;
-  line-height: 1.2;
+.search-results a:hover,
+.search-results a:focus-visible {
+  background: var(--act-wash);
+  text-decoration: none;
 }
-.stat-name {
-  font-size: 0.83rem;
-  color: var(--ink-soft);
-  margin-top: var(--gap-xs);
+.search-results .ticker {
+  font-weight: 650;
 }
-.stat-note {
-  font-size: 0.77rem;
+.search-results .name {
   color: var(--ink-faint);
-  margin-top: 2px;
-}
-
-/* --------------------------------------------------------------------------
-   Tables. A wide one scrolls sideways inside its own box rather than pushing
-   the page wider - a horizontally scrolling *page* on a phone is the fastest
-   way to lose somebody.
-   -------------------------------------------------------------------------- */
-
-.scroller {
-  overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--paper-raised);
-}
-.scroller > table {
-  margin: 0;
-}
-.scroll-hint {
-  font-size: 0.78rem;
-  color: var(--ink-faint);
-  margin-top: var(--gap-xs);
-}
-@media (min-width: 860px) {
-  .scroll-hint {
-    display: none;
-  }
-}
-
-table {
-  border-collapse: collapse;
-  width: 100%;
-  font-size: 0.93rem;
-}
-caption {
-  text-align: left;
-  padding: var(--gap) var(--gap) var(--gap-sm);
-  color: var(--ink-soft);
-  font-size: 0.88rem;
-}
-th,
-td {
-  text-align: left;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-tbody tr:last-child td {
-  border-bottom: 0;
+.search-empty {
+  padding: var(--gap-sm);
+  font-size: var(--fs-small);
+  color: var(--ink-faint);
 }
-th {
-  font-size: 0.75rem;
+
+/* ---------------------------------------------------------------------------
+   PAGE HEADINGS AND THE SECURITY HEADER
+   --------------------------------------------------------------------------- */
+
+h1 {
+  font-size: 1.375rem;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  margin: 0 0 var(--gap-xs);
+}
+h2 {
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  margin: var(--gap-xl) 0 var(--gap);
+}
+h2:first-child {
+  margin-top: 0;
+}
+h3 {
+  font-size: var(--fs-base);
+  font-weight: 650;
+  margin: var(--gap-lg) 0 var(--gap-sm);
+}
+.page-note {
+  color: var(--ink-soft);
+  font-size: var(--fs-small);
+  margin: 0 0 var(--gap-lg);
+  max-width: var(--prose);
+}
+
+/* The block at the top of a company page: symbol, name, price, change. */
+.security-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--gap-sm) var(--gap);
+  padding-bottom: var(--gap);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--gap-lg);
+}
+.security-head .symbol {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.security-head .legal-name {
+  font-size: var(--fs-body);
+  color: var(--ink-soft);
+}
+.security-head .exchange {
+  font-size: var(--fs-micro);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--ink-faint);
-  font-weight: 620;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+}
+.security-head .price {
+  margin-left: auto;
+  font-size: 1.375rem;
+  font-weight: 650;
+}
+.security-head .asof {
+  flex-basis: 100%;
+  font-size: var(--fs-small);
+  color: var(--ink-faint);
+}
+
+/* A price move. The arrow is not decoration - it is what carries the
+   direction for a reader who cannot separate the two colours. */
+.delta {
+  font-weight: 600;
+}
+.delta.up {
+  color: var(--up);
+}
+.delta.down {
+  color: var(--down);
+}
+.delta.flat {
+  color: var(--ink-faint);
+}
+.delta.up::before {
+  content: "\25B2\00A0";
+}
+.delta.down::before {
+  content: "\25BC\00A0";
+}
+.delta.flat::before {
+  content: "\2014\00A0";
+}
+
+/* ---------------------------------------------------------------------------
+   TABS
+   --------------------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: var(--gap-lg);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--gap-lg);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+.tabs a {
+  padding: 0 0 10px;
+  color: var(--ink-soft);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.tabs a:hover {
+  color: var(--ink);
+  text-decoration: none;
+}
+.tabs a[aria-current="page"] {
+  color: var(--act-deep);
+  font-weight: 650;
+  border-bottom-color: var(--act);
+}
+
+/* ---------------------------------------------------------------------------
+   METRIC GRID
+   Label above figure, tight. The unit a scanner reads first.
+   --------------------------------------------------------------------------- */
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 148px), 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: var(--gap-lg);
+}
+.metric {
+  background: var(--paper);
+  padding: 10px var(--gap);
+}
+.metric-name {
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.metric-value {
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+/* An absent figure is never a zero and never an empty cell. It is smaller and
+   quieter than a real number so a column of them does not read as data. */
+.metric-value.absent,
+td.absent {
+  font-size: var(--fs-small);
+  font-weight: 400;
+  color: var(--ink-faint);
+}
+
+/* ---------------------------------------------------------------------------
+   PANELS
+   --------------------------------------------------------------------------- */
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+  box-shadow: var(--shadow-card);
+  margin-bottom: var(--gap-lg);
+  overflow: hidden;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 10px var(--gap);
+  border-bottom: 1px solid var(--line);
   background: var(--paper-sunk);
+}
+.panel-head h2,
+.panel-head h3 {
+  margin: 0;
+  font-size: var(--fs-base);
+}
+.panel-body {
+  padding: var(--gap);
+}
+.panel-body > :last-child {
+  margin-bottom: 0;
+}
+.grid {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+}
+
+/* ---------------------------------------------------------------------------
+   TABLES
+   The core of the product. Dense, aligned, sticky-headed, and horizontally
+   scrollable inside their own box rather than by widening the page.
+   --------------------------------------------------------------------------- */
+
+.scroller {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-small);
+}
+caption {
+  text-align: left;
+  font-size: var(--fs-small);
+  color: var(--ink-soft);
+  padding: 0 var(--gap) var(--gap-sm);
+}
+thead th {
   position: sticky;
   top: 0;
+  z-index: 2;
+  background: var(--paper-sunk);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  padding: 8px var(--gap);
+  border-bottom: 1px solid var(--line-strong);
+}
+tbody td,
+tbody th {
+  padding: 7px var(--gap);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: baseline;
+}
+/* A row label is a label, not a column heading: not uppercase, not sticky. */
+tbody th[scope="row"] {
+  font-weight: 550;
+  color: var(--ink);
+  background: transparent;
+  position: static;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: var(--fs-small);
+  white-space: nowrap;
 }
 td.num,
 th.num {
   text-align: right;
 }
-/* Not `td.wrap-cell`: §8 wants the first cell of a row to be `<th scope="row">`, and that
-   is exactly the cell most likely to hold the long text this class exists for. Scoped to
-   `td` it withheld the min-width from every row header, which then collapsed to its
-   min-content width and drove the row height up. */
+/* Long prose in a cell. Not scoped to `td`: a row header is the cell most
+   likely to hold it. Its 18rem floor buys even columns in a table that was
+   going to scroll anyway, and forces scrolling on a narrow one that would
+   otherwise fit - so it is applied deliberately, not by default. */
 .wrap-cell {
   white-space: normal;
   min-width: 18rem;
 }
-/* A row header is a label, not a column heading. Styled as one - uppercase, sticky, on a
-   tinted ground - it shouts, so pages were demoting real row headers to `<td>` and losing
-   the semantics §8 asks for. This is what `<th scope="row">` should look like. */
-th[scope="row"] {
-  text-transform: none;
-  letter-spacing: normal;
-  font-size: 0.93rem;
-  font-weight: 560;
-  color: var(--ink);
-  background: transparent;
-  position: static;
-  white-space: normal;
-}
-/* The row header is tinted with the rest of the row. Left out, it keeps its transparent
-   background and a hovered row starts with one pale cell - which reads as a gap in the
-   row rather than as the row being highlighted. */
 tbody tr:hover td,
 tbody tr:hover th[scope="row"] {
   background: var(--paper-sunk);
 }
-
-/* --------------------------------------------------------------------------
-   Status. Always rendered with its word beside it.
-   -------------------------------------------------------------------------- */
-
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 0.76rem;
-  font-weight: 560;
-  padding: 2px 9px;
-  border-radius: 999px;
-  border: 1px solid currentColor;
-  white-space: nowrap;
-}
-.pill.ok {
-  color: var(--ok);
-  background: var(--ok-wash);
-}
-.pill.attention,
-.pill.warning {
-  color: var(--attention);
-  background: var(--attention-wash);
-}
-.pill.broken,
-.pill.error {
-  color: var(--broken);
-  background: var(--broken-wash);
-}
-/* "Never ran" is an absence of information, not a failure, and it was red until a page
-   put fifty-six of them on one screen. Fifty-six red rows say "fifty-six things are
-   broken", which is the opposite of what the report says when a scheduler simply is not
-   running. Grey says "we have nothing to tell you", which is the truth. */
-.pill.neutral,
-.pill.never_ran {
-  color: var(--ink-soft);
-  background: var(--paper-sunk);
-  border-color: var(--line-strong);
+tbody tr:last-child td,
+tbody tr:last-child th {
+  border-bottom: none;
 }
 
-/* --------------------------------------------------------------------------
-   Provenance. Every figure says where it came from and when it was true.
-   -------------------------------------------------------------------------- */
-
-.source {
-  font-size: 0.79rem;
+.scroll-hint {
+  font-size: var(--fs-micro);
   color: var(--ink-faint);
-  border-top: 1px solid var(--line);
-  margin-top: var(--gap-lg);
-  padding-top: var(--gap);
-  max-width: var(--prose);
-}
-.source dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 2px var(--gap);
+  padding: var(--gap-sm) var(--gap) 0;
   margin: 0;
 }
-.source dt {
-  color: var(--ink-soft);
-}
-.source dd {
-  margin: 0;
+@media (min-width: 900px) {
+  .scroll-hint {
+    display: none;
+  }
 }
 
-/* --------------------------------------------------------------------------
-   Forms
-   -------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+   THE DISCLOSURE
+   A one-line summary with a small arrow; on opening, the summary is
+   *replaced* by the full detail rather than the detail appearing beneath it.
 
-.assumptions {
-  display: grid;
-  gap: var(--gap);
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
-  align-items: end;
-  padding: var(--gap);
+   Native `<details>`, so it is keyboard-operable and works with no
+   JavaScript; the swap is one CSS rule rather than a client component.
+   --------------------------------------------------------------------------- */
+
+.disclose {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--paper-sunk);
-  margin-bottom: var(--gap);
-}
-label {
-  display: block;
-  font-size: 0.85rem;
+  padding: 10px var(--gap);
+  margin-bottom: var(--gap-lg);
+  font-size: var(--fs-small);
   color: var(--ink-soft);
-  margin-bottom: var(--gap-xs);
-  font-weight: 520;
 }
-label .hint {
+.disclose > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  cursor: pointer;
+  list-style: none;
+  color: var(--ink-soft);
+}
+.disclose > summary::-webkit-details-marker {
+  display: none;
+}
+/* The arrow. Small, quiet, and it rotates so the control's state is visible
+   without reading the text beside it. */
+.disclose > summary::after {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  margin-left: auto;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--ink-faint);
+  transition: transform 120ms ease;
+}
+.disclose[open] > summary::after {
+  transform: rotate(180deg);
+}
+.disclose > summary:hover {
+  color: var(--ink);
+}
+.disclose > summary:hover::after {
+  border-top-color: var(--act);
+}
+/* The swap itself: the summary text goes, the detail arrives. */
+.disclose[open] .brief {
+  display: none;
+}
+.disclose .full {
+  display: none;
+}
+.disclose[open] .full {
   display: block;
-  font-weight: 400;
-  font-size: 0.77rem;
+  max-width: var(--prose);
+  color: var(--ink-soft);
+  font-size: var(--fs-small);
+  line-height: 1.6;
+}
+.disclose .full > :first-child {
+  margin-top: 0;
+}
+.disclose .full > :last-child {
+  margin-bottom: 0;
+}
+.disclose .full p {
+  margin: 0 0 var(--gap-sm);
+}
+.disclose[open] > summary {
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: var(--gap-sm);
+}
+
+/* ---------------------------------------------------------------------------
+   STATUS, NOTICES, MISC
+   --------------------------------------------------------------------------- */
+
+.pill {
+  display: inline-block;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.pill.ok {
+  background: var(--ok-wash);
+  color: var(--ok);
+}
+.pill.attention {
+  background: var(--attention-wash);
+  color: var(--attention);
+}
+.pill.broken {
+  background: var(--broken-wash);
+  color: var(--broken);
+}
+/* "Never ran" is an absence of information, not a failure. Grey, not red. */
+.pill.neutral,
+.pill.never_ran {
+  background: var(--paper-sunk);
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+}
+
+.notice {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--act);
+  border-radius: var(--radius);
+  background: var(--paper-sunk);
+  padding: var(--gap);
+  margin-bottom: var(--gap-lg);
+  font-size: var(--fs-small);
+}
+.notice.bad {
+  border-left-color: var(--broken);
+  background: var(--broken-wash);
+}
+.notice h3 {
+  margin: 0 0 var(--gap-xs);
+  font-size: var(--fs-base);
+}
+.notice p {
+  margin: 0 0 var(--gap-sm);
+  max-width: var(--prose);
+}
+.notice p:last-child {
+  margin-bottom: 0;
+}
+
+/* Where a figure came from. Small, quiet, and never paraphrased. */
+.source {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  border-top: 1px solid var(--line);
+  padding-top: var(--gap-sm);
+  margin-top: var(--gap);
+}
+.source dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs) var(--gap);
+  margin: 0;
+}
+.source dt {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.source dd {
+  margin: 0 var(--gap) 0 0;
+}
+
+.muted {
+  color: var(--ink-soft);
+}
+.faint {
   color: var(--ink-faint);
 }
-input[type="number"],
-input[type="text"],
-select {
-  width: 100%;
-  padding: 9px 11px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--paper);
-  color: var(--ink);
-  font: inherit;
+.prose {
+  max-width: var(--prose);
+  font-size: var(--fs-body);
+  line-height: 1.65;
 }
-input:focus,
-select:focus {
-  border-color: var(--act);
+.prose p {
+  margin: 0 0 var(--gap);
 }
+
 button,
 .button {
-  display: inline-block;
-  padding: 10px 18px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--act);
-  color: #fff;
   font: inherit;
-  font-weight: 560;
+  font-size: var(--fs-base);
+  font-weight: 550;
+  color: #fff;
+  background: var(--act);
+  border: 1px solid var(--act);
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  min-height: 34px;
   cursor: pointer;
-  text-align: center;
 }
 button:hover,
 .button:hover {
   background: var(--act-deep);
+  border-color: var(--act-deep);
   text-decoration: none;
 }
 .button.quiet {
-  background: transparent;
-  color: var(--act);
-  border: 1px solid var(--line-strong);
+  background: var(--paper);
+  color: var(--act-deep);
+  border-color: var(--line-strong);
+}
+.button.quiet:hover {
+  background: var(--act-wash);
 }
 
-/* --------------------------------------------------------------------------
-   Empty and error states. A blank page tells a reader nothing; both of these
-   say what happened and what to do about it.
-   -------------------------------------------------------------------------- */
-
-.notice {
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--ink-faint);
-  border-radius: 0 var(--radius) var(--radius) 0;
-  padding: var(--gap);
-  max-width: var(--prose);
-  font-size: 0.93rem;
+/* Inputs, for the valuation form. */
+label {
+  display: block;
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   color: var(--ink-soft);
-  margin-bottom: var(--gap);
-}
-.notice.bad {
-  border-left-color: var(--broken);
-  color: var(--ink);
-}
-.notice h3 {
-  color: var(--ink);
+  font-weight: 600;
   margin-bottom: var(--gap-xs);
 }
+input[type="text"],
+input[type="number"] {
+  width: 100%;
+  height: 34px;
+  padding: 0 var(--gap-sm);
+  font: inherit;
+  font-size: var(--fs-base);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+input:focus {
+  border-color: var(--act);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--act-wash);
+}
 
-footer.foot {
-  border-top: 1px solid var(--line);
-  padding-block: var(--gap-lg) var(--gap-xl);
+/* The disclaimer. In the shell, so no page can forget it. */
+.disclaimer {
+  grid-area: footer;
+  font-size: var(--fs-micro);
   color: var(--ink-faint);
-  font-size: 0.82rem;
-}
-footer.foot p {
-  max-width: var(--prose);
+  border-top: 1px solid var(--line);
+  padding: var(--gap) var(--gap-lg);
+  max-width: var(--measure);
 }
 
-/* --------------------------------------------------------------------------
-   Motion, only for people who want it.
-   -------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+   NARROW SCREENS
+   The rail becomes a horizontal strip under the header. Nothing is hidden and
+   nothing needs a menu button: there are five destinations.
+   --------------------------------------------------------------------------- */
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+@media (max-width: 860px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--header) var(--header) auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand"
+      "header"
+      "rail"
+      "main"
+      "footer";
+  }
+  .brand {
+    border-right: none;
+    height: var(--header);
+  }
+  .topbar {
+    padding: 0 var(--gap);
+  }
+  .search {
+    max-width: none;
+  }
+  .rail {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    padding: var(--gap-sm) var(--gap);
+    display: flex;
+    gap: var(--gap-xs);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .rail::-webkit-scrollbar {
+    display: none;
+  }
+  .rail-group {
+    display: contents;
+  }
+  .rail-label {
+    display: none;
+  }
+  .rail a {
+    border-left: none;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    padding: 6px 10px;
+  }
+  .main {
+    padding: var(--gap);
+  }
+  .disclaimer {
+    padding: var(--gap);
+  }
+  .security-head .price {
+    margin-left: 0;
+    flex-basis: 100%;
   }
 }
 
-@media print {
-  .masthead,
-  .nav,
-  form {
-    display: none;
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
   }
 }
