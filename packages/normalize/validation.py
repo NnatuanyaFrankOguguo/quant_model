@@ -69,6 +69,7 @@ __all__ = [
     "PROFIT_TIES",
     "IdentityResult",
     "ValidationReport",
+    "validate_candidate",
     "validate_period",
 ]
 
@@ -351,7 +352,12 @@ def _profit_ties(figures: dict[tuple[str, str], Decimal | None]) -> IdentityResu
 
 
 def _prior_period_end(
-    session: Session, *, company_id: int, period_type: str, period_end: dt.date
+    session: Session,
+    *,
+    company_id: int,
+    period_type: str,
+    period_end: dt.date,
+    fiscal_year: int | None = None,
 ) -> dt.date | None:
     """The period end one fiscal year earlier, by the company's own year label.
 
@@ -365,14 +371,21 @@ def _prior_period_end(
     `statements.fiscal_year` is the company's own label, so the year before is the row
     carrying one less - which is exactly what the comparative column of a real report shows.
     """
-    current_year = session.execute(
-        select(Statement.fiscal_year)
-        .where(Statement.company_id == company_id)
-        .where(Statement.period_type == period_type)
-        .where(Statement.period_end == period_end)
-        .where(Statement.superseded_by.is_(None))
-        .limit(1)
-    ).scalar_one_or_none()
+    # A candidate has no stored row to read its own label off, so `validate_candidate`
+    # passes it. Without this the lookup below finds nothing, the cross-year check reports
+    # NOT_CHECKABLE, and the one identity that catches an unapplied `unit_multiplier`
+    # quietly never runs at the stage P4.1 puts it - which is before the figures are
+    # stored, and therefore before the 1,000x error is in the database.
+    current_year = fiscal_year
+    if current_year is None:
+        current_year = session.execute(
+            select(Statement.fiscal_year)
+            .where(Statement.company_id == company_id)
+            .where(Statement.period_type == period_type)
+            .where(Statement.period_end == period_end)
+            .where(Statement.superseded_by.is_(None))
+            .limit(1)
+        ).scalar_one_or_none()
     if current_year is None:
         return None
     return session.execute(
@@ -393,6 +406,7 @@ def _cross_year_swing(
     period_type: str,
     period_end: dt.date,
     figures: dict[tuple[str, str], Decimal | None],
+    fiscal_year: int | None = None,
 ) -> IdentityResult:
     """Year-on-year moves beyond 5x. P4.3's *"quiet hero"* for unit errors.
 
@@ -401,7 +415,11 @@ def _cross_year_swing(
     millions until it sits beside last year's 3,400,000.
     """
     previous_end = _prior_period_end(
-        session, company_id=company_id, period_type=period_type, period_end=period_end
+        session,
+        company_id=company_id,
+        period_type=period_type,
+        period_end=period_end,
+        fiscal_year=fiscal_year,
     )
     if previous_end is None:
         return IdentityResult(
@@ -582,9 +600,58 @@ def validate_period(
     *cross-statement*: profit after tax has to agree between the income statement and the
     cash flow, and neither statement can check that alone.
     """
-    figures = _figures(
-        session, company_id=company_id, period_type=period_type, period_end=period_end
+    return validate_candidate(
+        session,
+        company_id=company_id,
+        period_type=period_type,
+        period_end=period_end,
+        figures=_figures(
+            session, company_id=company_id, period_type=period_type, period_end=period_end
+        ),
     )
+
+
+def validate_candidate(
+    session: Session,
+    *,
+    company_id: int,
+    period_type: str,
+    period_end: dt.date,
+    figures: dict[tuple[str, str], Decimal | None],
+    fiscal_year: int | None = None,
+) -> ValidationReport:
+    """The same identities, on figures nobody has stored yet. `docs/03` P4.1.
+
+    P4.1's flowchart validates *before* the store - *"passes, confidence >= 0.85 -> store
+    with provenance"* - and `validate_period` cannot, because it starts by reading
+    `statement_line_items`. An extraction that has to be written before it can be checked
+    is one that is in the database by the time anybody knows it is wrong, which is the
+    order this phase exists to avoid.
+
+    None of the identities ever needed the database. They take a
+    `(statement_type, canonical_key) -> value` mapping and always did; this hands them one
+    directly. The session is still required, and only for `_cross_year_swing`, which
+    compares against last year's stored closing balances - *"the quiet hero here, because a
+    figure that is 1,000x wrong will not tie to last year's closing balance"*. Those are
+    real history and a candidate is checked against them, not against itself.
+
+    Figures must be in **reporting units**, the same as what the column holds. A candidate
+    still carrying its `unit_multiplier` unapplied would fail every identity by a factor of
+    a thousand, which reads as a catastrophic extraction rather than as the units error it
+    is - see `packages.extract.contract.Extraction.in_reporting_units`, which is where that
+    multiplication is supposed to happen.
+
+    An absent key is `None` and means *the statement did not report it*. Never zero: an
+    identity that cannot find a figure returns `NOT_CHECKABLE` and takes no view, whereas a
+    zero is a figure and makes it fail.
+
+    `fiscal_year` is the candidate's own year label, and passing it is what lets the
+    cross-year check run at all. `_prior_period_end` finds last year by reading *this*
+    year's `statements.fiscal_year` - a candidate has no such row, so without the label the
+    lookup returns nothing, the check reports `NOT_CHECKABLE`, and the one identity that
+    catches an unapplied `unit_multiplier` silently never runs. Omitting it is safe and
+    quiet in exactly the wrong way, which is why the tests assert on it directly.
+    """
     report = ValidationReport(company_id=company_id, period_type=period_type, period_end=period_end)
     report.results = [
         _balance_sheet_balances(figures),
@@ -595,6 +662,7 @@ def validate_period(
             period_type=period_type,
             period_end=period_end,
             figures=figures,
+            fiscal_year=fiscal_year,
         ),
         *_composition_identities(figures),
         *_subset_rules(figures),
