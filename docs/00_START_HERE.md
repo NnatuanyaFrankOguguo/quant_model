@@ -213,13 +213,16 @@ retrofitted.
 > **Update this table at every phase transition.** It is the only place in the document set
 > that claims what is done. Keeping it honest is what stops you from building on sand.
 
-**Current phase: P2 — US Company Data. Status: ✅ COMPLETE, 15 of 15 checks, verified by
-the operator on 2026-09-15 — who checked the figures against the SEC's own documents rather
-than against this system's word for them. P1 closed the same day (check 11, its last). P0
-alone remains 🧪, for the reason it has always been: CI has never run.**
+**Current phases: P3, P4 and P5 are all part-built, and what remains in each is the
+operator's rather than the code's.** P3's gate waits on the golden set and the NGX
+universe; P4's on an Anthropic API key and that same golden set; P5.1 is closed and
+fetching hourly. P2 is ✅ COMPLETE, 15 of 15, verified by the operator on 2026-09-15
+against the SEC's own documents rather than against this system's word for them. P1 closed
+the same day. **P0 alone remains 🧪, for the reason it always has: CI has never run.**
 
-**Next: P3 — Nigerian Manual Analyzer**, whose entry criteria are the operator's (a
-Backblaze B2 account; the UNIVERSE.md tickers verified against NGX's listing directory).
+**The single thing blocking most of the rest is data, not code.** No Nigerian company is in
+the database, so the NGX price connector caches raw responses and writes zero bars -
+loudly, by design - and the extraction pipeline has no Nigerian filing to read.
 
 The P0 spine from [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §6.1 is built and
 verified on 2026-09-02: 17 tables migrated on Neon PostgreSQL 18.6, the mode gate enforced and
@@ -235,9 +238,9 @@ That one is the operator's; see "the immediate next actions" below. **P1 and P2 
 | P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: remote exists, `main` never pushed, CI never run |
 | P1 Macro Backdrop | ✅ Complete | 2026-09-03 | 2026-09-15 | 13/13 | Check 11 confirmed 2026-09-15 · 10 of 13 series live · 28,053 rows · staleness thresholds verified (0016) |
 | P2 US Company Data | ✅ Complete | 2026-09-13 | 2026-09-15 | 15/15 | 24 companies · 1,662 filings · 7,917 statement versions · 53,710 line items · 269,216 price bars · 3,270 corporate actions |
-| P3 NG Manual Analyzer | 🔨 In progress | 2026-09-16 | — | — | **Code complete; the gate now waits on data, not code.** P3.1 ✅ the document store (0022, `ingestion/documents.py`) — a PDF is verified by content, page-counted from the file and stored once by hash. P3.2 ✅ entry rules, write endpoint and form (`normalize/manual.py`, `/v1/personal/statements`, `entry_page.py`). P3.3 ✅ **all six** TG2 paths: identity (0018, 0019), units, corporate actions, FX, fiscal alignment, and the trading calendar (0023, 32,072 days). P3.5 ✅ the manual override (TG10). TG7 ✅ chart v1 (0020, 65 keys) — created, not frozen. Checks 4, 5, 8 and 16 closed this phase. **Open:** P3.4 the golden set and ≥10 typed company-years (TEAM_BRIEF B, C, D), the NGX universe (no Nigerian company is in the database yet), and `index_membership` |
-| P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
-| P5 News & Daily Brief | ⬜ Not started | — | — | — | |
+| P3 NG Manual Analyzer | 🔨 In progress | 2026-09-16 | — | — | **Code complete; the gate now waits on data, not code.** P3.1 ✅ the document store (0022, `ingestion/documents.py`) — a PDF is verified by content, page-counted from the file and stored once by hash. P3.2 ✅ entry rules, write endpoint and form (`normalize/manual.py`, `/v1/personal/statements`, `entry_page.py`). P3.3 ✅ **all six** TG2 paths: identity (0018, 0019), units, corporate actions, FX, fiscal alignment, and the trading calendar (0023, 32,072 days). P3.5 ✅ the manual override (TG10). TG7 ✅ chart v1 (0020, 65 keys) — **now exercised**: JPMorgan and Caterpillar are typed through it, 295 statements and 4,495 line items, which is what the freeze was waiting for. Checks 4, 5, 8 and 16 closed this phase. **Open:** P3.4 the golden set and ≥10 typed company-years (TEAM_BRIEF B, C, D), the NGX universe (no Nigerian company is in the database yet), and `index_membership` |
+| P4 NG Automated Ingestion | 🔨 In progress | 2026-09-24 | — | 8/20 | **Every part that needs neither a key nor a golden set is built.** P4.1 ✅ the deterministic half (`extract/pdf.py`) - native/scanned/mixed classification, text and Markdown tables; the OCR branch is not built and no scanned fixture exists yet. P4.2 ✅ the contract, **grounding** (a figure must be on the page it cites) and the reconciler - everything but `messages.create`, which needs `ANTHROPIC_API_KEY`. P4.3 ✅ validation, `validate_candidate` (checking before the store, which P4.1's flowchart requires and `validate_period` could not do) and confidence routing. P4.4 ✅ queue, `/v1/personal/review/*`, `review_page.py`; corrections go through P3.2's form rather than a second write path to the same table. P4.5 ✅ the devaluation annotation; `fx_loss_net` is in chart v1. P4.6 ✅ bank and industrial shapes verified apart. P4.7 ✅ **the NGX cache is running** - `AFX Kwayisi` registered, both listing pages stored permanently, bars correctly refused until the securities exist. P4.8 ✅ closed: retries, per-host buckets, conditional requests (FRED 304s, 1.6MB a series), health rows. **Checks closed: 8, 9, 12, 13, 14, 15, 16, 18.** **Open:** 1, 2, 3, 7, 11, 17, 19, 20 - each needs the API key, the golden set, or both. The `llm_hybrid` write path is not built: `enter_statement` cannot serve as it, because it labels a figure hand-typed and demands a reviewer's name |
+| P5 News & Daily Brief | 🔨 In progress | 2026-09-24 | — | — | P5.1 ✅ RSS ingestion (0025, `ingestion/rss.py`) - Nairametrics, BusinessDay and Punch, hourly and staggered, 44 real articles ingested. Three of the five feeds `docs/03` names cannot be ingested at all: Proshare serves its 404 page with **HTTP 200**, Reuters Africa is `Disallow: /`, and TheCable answers 403 to our agent. P5.2 🔨 ticker tagging. P5.3 and P5.4 ⬜ - P5.4 needs a Telegram bot token |
 | P6 Scenarios & Indicators | ⬜ Not started | — | — | — | Blocked by gap G1 until scheduled |
 | P7 Backtesting (THE GATE) | ⬜ Not started | — | — | — | Most important phase |
 | P8 ML Signals | ⬜ Not started | — | — | — | |
