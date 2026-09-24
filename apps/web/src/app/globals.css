@@ -1,0 +1,611 @@
+/* ===========================================================================
+   The design system. Every page reads from this file and none of them invents
+   a colour, a size or a spacing of its own.
+
+   WHY PLAIN CSS AND NOT A FRAMEWORK
+   The readers of this app are people with no finance background, and the next
+   person to change it may have no React background. A hundred named rules can
+   be read top to bottom; a page of utility classes cannot.
+
+   THE PALETTE, AND WHY THESE COLOURS
+   The product is an *instrument* - `DATA_FOUNDATION` 1.4's word - not an
+   adviser. It measures and it explains; it never tells you what to do. So the
+   palette is calm, cool and quiet: a near-white page, cool grey ink, and one
+   blue that means "you can act on this".
+
+   - No dark theme. A financial page read by a beginner wants maximum contrast
+     and no ambiguity about what is a surface and what is a control.
+   - No gold, amber or orange anywhere, including the conventional amber
+     warning. Status is carried by green / violet / red, which are separable
+     for the common forms of colour blindness in a way green/amber/red is not.
+   - **Blue is reserved for interaction.** Links, buttons, focus. It is never a
+     status colour, so "blue" never has to be read twice.
+   - Every status colour is paired with a word. Colour is never the only
+     signal - that is WCAG 1.4.1, and it is also just kinder.
+   =========================================================================== */
+
+:root {
+  /* Surfaces: a page, a recessed panel, and a raised card. Three, not seven. */
+  --paper: #ffffff;
+  --paper-sunk: #f5f7f9;
+  --paper-raised: #ffffff;
+
+  /* Ink, cool-leaning so it sits with the blue rather than fighting it. */
+  --ink: #191d24;
+  --ink-soft: #565f6d;
+  --ink-faint: #838c99;
+
+  --line: #e1e6ec;
+  --line-strong: #cbd3dc;
+
+  /* Interaction. One blue, three weights. */
+  --act: #1f5edb;
+  --act-deep: #1748ab;
+  --act-wash: #eef3ff;
+
+  /* Status. Never blue, always beside a word. */
+  --ok: #157048;
+  --ok-wash: #e9f5ef;
+  --attention: #5b46b8;
+  --attention-wash: #efecfb;
+  --broken: #b4283f;
+  --broken-wash: #fdecef;
+
+  /* Spacing, on a 4px rhythm. Named for intent so a page does not pick 13px. */
+  --gap-xs: 4px;
+  --gap-sm: 8px;
+  --gap: 16px;
+  --gap-lg: 28px;
+  --gap-xl: 48px;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+
+  /* 1120px: wide enough for a year-by-year table, narrow enough that prose
+     never runs past the ~75 characters a line can be read at comfortably. */
+  --measure: 1120px;
+  --prose: 68ch;
+
+  --shadow: 0 1px 2px rgba(25, 29, 36, 0.04), 0 2px 8px rgba(25, 29, 36, 0.04);
+}
+
+/* The palette is deliberately not redefined for `prefers-color-scheme: dark`.
+   See the header: this app has one theme on purpose. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Every figure on this site is a number in a column. Tabular digits stop the
+   columns dancing as values change. */
+.num,
+td.num,
+th.num,
+.stat-value,
+input[type="number"] {
+  font-variant-numeric: tabular-nums;
+}
+
+a {
+  color: var(--act);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+:focus-visible {
+  outline: 2px solid var(--act);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* A keyboard user should not have to tab through the whole nav to reach the
+   page. Visible only when focused. */
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+.skip:focus {
+  left: var(--gap);
+  top: var(--gap);
+  z-index: 100;
+  background: var(--paper);
+  padding: var(--gap-sm) var(--gap);
+  border: 1px solid var(--act);
+  border-radius: var(--radius-sm);
+}
+
+/* --------------------------------------------------------------------------
+   Layout
+   -------------------------------------------------------------------------- */
+
+.wrap {
+  max-width: var(--measure);
+  margin-inline: auto;
+  padding-inline: var(--gap);
+}
+
+main {
+  padding-block: var(--gap-lg) var(--gap-xl);
+}
+
+/* --------------------------------------------------------------------------
+   Masthead
+   -------------------------------------------------------------------------- */
+
+.masthead {
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.masthead .wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  min-height: 60px;
+  flex-wrap: wrap;
+}
+.brand {
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  font-size: 1.02rem;
+}
+.brand small {
+  display: block;
+  font-weight: 400;
+  font-size: 0.74rem;
+  color: var(--ink-faint);
+  letter-spacing: 0;
+}
+.nav {
+  display: flex;
+  gap: var(--gap);
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.nav a {
+  color: var(--ink-soft);
+  font-size: 0.94rem;
+  padding-block: var(--gap-xs);
+}
+.nav a:hover,
+.nav a[aria-current="page"] {
+  color: var(--act);
+}
+
+/* --------------------------------------------------------------------------
+   The disclaimer. Persistent, never dismissible - `DATA_FOUNDATION` 6.5.
+   -------------------------------------------------------------------------- */
+
+.disclaimer {
+  background: var(--paper-sunk);
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+.disclaimer .wrap {
+  padding-block: var(--gap-sm);
+}
+.disclaimer b {
+  color: var(--ink);
+  font-weight: 620;
+}
+
+/* --------------------------------------------------------------------------
+   Type
+   -------------------------------------------------------------------------- */
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.018em;
+  line-height: 1.25;
+  margin: 0;
+}
+h1 {
+  font-size: clamp(1.5rem, 1.2rem + 1.4vw, 2rem);
+  margin-bottom: var(--gap-sm);
+}
+h2 {
+  font-size: clamp(1.1rem, 1rem + 0.5vw, 1.28rem);
+  margin-block: var(--gap-lg) var(--gap);
+}
+h3 {
+  font-size: 1rem;
+  margin-bottom: var(--gap-xs);
+}
+p {
+  margin: 0 0 var(--gap);
+  max-width: var(--prose);
+}
+.lede {
+  color: var(--ink-soft);
+  font-size: clamp(1rem, 0.96rem + 0.2vw, 1.08rem);
+  margin-bottom: var(--gap-lg);
+}
+.muted {
+  color: var(--ink-soft);
+}
+.faint {
+  color: var(--ink-faint);
+  font-size: 0.83rem;
+}
+
+/* --------------------------------------------------------------------------
+   The explainer. The component this whole app exists for: it says, in plain
+   words, what the thing above or below it actually means. Used once per idea,
+   never twice on a screen - the point is to unblock a reader, not to lecture.
+   -------------------------------------------------------------------------- */
+
+.explain {
+  background: var(--act-wash);
+  border-left: 3px solid var(--act);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: var(--gap) calc(var(--gap) + 2px);
+  margin-bottom: var(--gap-lg);
+  max-width: var(--prose);
+  font-size: 0.94rem;
+}
+.explain > :last-child {
+  margin-bottom: 0;
+}
+.explain .tag {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--act-deep);
+  margin-bottom: var(--gap-xs);
+}
+
+/* Secondary detail, folded away by default. Native `<details>`: keyboard and
+   screen-reader behaviour for free, and it works with JavaScript switched off. */
+details.more {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0;
+  margin-bottom: var(--gap);
+  max-width: var(--prose);
+}
+details.more > summary {
+  cursor: pointer;
+  padding: var(--gap-sm) var(--gap);
+  font-size: 0.9rem;
+  color: var(--act);
+  list-style: none;
+}
+details.more > summary::-webkit-details-marker {
+  display: none;
+}
+details.more > summary::before {
+  content: "＋ ";
+  color: var(--ink-faint);
+}
+details.more[open] > summary::before {
+  content: "－ ";
+}
+details.more > :not(summary) {
+  padding: 0 var(--gap) var(--gap);
+  font-size: 0.92rem;
+  color: var(--ink-soft);
+}
+
+/* --------------------------------------------------------------------------
+   Grids. Every one collapses to a single column on a narrow screen without a
+   media query, because `auto-fit` + `minmax` already does it.
+   -------------------------------------------------------------------------- */
+
+.grid {
+  display: grid;
+  gap: var(--gap);
+}
+.grid.cols-2 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+}
+.grid.cols-3 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 215px), 1fr));
+}
+.grid.cols-4 {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr));
+}
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+  padding: var(--gap);
+  box-shadow: var(--shadow);
+}
+.card h3 a {
+  color: var(--ink);
+}
+
+.stat-value {
+  font-size: clamp(1.3rem, 1.1rem + 0.7vw, 1.6rem);
+  font-weight: 640;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.stat-name {
+  font-size: 0.83rem;
+  color: var(--ink-soft);
+  margin-top: var(--gap-xs);
+}
+.stat-note {
+  font-size: 0.77rem;
+  color: var(--ink-faint);
+  margin-top: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   Tables. A wide one scrolls sideways inside its own box rather than pushing
+   the page wider - a horizontally scrolling *page* on a phone is the fastest
+   way to lose somebody.
+   -------------------------------------------------------------------------- */
+
+.scroller {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-raised);
+}
+.scroller > table {
+  margin: 0;
+}
+.scroll-hint {
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+  margin-top: var(--gap-xs);
+}
+@media (min-width: 860px) {
+  .scroll-hint {
+    display: none;
+  }
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.93rem;
+}
+caption {
+  text-align: left;
+  padding: var(--gap) var(--gap) var(--gap-sm);
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+th {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  font-weight: 620;
+  background: var(--paper-sunk);
+  position: sticky;
+  top: 0;
+}
+td.num,
+th.num {
+  text-align: right;
+}
+td.wrap-cell {
+  white-space: normal;
+  min-width: 18rem;
+}
+tbody tr:hover td {
+  background: var(--paper-sunk);
+}
+
+/* --------------------------------------------------------------------------
+   Status. Always rendered with its word beside it.
+   -------------------------------------------------------------------------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.76rem;
+  font-weight: 560;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+.pill.ok {
+  color: var(--ok);
+  background: var(--ok-wash);
+}
+.pill.attention,
+.pill.warning {
+  color: var(--attention);
+  background: var(--attention-wash);
+}
+.pill.broken,
+.pill.error,
+.pill.never_ran {
+  color: var(--broken);
+  background: var(--broken-wash);
+}
+.pill.neutral {
+  color: var(--ink-soft);
+  background: var(--paper-sunk);
+  border-color: var(--line-strong);
+}
+
+/* --------------------------------------------------------------------------
+   Provenance. Every figure says where it came from and when it was true.
+   -------------------------------------------------------------------------- */
+
+.source {
+  font-size: 0.79rem;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--line);
+  margin-top: var(--gap-lg);
+  padding-top: var(--gap);
+  max-width: var(--prose);
+}
+.source dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--gap);
+  margin: 0;
+}
+.source dt {
+  color: var(--ink-soft);
+}
+.source dd {
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Forms
+   -------------------------------------------------------------------------- */
+
+.assumptions {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  align-items: end;
+  padding: var(--gap);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper-sunk);
+  margin-bottom: var(--gap);
+}
+label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  margin-bottom: var(--gap-xs);
+  font-weight: 520;
+}
+label .hint {
+  display: block;
+  font-weight: 400;
+  font-size: 0.77rem;
+  color: var(--ink-faint);
+}
+input[type="number"],
+input[type="text"],
+select {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+}
+input:focus,
+select:focus {
+  border-color: var(--act);
+}
+button,
+.button {
+  display: inline-block;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--act);
+  color: #fff;
+  font: inherit;
+  font-weight: 560;
+  cursor: pointer;
+  text-align: center;
+}
+button:hover,
+.button:hover {
+  background: var(--act-deep);
+  text-decoration: none;
+}
+.button.quiet {
+  background: transparent;
+  color: var(--act);
+  border: 1px solid var(--line-strong);
+}
+
+/* --------------------------------------------------------------------------
+   Empty and error states. A blank page tells a reader nothing; both of these
+   say what happened and what to do about it.
+   -------------------------------------------------------------------------- */
+
+.notice {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-faint);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  padding: var(--gap);
+  max-width: var(--prose);
+  font-size: 0.93rem;
+  color: var(--ink-soft);
+  margin-bottom: var(--gap);
+}
+.notice.bad {
+  border-left-color: var(--broken);
+  color: var(--ink);
+}
+.notice h3 {
+  color: var(--ink);
+  margin-bottom: var(--gap-xs);
+}
+
+footer.foot {
+  border-top: 1px solid var(--line);
+  padding-block: var(--gap-lg) var(--gap-xl);
+  color: var(--ink-faint);
+  font-size: 0.82rem;
+}
+footer.foot p {
+  max-width: var(--prose);
+}
+
+/* --------------------------------------------------------------------------
+   Motion, only for people who want it.
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  .masthead,
+  .nav,
+  form {
+    display: none;
+  }
+}

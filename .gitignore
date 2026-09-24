@@ -50,3 +50,8 @@ logs/
 data/manual/*
 !data/manual/TEMPLATE.csv
 !data/manual/README.md
+
+# Next.js build output (apps/web)
+.next/
+next-env.d.ts
+*.tsbuildinfo
