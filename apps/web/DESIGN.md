@@ -172,6 +172,13 @@ a two-column table fit at 320px with its value still beside its label.
   Arithmetic in a component is a defect — if a number is needed, the API should return it.
 - Every page handles three states explicitly: **loading**, **empty**, and **failed**. A
   blank page tells a reader nothing. Use `.notice` and say what happened and what to do.
+- **A page that catches its own failure calls `failTheBuildInstead(error)` first.**
+  Rendering an error state is right at runtime and wrong during `next build`: a static
+  route is prerendered, so the caught failure is baked into the HTML as a static
+  artifact. The build exits 0, nothing warns, and every visitor is told the data could
+  not be loaded — `revalidate` heals it only *after* somebody has already been shown the
+  error. Verified in both directions: with the API unreachable the build now exits 1, and
+  a healthy build still exits 0.
 
 ---
 

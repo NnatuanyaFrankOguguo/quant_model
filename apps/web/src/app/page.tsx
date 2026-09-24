@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { api, ApiError } from "@/lib/api";
+import { api, ApiError, failTheBuildInstead } from "@/lib/api";
 
 /**
  * The front door.
@@ -41,6 +41,7 @@ export default async function Home() {
     companies = list.companies.length;
     periods = list.companies.reduce((n, c) => n + c.statement_periods, 0);
   } catch (error) {
+    failTheBuildInstead(error);
     unreachable =
       error instanceof ApiError
         ? `The data service answered ${error.status}.`

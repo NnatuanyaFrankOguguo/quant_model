@@ -2,7 +2,7 @@ import { Fragment } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { api, type MacroSeries } from "@/lib/api";
+import { api, type MacroSeries, failTheBuildInstead } from "@/lib/api";
 import {
   NOT_LOADED,
   formatDay,
@@ -69,6 +69,7 @@ export default async function MacroPage() {
   try {
     ({ series } = await api.macro());
   } catch (error) {
+    failTheBuildInstead(error);
     const detail = error instanceof Error ? error.message : "unknown error";
     return (
       <>

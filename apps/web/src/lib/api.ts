@@ -36,6 +36,24 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Call this first in the `catch` of any page that can be prerendered.
+ *
+ * A page that catches its own fetch failure and renders an error state is doing the
+ * right thing at runtime and the wrong thing during `next build`. A static route is
+ * prerendered at build time, so a caught failure is baked into the HTML as a static
+ * artifact: the build exits 0, nothing warns, and the deployed page tells every visitor
+ * the data could not be loaded. `revalidate` heals it only *after* somebody has already
+ * been shown the error.
+ *
+ * At build time this rethrows and the build fails, which is the correct outcome - a
+ * build that could not reach the API has not produced a publishable page. At runtime it
+ * does nothing and the page renders its error state as before.
+ */
+export function failTheBuildInstead(error: unknown): void {
+  if (process.env.NEXT_PHASE === "phase-production-build") throw error;
+}
+
 async function get<T>(path: string, personal = false): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (personal && TOKEN) headers.Authorization = `Bearer ${TOKEN}`;

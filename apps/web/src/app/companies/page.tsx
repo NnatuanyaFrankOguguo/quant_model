@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { ApiError, api, type CompanySummary } from "@/lib/api";
+import { ApiError, api, type CompanySummary, failTheBuildInstead } from "@/lib/api";
 import { count, day, isMissing, NOT_REPORTED } from "@/lib/format";
 
 export const metadata: Metadata = {
@@ -26,6 +26,7 @@ export default async function CompaniesPage() {
   try {
     companies = (await api.companies()).companies;
   } catch (error) {
+    failTheBuildInstead(error);
     return <CouldNotLoad error={error} />;
   }
 
