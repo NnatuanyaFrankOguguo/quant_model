@@ -188,8 +188,16 @@ a two-column table fit at 320px with its value still beside its label.
   in the browser is one devtools tab from anyone.
 - **The client computes nothing.** AD-3: Streamlit and Next.js are both thin clients.
   Arithmetic in a component is a defect — if a number is needed, the API should return it.
-- Every page handles three states explicitly: **loading**, **empty**, and **failed**. A
-  blank page tells a reader nothing. Use `.notice` and say what happened and what to do.
+- Every page handles four states explicitly: **loading**, **empty**, **slow** and
+  **failed**. A blank page tells a reader nothing. Use `.notice` and say what happened
+  and what to do.
+- **Slow is not failed.** `ApiTimeout` means our budget expired, not that the service
+  died, and a page that writes "it did not answer" when the truth is "we stopped
+  waiting" is telling a reader something untrue about data that is fine. Branch on it,
+  use the shared `SERVICE_IS_SLOW` sentence so one event cannot read as two problems,
+  and render it as `.notice`, never `.notice bad` — painting a slow answer red sends
+  the reader hunting a fault that does not exist. `/ratios` has a measured 52s tail
+  against a 60s budget, so this is a live case and not a hypothetical.
 - **A page that catches its own failure calls `failTheBuildInstead(error)` first.**
   Rendering an error state is right at runtime and wrong during `next build`: a static
   route is prerendered, so the caught failure is baked into the HTML as a static
