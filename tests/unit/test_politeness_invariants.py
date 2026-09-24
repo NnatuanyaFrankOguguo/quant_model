@@ -26,6 +26,8 @@ import inspect
 import pkgutil
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 import packages.ingestion as ingestion_pkg
 from packages.ingestion.base import Connector
@@ -123,4 +125,43 @@ def test_every_connector_declares_a_usable_rate(
     assert connector.politeness_delay_sec >= 0, (
         f"{connector.__name__} declares a negative politeness_delay_sec, which would be "
         f"read as haste and slept on as a positive number or not at all."
+    )
+
+
+def test_every_declared_rate_survives_the_round_trip_into_data_sources(
+    db_session: Session,
+) -> None:
+    """A rate that cannot be stored faithfully rewrites its row on every run, forever.
+
+    `register()` compares the declared figure with the stored one through
+    `packages.ingestion.base._same_rate` and writes when they differ. `data_sources
+    .rate_limit_per_sec` is `NUMERIC`, and Postgres renders a `float8` cast into it at
+    fifteen significant digits - so `1/60`, which is `0.016666666666666666`, comes back as
+    `0.0166666666666667` and never compares equal. The row is then rewritten on every
+    single run of that connector, for ever, and the register never once agrees with the
+    code it is supposed to publish.
+
+    That is not hypothetical: `AfxKwayisiConnector` needs one request per sixty seconds,
+    and `1/60` is the obvious way to write it. It declares `0.0166` instead, and this test
+    is why that is not an arbitrary-looking constant.
+
+    Against the database rather than a reimplementation of Postgres's rounding, because a
+    Python approximation of that rule is a second thing to keep correct and the first one
+    to go stale.
+    """
+    offenders: list[str] = []
+    for _, connector in _network_connectors():
+        declared = float(connector.rate_limit_per_sec)
+        stored = db_session.execute(
+            text("SELECT CAST(:v AS NUMERIC)"), {"v": declared}
+        ).scalar_one()
+        if float(stored) != declared:
+            offenders.append(
+                f"  {connector.__name__}: declares {declared!r}, stores {stored}, "
+                f"so register() rewrites the row every run"
+            )
+    assert not offenders, (
+        "a declared rate does not survive being written to data_sources.rate_limit_per_sec "
+        "and read back. Pick a value that does - a rounded one near the figure you want:\n"
+        + "\n".join(offenders)
     )
