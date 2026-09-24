@@ -32,6 +32,7 @@ from packages.ingestion.base import (
     MacroRecord,
     RawResponse,
 )
+from packages.ingestion.polite import PoliteFetcher, require_document, shared_fetcher
 
 __all__ = [
     "FRED_SERIES",
@@ -43,6 +44,10 @@ __all__ = [
 ]
 
 _BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
+
+#: FRED was the one connector sending no User-Agent at all. An anonymous client is the
+#: first one a struggling host drops, and it gives them nobody to warn before dropping us.
+_USER_AGENT = "quant_model/0.1 (nnatuanyafrankoguguo@churchofjesuschrist.org) research"
 
 #: The FRED half of the P1 series list (`docs/03` P1). The Nigerian series here come from
 #: FRED's World Bank mirror, which lags and does not carry MPR decisions, T-bill stop rates
@@ -68,14 +73,27 @@ class FredConnector(Connector):
     """One series per run. `run()` is called once per series by the scheduler."""
 
     name = "fred"
-    #: FRED does not publish a hard limit; this is deliberately conservative for a free API
-    #: we depend on and do not pay for.
-    rate_limit_per_sec = 5.0
+    #: The host's own figure. `api.stlouisfed.org/robots.txt` carries `Crawl-delay: 2`,
+    #: which is one request every two seconds. This used to say 5.0/s and call itself
+    #: "deliberately conservative" - ten times faster than what the host asks for, by a
+    #: number nobody had gone and looked up. `PoliteFetcher` would clamp it either way, but
+    #: `declare_licence()` writes this into `data_sources`, and a stored figure that
+    #: disagrees with the one we use is the whole problem this change exists to fix.
+    rate_limit_per_sec = 0.5
     politeness_delay_sec = 0.2
 
-    def __init__(self, *, api_key: str | None = None, timeout_sec: float = 30.0) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        timeout_sec: float = 30.0,
+        fetcher: PoliteFetcher | None = None,
+    ) -> None:
         self._api_key = api_key
         self._timeout = timeout_sec
+        #: Injectable so a test can drive `fetch` without a network or a real clock.
+        #: `None` means the process-wide one, which is what production always wants.
+        self._fetcher = fetcher or shared_fetcher(user_agent=_USER_AGENT)
 
     @property
     def api_key(self) -> str:
@@ -124,13 +142,19 @@ class FredConnector(Connector):
         many runs a backfill needs, and does not itself produce records. Keeping it separate
         is what lets `parse()` stay pure.
         """
-        response = httpx.get(
-            _VINTAGE_URL,
-            params={"series_id": series_id, "api_key": self.api_key, "file_type": "json"},
-            timeout=self._timeout,
+        raw = require_document(
+            self._fetcher.get(
+                _VINTAGE_URL,
+                params={"series_id": series_id, "api_key": self.api_key, "file_type": "json"},
+                rate_per_sec=self.rate_limit_per_sec,
+                politeness_delay_sec=self.politeness_delay_sec,
+                media_type="application/json",
+                timeout=self._timeout,
+                # Planning call, never stored - but the key would be in the logged URL.
+                record_url=f"{_VINTAGE_URL}?series_id={series_id}&file_type=json",
+            )
         )
-        response.raise_for_status()
-        payload = response.json()
+        payload = json.loads(raw.data.decode("utf-8"))
         dates: list[dt.date] = []
         for item in payload.get("vintage_dates", []):
             parsed = _parse_date(item)
@@ -163,31 +187,43 @@ class FredConnector(Connector):
             "realtime_start": realtime_start,
             "realtime_end": realtime_end,
         }
-        response = httpx.get(_BASE_URL, params=query, timeout=self._timeout)
-        if response.status_code == 400 and "vintage dates" in response.text:
+        # The stored URL has the key stripped. Raw responses are kept forever and the
+        # register is read by people who are not the owner; a live credential must not be
+        # one of the things preserved forever alongside them. The real-time window is kept,
+        # because without it you cannot tell which slice of history this file is.
+        # `PoliteFetcher` would redact an `api_key` anyway; this is the exact shape we want
+        # rather than the shape redaction happens to leave behind.
+        recorded = (
+            f"{_BASE_URL}?series_id={series_id}&file_type=json"
+            f"&realtime_start={realtime_start}&realtime_end={realtime_end}"
+        )
+        try:
+            return require_document(
+                self._fetcher.get(
+                    _BASE_URL,
+                    params=query,
+                    rate_per_sec=self.rate_limit_per_sec,
+                    politeness_delay_sec=self.politeness_delay_sec,
+                    media_type="application/json",
+                    timeout=self._timeout,
+                    record_url=recorded,
+                )
+            )
+        except httpx.HTTPStatusError as exc:
+            # A 400 is terminal to the fetcher and never retried, which is right - but FRED
+            # puts the *reason* in the body, and one particular reason is actionable. The
+            # response rides along on the exception, so nothing is lost by reading it here.
+            failed = exc.response
+            if failed.status_code != 400 or "vintage dates" not in failed.text:
+                raise
             # Say what to do about it. The raw message names the count and the cap, which is
             # the number you need in order to pick a window size.
             raise VintageLimitExceededError(
                 f"FRED refused {series_id} for {realtime_start}..{realtime_end}: too many "
                 f"vintage dates in one request. Load it in windows - see "
                 f"packages.ingestion.fred.windows_from_vintage_dates(). FRED said: "
-                f"{response.json().get('error_message', '')}"
-            )
-        response.raise_for_status()
-        return RawResponse(
-            data=response.content,
-            media_type="application/json",
-            # The stored URL has the key stripped. Raw responses are kept forever and the
-            # register is read by people who are not the owner; a live credential must not
-            # be one of the things preserved forever alongside them. The real-time window is
-            # kept, because without it you cannot tell which slice of history this file is.
-            url=(
-                f"{_BASE_URL}?series_id={series_id}&file_type=json"
-                f"&realtime_start={realtime_start}&realtime_end={realtime_end}"
-            ),
-            http_status=response.status_code,
-            etag=response.headers.get("etag"),
-        )
+                f"{failed.json().get('error_message', '')}"
+            ) from exc
 
     def parse(self, raw: RawResponse) -> list[MacroRecord]:
         """Pure: same bytes in, same records out. No network, no clock, no settings."""

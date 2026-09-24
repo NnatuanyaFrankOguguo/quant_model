@@ -117,6 +117,11 @@ class DataSourceLicence:
     base_url: str | None = None
     attribution_text: str | None = None
     terms_url: str | None = None
+    #: What the *source* permits, which is not always the rate we choose to use. EDGAR is
+    #: the one place they differ on purpose: SEC publishes 10 req/s, and `EdgarConnector`
+    #: declares 8.0 and spaces requests by 0.12s, because the penalty for touching the
+    #: ceiling is a ~10-minute IP block. Every other connector passes its own declared
+    #: figure, so for those the two are the same number by construction.
     rate_limit_per_sec: float | None = None
     notes: str | None = None
 
@@ -564,6 +569,21 @@ def register(session: Session, connector: Connector) -> int:
                 f"Re-review the terms and change both together, with a new "
                 f"terms_reviewed_on — never just the code."
             )
+        if not _same_rate(existing.rate_limit_per_sec, licence.rate_limit_per_sec):
+            # Not the same kind of fact as the gate above, and so not the same treatment.
+            # `redistribution_allowed` is a reviewed judgement and code must not overrule a
+            # review; a request rate is an operational constant that lives in the code, and
+            # the row is where it gets published. Five sources sat at NULL for exactly this
+            # reason - `register()` wrote the field on insert only, and their rows were
+            # seeded by migration 0004 before any connector ran.
+            _log.info(
+                "data_source_rate_limit_updated",
+                source=licence.source_name,
+                was=existing.rate_limit_per_sec,
+                now=licence.rate_limit_per_sec,
+            )
+            existing.rate_limit_per_sec = licence.rate_limit_per_sec
+            session.flush()
         return existing.id
     row = DataSource(
         source_name=licence.source_name,
@@ -581,6 +601,24 @@ def register(session: Session, connector: Connector) -> int:
     session.add(row)
     session.flush()
     return row.id
+
+
+def _same_rate(stored: Decimal | None, declared: float | None) -> bool:
+    """Whether the stored rate already says what the connector declares.
+
+    The column is `Numeric`, so what comes back is a `Decimal`, and the declared figure is
+    a `float`. Python compares those two *exactly*: `Decimal("0.5") == 0.5` is true because
+    0.5 is representable, and `Decimal("0.1") == 0.1` is false because 0.1 is not. Left as
+    a bare `!=`, a connector declaring 0.1 would rewrite its row on every single run,
+    forever, and nothing would ever say so - the values would look identical in any query
+    you wrote to check.
+
+    None of today's declared rates land on an unrepresentable value. That is luck, not
+    design, and it lasts exactly until somebody declares one that does.
+    """
+    if stored is None or declared is None:
+        return stored is None and declared is None
+    return float(stored) == float(declared)
 
 
 def record_run(session: Session, result: ConnectorRunResult) -> None:

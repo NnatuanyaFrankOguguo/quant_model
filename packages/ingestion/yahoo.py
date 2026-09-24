@@ -52,7 +52,6 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
-import httpx
 import structlog
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -67,14 +66,37 @@ from packages.common.models import (
 )
 from packages.common.timez import utctoday
 from packages.ingestion.base import Connector, DataSourceLicence, RawResponse
+from packages.ingestion.polite import PoliteFetcher, require_document, shared_fetcher
 
 __all__ = ["ActionRecord", "PriceBar", "Split", "YahooChartConnector", "unadjust"]
 
 _log = structlog.get_logger(__name__)
 
 _BASE = "https://query2.finance.yahoo.com"
+
+#: **An explicit exception, recorded here so it is not an accident.**
+#:
+#: `query2.finance.yahoo.com/robots.txt` is two lines - `User-agent: *` / `Disallow: /` -
+#: so every path on the host is disallowed to every crawler, this one included. Enforcing
+#: it would mean this connector never fetches anything again.
+#:
+#: What is being fetched is the JSON backend of Yahoo's own public chart page, at one
+#: request per second, for a handful of symbols, for research that is not redistributed -
+#: the licence below already says `redistribution_allowed=False`. That is a defensible
+#: reading of a blanket crawler directive and it is still a reading, not permission. The
+#: alternative is a paid feed, which is the honest fix and a P7 decision.
+#:
+#: Flipping this to `True` disables Yahoo ingestion outright and breaks nothing else; it is
+#: one line, on purpose, so the choice stays reversible and visible.
+_RESPECT_ROBOTS = False
 SOURCE_NAME = "Yahoo Finance"
-_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) quant_model/0.1 research"
+#: Browser-shaped because the chart endpoint refuses clients that are not, and carrying a
+#: contact anyway: a source that wants to complain before blocking us needs somewhere to
+#: complain to, and the old string gave Yahoo nowhere.
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "quant_model/0.1 (nnatuanyafrankoguguo@churchofjesuschrist.org) research"
+)
 
 #: US equities trade in cents; four decimals keeps sub-penny prints and drops float noise.
 _PRICE_PLACES = Decimal("0.0001")
@@ -131,10 +153,20 @@ class YahooChartConnector(Connector[YahooRecord]):
 
     name = "yahoo_chart"
     rate_limit_per_sec = 1.0
-    politeness_delay_sec = 1.0
+    #: `DATA_FOUNDATION.md` §3.5 asks for 1 request per 2-5 seconds per domain, and names
+    #: exactly one exception - EDGAR, which SEC explicitly permits at <=10/s. This was 1.0,
+    #: which is not that, and it went unnoticed while nothing enforced it. Yahoo is the
+    #: *least* eligible connector for an exception: its robots.txt disallows the whole host,
+    #: so it is precisely the "site that never agreed to be scraped" the rule is written for.
+    politeness_delay_sec = 2.0
 
-    def __init__(self, *, timeout_sec: float = 60.0) -> None:
+    def __init__(self, *, timeout_sec: float = 60.0, fetcher: PoliteFetcher | None = None) -> None:
         self._timeout = timeout_sec
+        #: Injectable so a test can drive `fetch` without a network or a real clock.
+        #: `None` means the process-wide one, which is what production always wants.
+        self._fetcher = fetcher or shared_fetcher(
+            user_agent=_USER_AGENT, respect_robots=_RESPECT_ROBOTS
+        )
 
     def declare_licence(self) -> DataSourceLicence:
         """Matches the reviewed `data_sources` row seeded in migration 0012."""
@@ -180,15 +212,18 @@ class YahooChartConnector(Connector[YahooRecord]):
             "includeAdjustedClose": "true",
         }
         url = f"{_BASE}/v8/finance/chart/{symbol}"
-        response = httpx.get(
-            url, params=query, headers={"User-Agent": _USER_AGENT}, timeout=self._timeout
-        )
-        response.raise_for_status()
-        return RawResponse(
-            data=response.content,
-            media_type="application/json",
-            url=f"{url}?" + "&".join(f"{k}={v}" for k, v in query.items()),
-            http_status=response.status_code,
+        return require_document(
+            self._fetcher.get(
+                url,
+                params=query,
+                rate_per_sec=self.rate_limit_per_sec,
+                politeness_delay_sec=self.politeness_delay_sec,
+                media_type="application/json",
+                timeout=self._timeout,
+                # Both ends of the window belong in the recorded URL; `params` would come
+                # back in whatever order httpx encoded them.
+                record_url=f"{url}?" + "&".join(f"{k}={v}" for k, v in query.items()),
+            )
         )
 
     def parse(self, raw: RawResponse) -> list[YahooRecord]:

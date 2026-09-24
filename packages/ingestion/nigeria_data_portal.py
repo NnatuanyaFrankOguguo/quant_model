@@ -65,7 +65,6 @@ import datetime as dt
 import json
 from decimal import Decimal, InvalidOperation
 
-import httpx
 import structlog
 
 from packages.ingestion.base import (
@@ -74,6 +73,7 @@ from packages.ingestion.base import (
     MacroRecord,
     RawResponse,
 )
+from packages.ingestion.polite import DEFAULT_MAX_ATTEMPTS, PoliteFetcher, shared_fetcher
 
 __all__ = [
     "CPI_DATASET",
@@ -102,8 +102,14 @@ class NigeriaDataPortalConnector(Connector):
     rate_limit_per_sec = 0.5
     politeness_delay_sec = 2.0
 
-    def __init__(self, *, timeout_sec: float = 120.0) -> None:
+    def __init__(self, *, timeout_sec: float = 120.0, fetcher: PoliteFetcher | None = None) -> None:
         self._timeout = timeout_sec
+        # The 403 in the comment above is why this matters here more than anywhere: this is
+        # the one connector whose unspaced second request has already been refused. The
+        # declared 0.5/s and 2s delay now reach the request instead of describing it.
+        #
+        # Injectable so a test can drive `_pivot` without a network or a real clock.
+        self._fetcher = fetcher or shared_fetcher(user_agent=_USER_AGENT)
 
     def declare_licence(self) -> DataSourceLicence:
         """The portal's row, not NBS's.
@@ -142,18 +148,18 @@ class NigeriaDataPortalConnector(Connector):
         Without it the stored document says only "the pivot endpoint", and six months from
         now nobody could tell which series the file holds.
         """
-        response = httpx.post(
+        return self._fetcher.post(
             _PIVOT_URL,
             json=request,
-            timeout=self._timeout,
-            headers={"User-Agent": _USER_AGENT, "Content-Type": "application/json"},
-        )
-        response.raise_for_status()
-        return RawResponse(
-            data=response.content,
+            rate_per_sec=self.rate_limit_per_sec,
+            politeness_delay_sec=self.politeness_delay_sec,
             media_type="application/json",
-            url=f"{_PIVOT_URL}?{query}",
-            http_status=response.status_code,
+            timeout=self._timeout,
+            record_url=f"{_PIVOT_URL}?{query}",
+            # `post` defaults to one attempt because a retried POST can mean the server did
+            # the work twice. This one is a read-only pivot query, so repeating it is safe
+            # and a 503 on a free portal is worth waiting out.
+            max_attempts=DEFAULT_MAX_ATTEMPTS,
         )
 
 

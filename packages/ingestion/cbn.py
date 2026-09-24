@@ -55,7 +55,6 @@ import json
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 
-import httpx
 import structlog
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -70,6 +69,7 @@ from packages.ingestion.base import (
     RawResponse,
     _data_source_id,
 )
+from packages.ingestion.polite import PoliteFetcher, require_document, shared_fetcher
 
 __all__ = [
     "CbnConnector",
@@ -95,8 +95,16 @@ class CbnConnector(Connector):
 
     path: str = ""
 
-    def __init__(self, *, timeout_sec: float = 90.0) -> None:
+    def __init__(self, *, timeout_sec: float = 90.0, fetcher: PoliteFetcher | None = None) -> None:
         self._timeout = timeout_sec
+        # Shared, not per-instance: the three CBN connectors below are three objects
+        # pointed at one host, and three allowances for one host would be the unthrottled
+        # behaviour with extra steps. `www.cbn.gov.ng/robots.txt` allows `/api/`, where all
+        # three live - it disallows `/*.asp$`, and those endpoints are 404 anyway.
+        #
+        # Injectable so a test can drive `fetch` without a network or a real clock; `None`
+        # means the process-wide one, which is what production always wants.
+        self._fetcher = fetcher or shared_fetcher(user_agent=_USER_AGENT)
 
     def declare_licence(self) -> DataSourceLicence:
         """Matches the reviewed `data_sources` row seeded in migration 0004.
@@ -126,17 +134,19 @@ class CbnConnector(Connector):
         )
 
     def fetch(self, **params: object) -> RawResponse:
-        url = f"{_BASE}{self.path}"
-        response = httpx.get(
-            url, timeout=self._timeout, headers={"User-Agent": _USER_AGENT}, follow_redirects=True
-        )
-        response.raise_for_status()
-        return RawResponse(
-            data=response.content,
-            media_type="application/json",
-            url=url,
-            http_status=response.status_code,
-            etag=response.headers.get("etag"),
+        """One JSON endpoint, at the rate this connector declared.
+
+        The declared 0.5/s and 2s politeness delay now reach the fetch instead of sitting
+        in `data_sources` as documentation. Redirects are still followed - the site was
+        rebuilt once already and the old paths moved rather than vanished."""
+        return require_document(
+            self._fetcher.get(
+                f"{_BASE}{self.path}",
+                rate_per_sec=self.rate_limit_per_sec,
+                politeness_delay_sec=self.politeness_delay_sec,
+                media_type="application/json",
+                timeout=self._timeout,
+            )
         )
 
 
