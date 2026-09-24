@@ -69,27 +69,42 @@ export default async function CompanyPage({ params, searchParams }: PageProps) {
         every one says where it came from.
       </p>
 
-      <h2>How much of what it sold it kept</h2>
+      <h2>{noMargins ? "What it earned on what it holds" : "How much of what it sold it kept"}</h2>
 
       {noMargins ? (
-        <div className="notice">
-          <h3>This filing does not report what the four margins need</h3>
-          <p>
-            A margin measures profit against sales, so it needs both — and this
-            statement does not report them in that shape. Not every company files that
-            way: banks and insurers commonly do not, because they have no cost of making
-            a product to set against what they sold.
-          </p>
-          <p>
-            Nothing has been estimated in their place, and no zero is standing in for a
-            blank. The figures further down are built from other lines, and many of them
-            are present.
-          </p>
+        <>
+          <div className="grid cols-4">
+            {fallbackLead(r, data.currency).map((figure) => (
+              <Stat
+                key={figure.name}
+                value={figure.value}
+                name={figure.name}
+                note={figure.note}
+              />
+            ))}
+          </div>
+
+          <div className="explain">
+            <span className="tag">Why these, and not margins</span>
+            <p>
+              A margin measures profit against sales, so it needs both — and this filing
+              does not report them in that shape. Not every company files that way: banks
+              and insurers commonly do not, because they have no cost of making a product
+              to set against what they sold. Nothing has been estimated in their place,
+              and no zero is standing in for a blank.
+            </p>
+            <p>
+              So the figures above measure the year&rsquo;s profit against what the
+              company owns and what its owners put into it, which this filing does report.
+              Each one is explained again in the groups below.
+            </p>
+          </div>
+
           <details className="more">
             <summary>What a margin is, for when you meet one</summary>
             <MarginExplainer currency={data.currency} />
           </details>
-        </div>
+        </>
       ) : (
         <>
           <div className="grid cols-4">
@@ -249,6 +264,46 @@ export default async function CompanyPage({ params, searchParams }: PageProps) {
       </Suspense>
     </>
   );
+}
+
+/**
+ * What to lead with when the four margins are absent - three of the twenty-four companies
+ * held, and not a gap in the data: a bank reports deposits and loans, not sales and the
+ * cost of making something, so there is nothing for a margin to measure.
+ *
+ * Drawn only from figures this page already explains further down, and taken in this
+ * order until four are found. Deterministic, so two banks lead with the same figures in
+ * the same places, and it can never put a word in the lead that the reader meets nowhere
+ * else. Fewer than four is allowed - DESIGN.md §2 caps the lead, it does not fill it.
+ */
+function fallbackLead(r: Ratios["ratios"], currency: string) {
+  const candidates = [
+    {
+      present: r.roe,
+      name: "Return on equity",
+      value: percent(r.roe),
+      note: "the year's profit against the money its owners have in it",
+    },
+    {
+      present: r.roa,
+      name: "Return on assets",
+      value: percent(r.roa),
+      note: "the same profit against everything the company owns",
+    },
+    {
+      present: r.eps,
+      name: "Earnings per share",
+      value: money(r.eps, currency),
+      note: "that profit divided by the number of shares",
+    },
+    {
+      present: r.liabilities_to_assets,
+      name: "Liabilities to assets",
+      value: ratio(r.liabilities_to_assets),
+      note: "how much of what it owns is owed to somebody else",
+    },
+  ];
+  return candidates.filter((c) => !isMissing(c.present)).slice(0, 4);
 }
 
 /**

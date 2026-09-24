@@ -154,7 +154,11 @@ Do not add a second module beside a page: there were two, and before anyone noti
 had drifted to two date formatters and two words for a missing value.
 
 `.wrap-cell` is not scoped to `td` — a `<th scope="row">` is the cell most likely to hold
-the long text it exists for.
+the long text it exists for. It is not automatic, though: its 18rem floor buys even
+columns in a table that was going to scroll anyway, and forces scrolling on a narrow one
+that would otherwise fit. Use it when the row header holds prose **and** the table scrolls
+regardless; leave it off when the label is short, or when dropping the floor is what lets
+a two-column table fit at 320px with its value still beside its label.
 
 ---
 
