@@ -264,7 +264,15 @@ async function Result(props: ValuationProps) {
               </tbody>
             </table>
           </div>
-          <p className="scroll-hint">The table scrolls sideways on a narrow screen.</p>
+          {/* Conditional on purpose. `.scroll-hint` hides at a *viewport* of 860px, but
+              a table inside `details.more` sits in a container capped at `--prose` and
+              frozen at 551px, so this one stops scrolling around 500px of viewport and
+              the hint stays visible for another 360px. Phrased as a condition it is true
+              at every width, and still tells a 320px reader what to do. */}
+          <p className="scroll-hint">
+            If this table is wider than your screen, it scrolls sideways rather than the
+            page.
+          </p>
         </div>
       </details>
 
@@ -341,10 +349,11 @@ async function Result(props: ValuationProps) {
               </tbody>
             </table>
           </div>
-          {/* No `.scroll-hint` here on purpose. This table has two columns and its row
-              headers wrap, so it fits 320px without scrolling - measured at 253px in a
-              253px scroller. A hint saying it scrolls would be the one thing this site
-              cannot afford to print: something that is not so. */}
+          {/* No `.scroll-hint` here at all. Two columns whose row headers wrap: measured
+              at 253/551/551 against containers of 253/551/551, so it fits at every width
+              and never scrolls. Not given `.wrap-cell` either - the 18rem floor would
+              push it past its container and make a table that fits start scrolling,
+              which on two columns hides the amount from its own label. */}
         </div>
       </details>
 

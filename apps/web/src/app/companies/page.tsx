@@ -139,7 +139,13 @@ export default async function CompaniesPage() {
           </tbody>
         </table>
       </div>
-      <p className="scroll-hint">The table scrolls sideways on a narrow screen.</p>
+      {/* The same conditional wording as the valuation tables. This one sits at top
+          level, where the container does track the viewport, so a flat assertion would
+          in fact be true here - but one sentence that holds everywhere beats two that
+          each have to be re-checked against their own container. */}
+      <p className="scroll-hint">
+        If this table is wider than your screen, it scrolls sideways rather than the page.
+      </p>
 
       <div className="source">
         <dl>
