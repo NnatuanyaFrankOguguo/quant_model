@@ -7,7 +7,7 @@
       scanned --> OCR                         (not built; no scanned fixture yet)
     --> Claude reconciles to canonical keys   `Reconciler`, below - the missing box
     --> Deterministic validation              packages.normalize.validation
-      passes, confidence >= 0.85 --> store    packages.normalize.manual.enter_statement
+      passes, confidence >= 0.85 --> store    NOT YET BUILT - see below
       fails or low confidence    --> queue    packages.normalize.review
     --> correction stored as a few-shot example
 
@@ -29,6 +29,27 @@ gate is ahead of the cost or the harm it prevents:
 * **validation** is before the store, which is what `validate_candidate` exists for;
 * the **store** happens only on `STORED`, because *"fails or low confidence -> human review
   queue"* means the queue instead of the store, not as well as it.
+
+## The store does not exist yet, and `enter_statement` cannot be it
+
+An earlier version of this docstring said the write was
+`packages.normalize.manual.enter_statement`'s job. That was wrong, and wrong in a way worth
+recording rather than quietly fixing.
+
+`enter_statement` hardcodes `extraction_method='manual'` and refuses an empty
+`reviewed_by` - *"a hand-typed figure is only as good as the name attached to it"*. Both
+are right for P3.2 and both are exactly wrong here. An extraction that reaches `STORED`
+reached it **because no human was needed**; putting it through that path would label a
+model's reading as hand-typed and attribute it to somebody who never saw the page. That is
+a provenance lie, and provenance is the one thing this system sells.
+
+So `extract_document` returns the decision and writes no figures. `decision.status` is the
+instruction and the caller carries it out - which today means nothing does, because the
+`llm_hybrid` write path has still to be built. The two paths share a great deal (the
+statement row, the permitted-key check, the refuse-if-already-entered guard, the
+parse-everything-before-writing ordering) and differ on the two fields that matter most, so
+the right shape is a shared writer rather than a flag on either - and that is a decision to
+make deliberately, not in passing.
 
 ## Every run leaves a row
 
@@ -179,10 +200,14 @@ def extract_document(
 ) -> ExtractionOutcome:
     """One PDF through P4.1's pipeline, up to but not including the write.
 
-    Returns what should happen rather than doing the last step, because the write is
-    `enter_statement`'s job and it takes a reviewer's name: a `STORED` outcome is the
-    pipeline saying *this needs no human*, and the caller that has the security id and the
-    document row performs it. `decision.status` is the instruction.
+    Returns what should happen rather than doing it. A `STORED` outcome is this pipeline
+    saying *no human is needed here*; `decision.status` is the instruction, and the caller
+    carries it out.
+
+    Today no caller does, because the `llm_hybrid` write path has still to be built -
+    `enter_statement` cannot serve as it, for the reason in the module docstring. Nothing
+    here is blocked on that: the decision is the useful artefact and the `extraction_jobs`
+    row records it either way.
 
     Raises `BudgetExceededError` before calling the model, and nothing else: every other
     failure is recorded on the job row and returned, because a document that fell over is
