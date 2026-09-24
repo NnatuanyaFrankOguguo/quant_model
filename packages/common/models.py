@@ -1141,6 +1141,141 @@ class NewsItem(Base):
     data_source: Mapped[DataSource] = relationship()
 
 
+class SecurityAlias(Base):
+    """A name people use for a company, pointed at a security. `docs/08` §2.6, 0027.
+
+    **Undated, on purpose, and that is the resolution of a contradiction in `docs/08`.**
+    §1.3 lists `valid_from`/`valid_to` as the columns for "time-bounded attributes such as
+    tickers *and name aliases*"; §2.6's DDL for this table has neither. Migration 0027
+    argues the case at length and decides against them. In one line: a ticker is
+    *reassignable*, so its claim is only true inside a window, whereas a name is not -
+    "GTBank" meant Guaranty Trust in 2019 and still means it in a 2026 article written by
+    a journalist who never changed the habit. Dating that would lose the tag and buy
+    nothing.
+
+    The case §1.3 is really describing - one string meaning company A and later company B
+    - is a **ticker**, and it is already served by `security_identifiers` and
+    `packages.common.identity.resolve_security(value, as_of)`. So **no ticker is ever
+    copied in here**: an undated copy of a dated identifier is the exact bug `identity.py`
+    exists to prevent, and it would route around `OPERATIONS.md` §1.4's rule by renaming
+    the column.
+
+    `source` separates a row a script derived from `companies.legal_name` from one a
+    person vouched for - migration 0023 made the same argument for `trading_calendar`.
+    There is no `no_update` trigger, which matches every other reference table here; what
+    keeps a tag honest when an alias is corrected is `NewsTag.matched_text`, which records
+    the article's own words rather than the alias row's.
+    """
+
+    __tablename__ = "security_aliases"
+    __table_args__ = (
+        CheckConstraint(
+            "alias_type IN ('legal', 'brand', 'former', 'colloquial')",
+            name="alias_type_is_in_the_contract",
+        ),
+        CheckConstraint("btrim(alias) <> ''", name="alias_is_not_blank"),
+        # Junk rejection only. "3M" is why the floor is two. The rule that stops a short
+        # bare token matching ordinary prose is in `packages.normalize.tagging`, where it
+        # can demand a corporate cue instead of refusing the row outright.
+        CheckConstraint("char_length(btrim(alias)) >= 2", name="alias_is_long_enough"),
+        CheckConstraint("btrim(source) <> ''", name="alias_source_is_not_blank"),
+        # `docs/08` §2.6 keys this `UNIQUE (alias, security_id)`, which admits "GTCO" and
+        # "gtco" as two rows for one security. The matcher folds case, so both would fire
+        # on one headline and the article would carry the company twice.
+        Index(
+            "ux_security_aliases_one_per_security",
+            "security_id",
+            text("lower(btrim(alias))"),
+            unique=True,
+        ),
+        Index("ix_security_aliases_security", "security_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), nullable=False)
+    alias: Mapped[str] = mapped_column(Text, nullable=False)
+    # 'legal' | 'brand' | 'former' | 'colloquial' - `docs/08` §2.6's vocabulary.
+    alias_type: Mapped[str] = mapped_column(Text, nullable=False)
+    # `derived:companies.legal_name`, `manual:<who>`. How strong this claim is.
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        TZDateTime, nullable=False, server_default=func.now()
+    )
+
+    security: Mapped[Security] = relationship()
+
+
+class NewsTag(Base):
+    """This article is about this security, and here is the substring that says so. P5.2.
+
+    `docs/08` §2.6, migration 0027. `docs/03` P5.2: *"a false tag on a watchlist alert is
+    the fastest way to make a brief untrustworthy."* Three columns exist because of that
+    sentence.
+
+    **`matched_text`** is the exact substring of the article that caused the tag. A tag
+    whose evidence cannot be seen cannot be disproved, and a brief nobody can check is the
+    untrustworthy one. It also survives a later correction to the alias row, because it
+    records what the article said rather than what the table now says.
+
+    **`method`** says what kind of evidence it was, and admits a fourth value `ticker`
+    beyond §2.6's three. A symbol resolved through the dated identifier table is not a
+    name found in the alias table, and recording the two identically would be a
+    provenance lie.
+
+    **`tagger_version` is in the primary key**, exactly as `model_version` is in
+    `news_sentiment` - §2.6's own note there is that re-scoring with a new model "adds
+    rows rather than destroying the old scores, so you can compare". Without it, improving
+    the matcher would mean an UPDATE, which `CLAUDE.md` forbids and the `no_update`
+    trigger rejects.
+
+    `tagged_at` is provenance and nothing else. The point-in-time date of a tag is the
+    article's `NewsItem.known_as_of`; a feature join on our processing time would be
+    reading the scheduler's cron entry as if it were the market (`docs/08` §1.3).
+    """
+
+    __tablename__ = "news_tags"
+    __table_args__ = (
+        CheckConstraint(
+            "method IN ('alias', 'fuzzy', 'ticker', 'llm')", name="tag_method_is_in_the_contract"
+        ),
+        # Strictly above zero: a zero-confidence tag still prints the company's name.
+        CheckConstraint(
+            "confidence > 0 AND confidence <= 1", name="tag_confidence_is_a_probability"
+        ),
+        CheckConstraint("btrim(matched_text) <> ''", name="tag_matched_text_is_not_blank"),
+        CheckConstraint("btrim(tagger_version) <> ''", name="tag_tagger_version_is_not_blank"),
+        # An equivalence between two expressions over NOT NULL columns, so it can never
+        # evaluate to NULL and be silently satisfied. Migration 0021 is this repository's
+        # record of what a CHECK that admits every NULL costs.
+        CheckConstraint(
+            "(alias_id IS NOT NULL) = (method IN ('alias','fuzzy'))",
+            name="tag_cites_an_alias_row_iff_it_matched_one",
+        ),
+        Index("ix_news_tags_security", "security_id", "news_id"),
+    )
+
+    news_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("news_items.id"), primary_key=True, nullable=False
+    )
+    security_id: Mapped[int] = mapped_column(
+        ForeignKey("securities.id"), primary_key=True, nullable=False
+    )
+    method: Mapped[str] = mapped_column(Text, primary_key=True, nullable=False)
+    tagger_version: Mapped[str] = mapped_column(Text, primary_key=True, nullable=False)
+    # The estimated probability that this tag is correct, on one scale for every method.
+    # `packages.normalize.tagging` pins each tier's value to a stated argument.
+    confidence: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    matched_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Which alias row fired. NULL for `ticker` and `llm`, which cite no alias row.
+    alias_id: Mapped[int | None] = mapped_column(ForeignKey("security_aliases.id"), nullable=True)
+    tagged_at: Mapped[dt.datetime] = mapped_column(
+        TZDateTime, nullable=False, server_default=func.now()
+    )
+
+    news_item: Mapped[NewsItem] = relationship()
+    alias: Mapped[SecurityAlias | None] = relationship()
+
+
 __all__ = [
     "AuditLog",
     "Base",
@@ -1154,9 +1289,11 @@ __all__ = [
     "MacroObservation",
     "MacroSeries",
     "NewsItem",
+    "NewsTag",
     "Principal",
     "PrincipalToken",
     "Security",
+    "SecurityAlias",
     "SourceDocument",
     "SystemConfig",
     "Watchlist",

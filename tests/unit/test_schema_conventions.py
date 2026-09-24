@@ -138,6 +138,21 @@ MODEL_READABLE_TABLES: set[str] = {
     # "indicators", "ml_features", "news_sentiment"
 }
 
+#: Tables a model reads whose **vintage** is inherited from a parent row rather than
+#: repeated. Exempt from the `known_as_of` rule, but only by name and only with a reason -
+#: the same escape hatch as `USER_SCOPED_VIA_PARENT` and used just as sparingly. The bar
+#: is that the parent's `known_as_of` is the *only* correct vintage for the child, so a
+#: copy could only ever drift from it.
+MODEL_READABLE_VIA_PARENT: dict[str, str] = {
+    "news_tags": (
+        "P5.2, migration 0027. A tag is read by P5.4's brief and by P7's features, always "
+        "through `news_items`, and the date it becomes knowable is the article's - a "
+        "reader who has the article knows which company it is about. `tagged_at` is our "
+        "processing time and `docs/08` §1.3 keeps that out of a feature join. Copying "
+        "`news_items.known_as_of` here would create a second place for one date to live."
+    ),
+}
+
 #: The business-date column names a model-readable table may use. A table needs at least
 #: one of these alongside `known_as_of`.
 BUSINESS_DATE_COLUMNS: frozenset[str] = frozenset(
@@ -208,6 +223,17 @@ STRUCTURAL_ONLY: dict[str, str] = {
     "persons": "identity of a director or officer; the dated facts about them are in entity_roles",
     "chart_of_accounts": "the canonical vocabulary, versioned; reference data (TG7)",
     "account_mappings": "source label -> canonical key, versioned; reference data (TG7)",
+    # --- P5.2, migration 0027 ---
+    "security_aliases": (
+        "name -> security_id; reference data, like `security_identifiers` beside it, and "
+        "deliberately **undated** where that one is dated. `docs/08` §1.3 lists "
+        "valid_from/valid_to for 'tickers and name aliases' and §2.6's DDL has neither; "
+        "0027 resolves it by arguing that a ticker is reassignable and a name is not, so "
+        "the dated case stays in `security_identifiers` behind "
+        "`identity.resolve_security`. No figure, no user data, and nothing a model joins "
+        "on a date - `news_tags` is what a model reads, and it takes its vintage from the "
+        "article."
+    ),
 }
 
 
@@ -277,6 +303,7 @@ def test_every_table_is_classified(db_connection: Connection) -> None:
         | set(USER_SCOPED_VIA_PARENT)
         | FIGURE_TABLES
         | MODEL_READABLE_TABLES
+        | set(MODEL_READABLE_VIA_PARENT)
         | set(STRUCTURAL_ONLY)
     )
     unclassified = sorted(_tables(db_connection) - known)
@@ -285,8 +312,9 @@ def test_every_table_is_classified(db_connection: Connection) -> None:
         + ", ".join(unclassified)
         + ". Add each to the right set at the top of tests/unit/test_schema_conventions.py "
         "— USER_SCOPED_TABLES, USER_SCOPED_VIA_PARENT, FIGURE_TABLES, "
-        "MODEL_READABLE_TABLES, or STRUCTURAL_ONLY with a stated reason. Defaulting a "
-        "table into 'unconstrained' is the failure this test exists to prevent."
+        "MODEL_READABLE_TABLES, MODEL_READABLE_VIA_PARENT, or STRUCTURAL_ONLY with a "
+        "stated reason. Defaulting a table into 'unconstrained' is the failure this test "
+        "exists to prevent."
     )
 
 
@@ -353,6 +381,27 @@ def test_model_readable_tables_are_point_in_time(
         assert business, (
             f"{table} has known_as_of but no business date column "
             f"(one of {sorted(BUSINESS_DATE_COLUMNS)}). One date is never enough."
+        )
+
+
+def test_a_table_exempted_via_its_parent_actually_has_one(
+    schema: dict[str, dict[str, dict[str, str]]],
+) -> None:
+    """`MODEL_READABLE_VIA_PARENT` is an escape hatch, so it may not be vacuous.
+
+    The exemption is that the vintage lives on a parent row. A child with no NOT NULL
+    foreign key to reach that parent through has no vintage at all, which is the
+    look-ahead hole the rule exists to close, wearing the exemption as a disguise.
+    """
+    parents = {"news_tags": "news_id"}
+    for table in sorted(MODEL_READABLE_VIA_PARENT):
+        if table not in schema:
+            continue
+        column = parents[table]
+        assert column in schema[table], f"{table} is exempted via a parent it cannot reach"
+        assert schema[table][column]["is_nullable"] == "NO", (
+            f"{table}.{column} is nullable, so a row can exist with no parent and "
+            "therefore no vintage."
         )
 
 
