@@ -95,25 +95,41 @@ class AdjustedBars:
 def cumulative_factors_for(
     on_dates: list[dt.date], factors: list[tuple[dt.date, Decimal]]
 ) -> list[tuple[Decimal, int]]:
-    """`cumulative_factor` for many dates at once, by suffix product. Pure.
+    """`cumulative_factor` for many dates at once, and identically. Pure.
 
     A bar's multiplier is the product of every factor whose ex-date is strictly after it,
-    which is a suffix of the ex-date-sorted list. Computing the suffixes once makes each
-    bar a binary search instead of a full walk: O(m + n log m) rather than O(n * m).
+    which is a suffix of the ex-date-sorted list. Finding where that suffix starts is a
+    binary search rather than a walk, and there are at most as many distinct suffixes as
+    there are factors, so each one is computed once and reused.
+
+    **Each suffix is multiplied left to right, in the order `cumulative_factor` walks
+    it,** which is the part that is not an implementation detail. `Decimal` multiplication
+    is not associative at a finite context precision: folding the same seven factors from
+    the right instead of the left moved the 28th significant digit, and a property test
+    comparing the two functions caught it immediately. The difference is far below any
+    price anyone would notice - and that is exactly the kind of drift that survives for
+    years, because it is never large enough to look like a bug. Two functions answering
+    the same question agree exactly or one of them is wrong.
 
     `factors` must be sorted by ex-date, which is what `factors_known` returns.
     """
     ex_dates = [ex for ex, _ in factors]
-    # suffix[i] = product of factors[i:], so suffix[len] == 1 for a bar after them all.
-    suffix: list[Decimal] = [Decimal(1)] * (len(factors) + 1)
-    for i in range(len(factors) - 1, -1, -1):
-        suffix[i] = suffix[i + 1] * factors[i][1]
+    total = len(factors)
+    suffixes: dict[int, Decimal] = {}
+
+    def suffix_from(start: int) -> Decimal:
+        if start not in suffixes:
+            product = Decimal(1)
+            for _ex, factor in factors[start:]:
+                product *= factor
+            suffixes[start] = product
+        return suffixes[start]
 
     out: list[tuple[Decimal, int]] = []
     for on in on_dates:
         # First index whose ex-date is strictly greater than the bar's date.
         i = bisect.bisect_right(ex_dates, on)
-        out.append((suffix[i], len(factors) - i))
+        out.append((suffix_from(i), total - i))
     return out
 
 
