@@ -37,6 +37,7 @@ from services.api.schemas import (
     CompanyRatios,
     CompanyStatements,
     ConnectorHealthReport,
+    CorrectionRateReport,
     DocumentStored,
     Health,
     MacroObservations,
@@ -45,6 +46,7 @@ from services.api.schemas import (
     PersonalPing,
     PublicPing,
     RecentFilings,
+    ReviewQueue,
 )
 
 __all__ = ["MANIFEST", "RouteClass", "RouteSpec", "registered_routes"]
@@ -109,6 +111,16 @@ MANIFEST: dict[str, RouteSpec] = {
     # figure is the authenticated principal's.
     "POST /v1/personal/documents": RouteSpec(
         RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, DocumentStored
+    ),
+    # P4.4's review surface. Personal-tier not merely because it is write-adjacent: it
+    # names companies beside figures this system believes are wrong, which is an internal
+    # judgement rather than a fact about the company, and serving it anonymously would be
+    # publishing an accusation.
+    "GET /v1/personal/review/queue": RouteSpec(
+        RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, ReviewQueue
+    ),
+    "GET /v1/personal/review/correction-rate": RouteSpec(
+        RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, CorrectionRateReport
     ),
     "POST /v1/personal/statements": RouteSpec(
         RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, ManualEntryAccepted

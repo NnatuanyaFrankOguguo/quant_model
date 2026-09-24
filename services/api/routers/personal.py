@@ -9,13 +9,16 @@ sufficient (``docs/10_PRE_BUILD_CORRECTIONS.md`` 4.6, invariant I11).
 added to this file inherits the gate whether or not its author remembers it.
 """
 
+import datetime as dt
+from decimal import Decimal
+
 import structlog
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.orm import Session
 
 from packages.common.db import get_session
 from packages.common.identity import TICKER, AmbiguousIdentifierError, resolve_security
-from packages.common.timez import utctoday
+from packages.common.timez import utcnow, utctoday
 from packages.common.units import UnreadableFigureError
 from packages.ingestion.documents import NotAPdfError, store_uploaded_report
 from packages.normalize.manual import (
@@ -24,15 +27,19 @@ from packages.normalize.manual import (
     TypedFigure,
     enter_statement,
 )
+from packages.normalize.review import correction_rate, review_queue
 from services.api.deps import RequestContext, require_personal
 from services.api.errors import FieldedHTTPException
 from services.api.middleware.assert_response import GuardedAPIRoute
 from services.api.routers import API_V1
 from services.api.schemas import (
+    CorrectionRateReport,
     DocumentStored,
     ManualEntryAccepted,
     ManualStatementIn,
     PersonalPing,
+    ReviewQueue,
+    ReviewQueueItem,
 )
 
 _log = structlog.get_logger(__name__)
@@ -231,3 +238,92 @@ def _resolve_ticker(session: Session, body: ManualStatementIn) -> int:
             status.HTTP_422_UNPROCESSABLE_ENTITY, fields=["ticker"]
         ) from None
     return resolved.security_id
+
+
+@router.get("/review/queue", response_model=ReviewQueue)
+async def review_queue_endpoint(
+    limit: int = 50,
+    since: dt.date | None = None,
+    company_id: int | None = None,
+) -> ReviewQueue:
+    """What needs a human, worst first. P4.4.
+
+    `docs/03` P4.4 asks for the queue to be *"prioritised by materiality"* because *"a FIFO
+    queue wastes your scarcest resource - reviewer attention - on trivia"*. The ordering
+    and its components both come back, so a reviewer who disagrees with the order can see
+    what produced it instead of having to trust it.
+
+    Personal-tier, and not merely because it is a write-adjacent surface: this names
+    companies beside figures the system believes are wrong. That is an internal judgement,
+    not a fact about the company, and serving it anonymously would be publishing an
+    accusation.
+
+    `shown` is deliberately separate from `limit`. A queue that returned fifty items and
+    said nothing else looks identical whether fifty or five thousand are waiting, and the
+    depth of the queue is the number `docs/03` P4 watches for reviewer-capacity trouble.
+    """
+    # No `ctx` parameter: `require_personal` is a router-level dependency (see the
+    # APIRouter above), so the gate is already closed before this runs. Taking one here
+    # would imply the endpoint was doing the authorising, and neither of these needs the
+    # principal - unlike the write surfaces, where the reviewer's name is the point.
+    with get_session() as session:
+        items = review_queue(session, limit=limit, since=since, company_id=company_id)
+    return ReviewQueue(
+        generated_at=utcnow(),
+        shown=len(items),
+        limit=limit,
+        items=[
+            ReviewQueueItem(
+                company_id=item.company_id,
+                company_name=item.company_name,
+                period_type=item.period_type,
+                period_end=item.period_end,
+                finding=item.finding,
+                detail=item.why,
+                canonical_key=item.canonical_key,
+                priority=item.priority,
+                severity=item.severity,
+                share_of_anchor=item.share_of_anchor,
+                is_required=item.is_required,
+                occurrences=item.occurrences,
+                first_period=item.first_period,
+            )
+            for item in items
+        ],
+    )
+
+
+@router.get("/review/correction-rate", response_model=CorrectionRateReport)
+async def correction_rate_endpoint(
+    start: dt.date,
+    end: dt.date,
+) -> CorrectionRateReport:
+    """P4.4's headline metric over a window. P4 exit criterion.
+
+    `TEAM_BRIEF.md` Part 3: *"if it isn't falling, the extractor isn't learning and
+    something is wrong with the feedback loop."* That single number is the early-warning
+    signal for the whole phase, which is why it is served rather than computed by hand.
+
+    Restatements are returned beside the rate and excluded from it. A company revising its
+    own figures is the world changing its mind, not this system being wrong, and counting
+    them would move the rate every time a filer amended something - in whichever direction,
+    meaninglessly.
+    """
+    if end < start:
+        raise FieldedHTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, fields=["start", "end"])
+    with get_session() as session:
+        rate = correction_rate(session, start=start, end=end)
+    return CorrectionRateReport(
+        period_start=rate.period_start,
+        period_end=rate.period_end,
+        items_written=rate.items_written,
+        our_corrections=rate.our_corrections,
+        restatements=rate.restatements,
+        # Not zero when nothing was written. A dashboard showing 0.0% for a week nothing
+        # ran would read as the best week on record.
+        correction_rate=(
+            Decimal(rate.our_corrections) / Decimal(rate.items_written)
+            if rate.items_written
+            else None
+        ),
+    )

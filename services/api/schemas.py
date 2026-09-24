@@ -177,6 +177,70 @@ class ManualStatementIn(BaseModel):
     chart_version: str = "v1"
 
 
+class ReviewQueueItem(BaseModel):
+    """One thing a reviewer should look at, and why it is where it is in the list.
+
+    `priority` is not shown for its own sake - `docs/03` P4.4 asks for a queue ordered by
+    materiality because *"a FIFO queue wastes your scarcest resource - reviewer attention -
+    on trivia"*. So the components come too: a reviewer who disagrees with the ordering can
+    see what produced it rather than having to trust it.
+    """
+
+    company_id: int
+    company_name: str
+    period_type: str
+    period_end: dt.date
+    finding: str
+    detail: str
+    canonical_key: str | None
+    priority: Decimal
+    severity: Decimal
+    #: The figure as a share of its statement's anchor. 0 when there was nothing to divide by.
+    share_of_anchor: Decimal
+    is_required: bool
+    #: How many periods share this finding. More than one means systematic - a mapping or a
+    #: definition rather than a typo - which is the most useful thing to know before opening
+    #: anything.
+    occurrences: int
+    first_period: dt.date | None
+
+
+class ReviewQueue(BaseModel):
+    """What needs a human, worst first. Not registered public-legal.
+
+    It names companies alongside figures this system believes are wrong, which is an
+    internal judgement and not a fact about the company. Publishing it anonymously would
+    be publishing an accusation.
+    """
+
+    generated_at: dt.datetime
+    #: How many items were returned, which is not how many exist - see `limit`.
+    shown: int
+    limit: int
+    items: list[ReviewQueueItem]
+
+
+class CorrectionRateReport(BaseModel):
+    """`docs/03` P4.4's headline metric: *"if it isn't falling, the extractor isn't
+    learning and something is wrong with the feedback loop."*
+
+    `restatements` is reported beside `our_corrections` and excluded from the rate. A
+    company restating its own figures is the world changing its mind, not this system
+    getting it wrong, and counting them would show a falling error rate every time a filer
+    revised something - or a rising one, equally meaninglessly.
+    """
+
+    period_start: dt.date
+    period_end: dt.date
+    items_written: int
+    our_corrections: int
+    restatements: int
+    #: `our_corrections / items_written`. `None` when nothing was written in the window,
+    #: because a rate over zero items is not zero - it is unknown, and a dashboard showing
+    #: 0.0% for a week nothing ran would read as the best week on record.
+    correction_rate: Decimal | None
+
+
 class ManualEntryAccepted(BaseModel):
     """What was written. Not registered public-legal: a personal-tier surface only."""
 
