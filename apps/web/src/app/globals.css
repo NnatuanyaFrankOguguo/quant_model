@@ -418,11 +418,32 @@ td.num,
 th.num {
   text-align: right;
 }
-td.wrap-cell {
+/* Not `td.wrap-cell`: §8 wants the first cell of a row to be `<th scope="row">`, and that
+   is exactly the cell most likely to hold the long text this class exists for. Scoped to
+   `td` it withheld the min-width from every row header, which then collapsed to its
+   min-content width and drove the row height up. */
+.wrap-cell {
   white-space: normal;
   min-width: 18rem;
 }
-tbody tr:hover td {
+/* A row header is a label, not a column heading. Styled as one - uppercase, sticky, on a
+   tinted ground - it shouts, so pages were demoting real row headers to `<td>` and losing
+   the semantics §8 asks for. This is what `<th scope="row">` should look like. */
+th[scope="row"] {
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 0.93rem;
+  font-weight: 560;
+  color: var(--ink);
+  background: transparent;
+  position: static;
+  white-space: normal;
+}
+/* The row header is tinted with the rest of the row. Left out, it keeps its transparent
+   background and a hovered row starts with one pale cell - which reads as a gap in the
+   row rather than as the row being highlighted. */
+tbody tr:hover td,
+tbody tr:hover th[scope="row"] {
   background: var(--paper-sunk);
 }
 
@@ -451,12 +472,16 @@ tbody tr:hover td {
   background: var(--attention-wash);
 }
 .pill.broken,
-.pill.error,
-.pill.never_ran {
+.pill.error {
   color: var(--broken);
   background: var(--broken-wash);
 }
-.pill.neutral {
+/* "Never ran" is an absence of information, not a failure, and it was red until a page
+   put fifty-six of them on one screen. Fifty-six red rows say "fifty-six things are
+   broken", which is the opposite of what the report says when a scheduler simply is not
+   running. Grey says "we have nothing to tell you", which is the truth. */
+.pill.neutral,
+.pill.never_ran {
   color: var(--ink-soft);
   background: var(--paper-sunk);
   border-color: var(--line-strong);

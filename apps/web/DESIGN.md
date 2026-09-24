@@ -77,6 +77,11 @@ use the variables.
 | `--paper`, `--paper-sunk`, `--paper-raised` | page / recessed / card |
 | `--line`, `--line-strong` | borders |
 
+**"Never ran" is not a failure.** `.pill.never_ran` renders grey, not red. An absence of
+information is not a broken thing, and a page that paints fifty-six never-ran jobs red
+says "fifty-six things have failed" when the truth is that a scheduler is not running.
+Red is for something that ran and went wrong.
+
 ---
 
 ## 4. Responsive
@@ -108,6 +113,28 @@ number shows, at minimum:
 
 Use the `.source` block at the foot of the section. Never paraphrase an attribution.
 
+Where an endpoint sends no `attribution` of its own — `/v1/public/companies` does not —
+the `.source` block says that, rather than inventing one or being left off.
+
+### An absence says which kind of absence it is
+
+A missing figure is never a zero, never a bare dash and never an empty cell. It is one of
+two phrases, and which one is a fact about the world:
+
+| Phrase | Constant | Means |
+|---|---|---|
+| "not reported" | `NOT_REPORTED` | the filing does not contain this line. The filer's choice, not a fault |
+| "not loaded yet" | `NOT_LOADED` | we have not fetched it yet. Ours |
+
+This is the line the schema already draws between `not_in_filing` and `no_mapping`.
+Neither string is ever written into a page — import the constant.
+
+**When every headline figure on a section is absent, do not render the figures.** Four
+cards reading "not reported" is four dead ends and a reader who concludes the site is
+broken. Render one `.notice` saying which lines are missing and why, and fold the
+explainer inside it. A bank does not report the four margins; that is a fact about bank
+accounting, not a failure, and the page should say so in a sentence.
+
 ---
 
 ## 6. Components available
@@ -118,6 +145,16 @@ it here and to this list.
 `.wrap` `.card` `.grid.cols-2|3|4` `.stat-value` `.stat-name` `.stat-note` `.explain`
 `details.more` `.scroller` `table` `.pill.ok|attention|broken|neutral` `.source` `.notice`
 `.notice.bad` `.assumptions` `button` `.button.quiet` `.lede` `.muted` `.faint` `.num`
+
+### One formatting module
+
+`src/lib/format.ts` is the only one. Dates, numbers, money, units and the absence
+vocabulary all come from there, so the same fact is written the same way on every page.
+Do not add a second module beside a page: there were two, and before anyone noticed they
+had drifted to two date formatters and two words for a missing value.
+
+`.wrap-cell` is not scoped to `td` — a `<th scope="row">` is the cell most likely to hold
+the long text it exists for.
 
 ---
 
@@ -138,6 +175,8 @@ it here and to this list.
 
 - One `<h1>` per page, headings in order, no levels skipped.
 - Every table has a `<caption>`.
+- A row label is `<th scope="row">`, which is styled for the job (not uppercase, not
+  sticky). Do not demote a row header to `<td>` to escape the column-header styling.
 - Colour is never the only signal.
 - Interactive elements are real `<button>` and `<a>`, never a `<div>` with a handler.
 - `:focus-visible` is styled globally — do not remove it.
