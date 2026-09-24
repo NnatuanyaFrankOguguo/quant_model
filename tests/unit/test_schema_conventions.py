@@ -64,9 +64,12 @@ USER_SCOPED_TABLES: set[str] = {
     "principal_tokens",
     "watchlists",
     "llm_spend",
+    # --- P6, migration 0028 ---
+    "scenarios",  # a named assumption set belongs to the person who typed it
+    # --- P5.4, migration 0029 ---
+    "alert_deliveries",  # unique on (principal_id, idempotency_hash): one send per person
     # --- added by later phases; listed here the day the migration lands ---
-    # "portfolios", "positions", "transactions", "alerts", "alert_deliveries",
-    # "risk_limits", "scenarios", "tax_lots"
+    # "portfolios", "positions", "transactions", "alerts", "risk_limits", "tax_lots"
 }
 
 #: Tables where `principal_id` may be NULL, each with the reason it must be.
@@ -134,8 +137,14 @@ MODEL_READABLE_TABLES: set[str] = {
     # joins straight back to it. `published_at` is the business timestamp; `known_as_of`
     # is the Lagos date of it, generated from it so the two cannot drift.
     "news_items",
+    # --- P6 indicators, migration 0028 ---
+    # P7 reads these as features and joins on `known_as_of <= decision_date`. The vintage
+    # is a running maximum over every bar that fed the value, which for the recursive
+    # indicators is the whole history - so it is genuinely this row's own date and not the
+    # price bar's. Business date is `date`.
+    "indicators",
     # --- later phases ---
-    # "indicators", "ml_features", "news_sentiment"
+    # "ml_features"
 }
 
 #: Tables a model reads whose **vintage** is inherited from a parent row rather than
@@ -150,6 +159,15 @@ MODEL_READABLE_VIA_PARENT: dict[str, str] = {
         "reader who has the article knows which company it is about. `tagged_at` is our "
         "processing time and `docs/08` §1.3 keeps that out of a feature join. Copying "
         "`news_items.known_as_of` here would create a second place for one date to live."
+    ),
+    "news_sentiment": (
+        "P5.3, migrations 0029 and 0030. The same argument as `news_tags`, and the "
+        "anticipatory comment in MODEL_READABLE_TABLES guessed wrong: this table has no "
+        "`known_as_of` and must not grow one. A score is knowable exactly when the "
+        "article is - reading the headline is the whole input - so the article's vintage "
+        "is the only correct one. `scored_at` is when our process ran, and `docs/08` "
+        "§1.3 keeps processing time out of a feature join; a model that joined on it "
+        "would be reading the scheduler's cron entry as if it were the market."
     ),
 }
 
@@ -393,7 +411,7 @@ def test_a_table_exempted_via_its_parent_actually_has_one(
     foreign key to reach that parent through has no vintage at all, which is the
     look-ahead hole the rule exists to close, wearing the exemption as a disguise.
     """
-    parents = {"news_tags": "news_id"}
+    parents = {"news_tags": "news_id", "news_sentiment": "news_id"}
     for table in sorted(MODEL_READABLE_VIA_PARENT):
         if table not in schema:
             continue
