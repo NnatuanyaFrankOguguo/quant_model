@@ -129,6 +129,24 @@ two phrases, and which one is a fact about the world:
 This is the line the schema already draws between `not_in_filing` and `no_mapping`.
 Neither string is ever written into a page — import the constant.
 
+### Round what the system derived; print what it was given
+
+Two pages round differently and both are right, so the rule is worth stating rather than
+leaving each page to guess:
+
+- **A figure the system computed** is rounded. `gross_margin` arrives as
+  `0.4690516410716044992202536999`; those digits come from Decimal division, not from a
+  measurement, and the filing behind them reports to the nearest million. Printing 28
+  places claims precision the inputs never had.
+- **A figure the system was given** is printed verbatim, trailing zeros and all.
+  `16.7900%` is the datum exactly as the DMO published it. Rounding it edits a figure of
+  record.
+
+**No figure is ever hard-coded.** The front page once printed "14 economic series" as a
+literal while `/macro` listed thirteen — on a site whose entire promise is that every
+number carries its source. If a count is needed, the API counts it:
+`/v1/public/summary`.
+
 **When every headline figure on a section is absent, do not render the figures.** Four
 cards reading "not reported" is four dead ends and a reader who concludes the site is
 broken. Render one `.notice` saying which lines are missing and why, and fold the

@@ -476,6 +476,49 @@ def list_companies(session: Session, *, today: dt.date) -> list[CompanySummary]:
     return companies
 
 
+@dataclass(frozen=True)
+class HoldingsSummary:
+    """How much of each kind of thing is held. What the front page leads with."""
+
+    companies: int
+    statement_periods: int
+    macro_series: int
+
+
+def holdings_summary(session: Session) -> HoldingsSummary:
+    """The three counts the front page leads with, counted in the database.
+
+    They were previously worked out in the browser - `companies.length` and a `reduce`
+    over every record - which AD-3 forbids, and which also meant fetching two dozen full
+    company records to print two numbers. One of the three was not counted at all but
+    typed in by hand, and had already drifted from the truth.
+
+    `statement_periods` counts distinct `(company_id, period_end)` pairs rather than
+    distinct `period_end`, because two companies reporting the same quarter is two
+    periods held and not one. That is the same total `list_companies` produces - it
+    counts distinct `period_end` per company - added up in SQL instead of in a component.
+    """
+    primary = primary_tickers()
+    held = (
+        select(Company.id.label("id"))
+        .join(Security, Security.company_id == Company.id)
+        .join(primary, primary.c.security_id == Security.id)
+        .subquery()
+    )
+    pairs = (
+        select(Statement.company_id, Statement.period_end)
+        .where(Statement.superseded_by.is_(None))
+        .where(Statement.company_id.in_(select(held.c.id)))
+        .distinct()
+        .subquery()
+    )
+    return HoldingsSummary(
+        companies=session.execute(select(func.count()).select_from(held)).scalar_one(),
+        statement_periods=session.execute(select(func.count()).select_from(pairs)).scalar_one(),
+        macro_series=session.execute(select(func.count()).select_from(MacroSeries)).scalar_one(),
+    )
+
+
 def statements_as_known_on(
     session: Session,
     *,

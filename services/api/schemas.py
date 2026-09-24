@@ -418,6 +418,26 @@ class CompanyList(BaseModel):
     companies: list[CompanyInfo]
 
 
+@register_public_type
+class HoldingsSummary(BaseModel):
+    """How much of each kind of thing is held - what a front page leads with.
+
+    Counted here rather than by the caller. A page that adds these up for itself is
+    computing a displayed figure, which AD-3 puts on the server, and it also has to
+    fetch every record to do it.
+    """
+
+    counted_at: date = Field(description="The day these counts were taken")
+    companies: int = Field(description="Companies held under a primary ticker")
+    statement_periods: int = Field(
+        description=(
+            "Distinct (company, period_end) pairs across statements that have not been "
+            "superseded - two companies reporting the same quarter is two periods held"
+        )
+    )
+    macro_series: int = Field(description="Economic series registered, loaded or not")
+
+
 class Figure(BaseModel):
     """One line item at the vintage visible on the decision date."""
 

@@ -44,6 +44,7 @@ from services.api.schemas import (
     DividendYear,
     Figure,
     FilingSeen,
+    HoldingsSummary,
     JobHealth,
     MacroObservationPoint,
     MacroObservations,
@@ -216,6 +217,25 @@ async def operations_connectors(
             )
             for r in rows
         ],
+    )
+
+
+@router.get("/summary", response_model=HoldingsSummary)
+async def holdings_summary() -> HoldingsSummary:
+    """How much of each kind of thing is held. Three scalars, counted in the database.
+
+    Exists so a front page does not have to fetch every company and add the periods up
+    itself - AD-3 puts a displayed figure on the server, and the count of economic series
+    had no endpoint behind it at all, so it had been typed into the page by hand and had
+    drifted from thirteen to a hard-coded fourteen without anything noticing.
+    """
+    with get_session() as session:
+        counts = snapshot.holdings_summary(session)
+    return HoldingsSummary(
+        counted_at=utctoday(),
+        companies=counts.companies,
+        statement_periods=counts.statement_periods,
+        macro_series=counts.macro_series,
     )
 
 

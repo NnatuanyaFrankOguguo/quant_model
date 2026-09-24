@@ -163,6 +163,18 @@ export interface Dcf {
   terminal_share_of_value: string | null;
 }
 
+/**
+ * How much of each kind of thing is held. Three scalars the server counted, so the front
+ * page prints them rather than working them out - see `failTheBuildInstead` above for the
+ * other half of why a displayed figure belongs on the server.
+ */
+export interface HoldingsSummary {
+  counted_at: string;
+  companies: number;
+  statement_periods: number;
+  macro_series: number;
+}
+
 export interface MacroSeries {
   code: string;
   name: string;
@@ -206,6 +218,7 @@ export interface HealthReport {
 }
 
 export const api = {
+  summary: () => get<HoldingsSummary>("/v1/public/summary"),
   companies: () => get<{ companies: CompanySummary[] }>("/v1/public/companies"),
   ratios: (ticker: string) =>
     get<Ratios>(`/v1/public/companies/${encodeURIComponent(ticker)}/ratios`),

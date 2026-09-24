@@ -40,6 +40,7 @@ from services.api.schemas import (
     CorrectionRateReport,
     DocumentStored,
     Health,
+    HoldingsSummary,
     MacroObservations,
     MacroSeriesList,
     ManualEntryAccepted,
@@ -86,6 +87,7 @@ MANIFEST: dict[str, RouteSpec] = {
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, ConnectorHealthReport
     ),
     "GET /v1/public/companies": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyList),
+    "GET /v1/public/summary": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, HoldingsSummary),
     "GET /v1/public/companies/{ticker}/statements": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyStatements
     ),

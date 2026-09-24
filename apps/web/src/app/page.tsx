@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { api, ApiError, failTheBuildInstead } from "@/lib/api";
+import { api, ApiError, failTheBuildInstead, type HoldingsSummary } from "@/lib/api";
+import { count } from "@/lib/format";
 
 /**
  * The front door.
@@ -32,14 +33,11 @@ function Figure({
 }
 
 export default async function Home() {
-  let companies = 0;
-  let periods = 0;
+  let held: HoldingsSummary | null = null;
   let unreachable: string | null = null;
 
   try {
-    const list = await api.companies();
-    companies = list.companies.length;
-    periods = list.companies.reduce((n, c) => n + c.statement_periods, 0);
+    held = await api.summary();
   } catch (error) {
     failTheBuildInstead(error);
     unreachable =
@@ -70,16 +68,23 @@ export default async function Home() {
       ) : (
         <div className="grid cols-4">
           <Figure
-            value={String(companies)}
+            value={count(held?.companies)}
             name="Companies"
             note="US filers, from SEC EDGAR"
           />
           <Figure
-            value={periods.toLocaleString("en-GB")}
+            value={count(held?.statement_periods)}
             name="Reporting periods"
             note="Quarters and years held"
           />
-          <Figure value="14" name="Economic series" note="Nigeria and the US" />
+          <Figure
+            value={count(held?.macro_series)}
+            name="Economic series"
+            note="Nigeria and the US"
+          />
+          {/* Not a count of anything, and the only figure here with no query behind it.
+              It is a statement of what this system will not do - see below - so it is
+              written as a literal rather than dressed up as a measurement. */}
           <Figure value="0" name="Recommendations" note="By design — see below" />
         </div>
       )}

@@ -126,6 +126,31 @@ def test_companies_lists_apple_under_its_primary_ticker(client, apple_loaded) ->
     assert apple["filing_overdue"] is (dt.date.today() > dt.date(2026, 12, 29))
 
 
+def test_summary_counts_agree_with_the_pages_that_list_the_same_things(
+    client, apple_loaded
+) -> None:
+    """The three front-page figures, pinned to the endpoints listing the same things.
+
+    This is the regression test for a hard-coded count. The front page printed
+    "14 economic series" as a literal while /macro listed thirteen, and nothing
+    connected the two numbers, so the front door of a site whose whole promise is that
+    every figure carries its source was showing one that carried nothing and was wrong.
+
+    It also pins `statement_periods` to the sum the page used to compute for itself, so
+    that moving the arithmetic onto the server did not quietly change what it counts.
+    """
+    summary = client.get("/v1/public/summary")
+    assert summary.status_code == 200
+    counts = summary.json()
+
+    listed = client.get("/v1/public/companies").json()["companies"]
+    series = client.get("/v1/public/macro/series").json()["series"]
+
+    assert counts["companies"] == len(listed)
+    assert counts["statement_periods"] == sum(c["statement_periods"] for c in listed)
+    assert counts["macro_series"] == len(series)
+
+
 def test_statements_carry_provenance_and_the_filing_date(client, apple_loaded) -> None:
     response = client.get("/v1/public/companies/AAPL/statements", params={"period_type": "FY"})
     assert response.status_code == 200
