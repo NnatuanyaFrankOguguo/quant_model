@@ -487,11 +487,17 @@ h3 {
 }
 /* An absent figure is never a zero and never an empty cell. It is smaller and
    quieter than a real number so a column of them does not read as data. */
+.absent,
 .metric-value.absent,
 td.absent {
   font-size: var(--fs-small);
   font-weight: 400;
   color: var(--ink-faint);
+  /* An absence phrase is a short fixed string and must never wrap. Measured on
+     /macro: "not loaded yet" breaking across two lines in a 104px column took
+     rows from 54px to 74px, and a wrapped phrase reads like a wrapped value -
+     which is the one thing an absence must not look like. */
+  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------------------
@@ -554,10 +560,14 @@ caption {
   color: var(--ink-soft);
   padding: 0 var(--gap) var(--gap-sm);
 }
+/* Not sticky, deliberately. `position: sticky` on a header only works against
+   an ancestor that scrolls in that axis, and every table here sits in
+   `.scroller` - where `overflow-x: auto` computes `overflow-y: auto`, making
+   the scroller the scroll container for a box that never scrolls vertically.
+   The rule was present and did nothing. A sticky header would need the
+   scroller to own a max-height and scroll the rows itself, which is a
+   different table than this one. */
 thead th {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   background: var(--paper-sunk);
   font-size: var(--fs-micro);
   text-transform: uppercase;
@@ -590,6 +600,17 @@ tbody th[scope="row"] {
 td.num,
 th.num {
   text-align: right;
+  /* A figure never wraps. `1,766` broken across two lines is not a number any
+     more, and once one cell wraps the whole row's height doubles. */
+  white-space: nowrap;
+}
+/* Opt-in for a body cell that must hold one line - a date, a ticker, a pill.
+   Without this, the moment a table exceeds its `.scroller` every column
+   collapses to min-content and `31 Aug 2026` becomes three lines: a 29px row
+   turns into 73px and the density this design exists for is gone. */
+td.nowrap,
+th.nowrap {
+  white-space: nowrap;
 }
 /* Long prose in a cell. Not scoped to `td`: a row header is the cell most
    likely to hold it. Its 18rem floor buys even columns in a table that was
@@ -747,9 +768,14 @@ tbody tr:last-child th {
   border-left-color: var(--broken);
   background: var(--broken-wash);
 }
+/* Both, because a notice is often the first thing after the page's `<h1>` -
+   and §9 forbids skipping a level, so that title has to be able to be an `h2`
+   without inheriting the section spacing of one. */
+.notice h2,
 .notice h3 {
   margin: 0 0 var(--gap-xs);
   font-size: var(--fs-base);
+  font-weight: 650;
 }
 .notice p {
   margin: 0 0 var(--gap-sm);
@@ -798,6 +824,12 @@ tbody tr:last-child th {
 
 button,
 .button {
+  /* `inline-flex` so the class works on an `<a>`: a plain inline anchor
+     ignores `min-height` and vertical padding, so a link styled as a button
+     came out the wrong height and off-centre. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font: inherit;
   font-size: var(--fs-base);
   font-weight: 550;

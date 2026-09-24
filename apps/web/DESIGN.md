@@ -56,7 +56,10 @@ prohibited. **Describe and define, never evaluate or advise.**
 - A page may open with one `.page-note` line of orientation. One, not three.
 
 The old rule "lead with at most 4 headline figures" is **withdrawn**. A metric row of
-eight to twelve figures is correct and expected; that is what `.metrics` is for.
+eight to twelve figures is correct and expected where there are that many; that is what
+`.metrics` is for. **Never pad one.** `/v1/public/summary` counts three things and the
+overview leads with three — inventing a fourth to fill the row would be the hard-coded
+figure §6 forbids, wearing a layout rule as an excuse.
 
 ---
 
@@ -142,11 +145,12 @@ Never a zero, never a bare dash, never an empty cell.
 |---|---|---|
 | "not reported" | `NOT_REPORTED` | the filing does not contain this line. The filer's choice, not a fault |
 | "not loaded yet" | `NOT_LOADED` | we have not fetched it yet. Ours |
+| "no run recorded" | `NEVER_RAN` | the event has not happened. Nobody's absence — a job the scheduler has not reached |
 
 The line the schema already draws between `not_in_filing` and `no_mapping`. Import the
-constant; never write either string into a page. Render an absent figure with
-`.metric-value.absent` or `td.absent`, which makes it quieter than a real number so a
-column of them does not read as data.
+constant; never write any of the three into a page. Render an absent figure with
+`.absent`, which makes it quieter than a real number so a column of them does not read as
+data. The class works on any element — a `<td>`, a `.metric-value`, or a bare `<span>`.
 
 **When every headline figure in a section is absent, do not render the figures.** Render
 one `.notice` saying which lines are missing and why. A bank does not report the four
@@ -175,7 +179,10 @@ It must work on a phone. It is *better* on a large screen and that is fine to sa
   tells a narrow reader it scrolls and hides above 900px.
 - Grids use `repeat(auto-fit, minmax(min(100%, Npx), 1fr))`. The `min(100%, …)` is what
   stops overflow at 320px.
-- `.wrap-cell` is not automatic: its 18rem floor buys even columns in a table that was
+- `.wrap-cell` and `.nowrap` pull in opposite directions and neither is automatic.
+  `.nowrap` keeps one line in a body cell — use it on dates, tickers and pills, because
+  once a cell wraps the whole row's height doubles and the density is gone. `.num`
+  already implies it. `.wrap-cell`'s 18rem floor buys even columns in a table that was
   going to scroll anyway, and forces scrolling on a narrow one that would otherwise fit.
 - Test at **320px**, 768px and 1280px before calling a page done.
 
@@ -203,6 +210,9 @@ It must work on a phone. It is *better* on a large screen and that is fine to sa
 - One `<h1>` per page, headings in order, no levels skipped.
 - Every table has a `<caption>`.
 - A row label is `<th scope="row">`, styled for the job. Do not demote one to `<td>`.
+- **A `.notice` title may be an `h2` or an `h3`** and both are styled identically. Use
+  whichever keeps the order intact — a notice is often the first thing after the page's
+  `<h1>`, and an `h3` there is a skipped level.
 - The active nav item carries `aria-current="page"` — that attribute drives the styling,
   so the visual state and the announced state cannot diverge.
 - Colour is never the only signal.
@@ -217,7 +227,7 @@ From `globals.css`, plus `<Disclose>` from `@/components/disclose`.
 
 `.shell` `.brand` `.topbar` `.rail` `.main` `.search` `.security-head` `.delta.up|down|flat`
 `.tabs` `.metrics` `.metric` `.metric-name` `.metric-value` `.absent` `.panel` `.panel-head`
-`.panel-body` `.grid` `.scroller` `table` `.wrap-cell` `.scroll-hint` `.disclose`
+`.panel-body` `.grid` `.scroller` `table` `.wrap-cell` `.nowrap` `.scroll-hint` `.disclose`
 `.pill.ok|attention|broken|neutral` `.notice` `.notice.bad` `.source` `.page-note` `.prose`
 `.muted` `.faint` `.num` `button` `.button.quiet`
 

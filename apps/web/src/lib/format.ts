@@ -43,6 +43,18 @@ export const NOT_LOADED = "not loaded yet";
 /** The filing does not contain this line. The absence is the filer's, and is not a fault. */
 export const NOT_REPORTED = "not reported";
 
+/**
+ * The event has not happened. Nobody's absence at all - there is simply nothing to report
+ * yet.
+ *
+ * A third phrase because a scheduled job that has never run is neither of the two above:
+ * we have not failed to fetch it, and no publisher has declined to say it. Rendering it as
+ * "not loaded yet" would blame the pipeline for a job the scheduler has not reached, which
+ * is the same class of mistake as printing a zero for a missing figure - it is just a
+ * quieter one. Pairs with `.pill.never_ran`, which is grey for the same reason.
+ */
+export const NEVER_RAN = "no run recorded";
+
 /** True when the API sent no value - so a caller can choose which phrase fits. */
 export function isMissing(value: string | null | undefined): boolean {
   return value === null || value === undefined || value.trim() === "";

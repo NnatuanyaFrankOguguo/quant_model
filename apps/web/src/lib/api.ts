@@ -236,6 +236,16 @@ export interface MacroSeries {
   latest_known_as_of: string | null;
   latest_value: string | null;
   is_stale: boolean | null;
+  /**
+   * How long silence is normal for this series, and how long it has actually been.
+   *
+   * Both are the API's own, and `days_since_as_of` is here specifically so a page can
+   * say *how* late a series is without subtracting two dates in a component - which
+   * AD-3 forbids, and which would also be wrong, since the API measures it against its
+   * own clock rather than the reader's.
+   */
+  expected_lag_days: number | null;
+  days_since_as_of: number | null;
 }
 
 export interface JobHealth {
@@ -276,7 +286,7 @@ export const api = {
         `&growth=${encodeURIComponent(growth)}` +
         `&terminal_growth=${encodeURIComponent(terminal)}`,
     ),
-  macro: () => get<{ series: MacroSeries[] }>("/v1/public/macro/series"),
+  macro: () => get<{ series: MacroSeries[]; as_of: string }>("/v1/public/macro/series"),
   health: (windowDays = 7) =>
     get<HealthReport>(`/v1/public/operations/connectors?window_days=${windowDays}`),
 };
