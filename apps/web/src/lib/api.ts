@@ -11,8 +11,20 @@
 const API_BASE = process.env.QUANT_API_BASE ?? "http://127.0.0.1:8000";
 const TOKEN = process.env.QUANT_API_TOKEN ?? "";
 
-/** Long enough for a cold Neon compute to wake up, which it does on the first request. */
-const TIMEOUT_MS = 45_000;
+/**
+ * Long enough for a cold Neon compute to wake up, which it does on the first request -
+ * and longer still during a build, which is not the same problem.
+ *
+ * 45s is a budget for a reader waiting on a page. A build has nobody waiting, and since
+ * `failTheBuildInstead` turns a failed fetch into a failed build, a slow API and an
+ * unreachable one would otherwise look identical. Measured 2026-09-24: a 2.6-3.5s median
+ * across three public routes with a single 29.7s outlier - two thirds of the reader's
+ * budget, and near enough to it that a build would fail on a coin flip rather than on
+ * anything being wrong. The guard still fires for an API that is genuinely not there; it
+ * just no longer fires for one that is merely having a bad minute.
+ */
+const TIMEOUT_MS =
+  process.env.NEXT_PHASE === "phase-production-build" ? 180_000 : 45_000;
 
 export class ApiError extends Error {
   constructor(
