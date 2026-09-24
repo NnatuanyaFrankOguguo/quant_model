@@ -5,17 +5,34 @@ limiting, ETag/Last-Modified caching so unchanged documents are never re-fetched
 `DATA_FOUNDATION.md` §3.5's politeness rules: *"respect `robots.txt`; descriptive User-Agent
 with a contact email; **1 request per 2-5 seconds per domain**"*.
 
-**The gap this closes is that all of it was already declared and none of it ran.** Every
-connector sets `rate_limit_per_sec`, and `Connector`'s own comment explains why:
+## What was enforced before this, exactly
+
+Worth stating precisely, because an earlier version of this docstring said none of it ran
+and that was wrong about EDGAR.
+
+**EDGAR enforced its own.** `packages/ingestion/edgar.py` has had a process-wide `_Throttle`
+since P2 - a fixed 0.12s interval, shared by all five of its connectors through
+`_SHARED_THROTTLE`, with an injectable clock and a lock. It works, and this module does not
+replace it.
+
+**CBN, FRED and Yahoo enforced nothing.** Each called `httpx.get` directly with no spacing
+between calls.
+
+**And `rate_limit_per_sec` was read by nobody, EDGAR included.** Every connector declares
+it, `register()` writes it into `data_sources`, and the scheduler, the connectors and the
+fetch path all ignored it - EDGAR spaces requests by its own `MIN_INTERVAL_SEC` constant,
+which happens to agree with its declared 8.0/s but is not derived from it. So the number in
+the database was documentation, and a connector whose declared limit changed would have gone
+on fetching at the old rate.
+
+`Connector`'s own comment says what that costs:
 
     Declared, not remembered. EDGAR's <=10 req/s in P2 comes with a ~10-minute IP block when
     exceeded (`DATA_FOUNDATION.md` §C) - that belongs in code, not in your head.
 
-It belonged in code and was not in code. Every `fetch` called `httpx.get` directly, with no
-delay between calls, and the declared limit reached the database as a number in
-`data_sources.rate_limit_per_sec` that nothing read. `politeness_delay_sec` is the same
-story. The risk is not theoretical: an IP block costs a night's ingestion and there is no
-way to appeal it quickly.
+`politeness_delay_sec` is declared and unread everywhere, and no connector has ever sent a
+conditional request or consulted `robots.txt`. The risk is not theoretical: an IP block
+costs a night's ingestion and there is no way to appeal it quickly.
 
 ## Why the bucket is keyed on the domain
 
