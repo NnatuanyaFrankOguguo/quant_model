@@ -65,11 +65,35 @@ class ScheduledJob:
     # `Any`, not `object`: these are splatted into `Connector.run(**params)`, whose
     # keyword-only `storage` parameter is typed, and `object` values are not assignable to it.
     params: dict[str, Any]
-    #: APScheduler cron-ish fields. Deliberately coarse: these sources publish on a monthly
-    #: or quarterly rhythm, so polling more often than daily is load on someone else's
-    #: server for no new data.
-    hour: int = 6
+    #: APScheduler cron-ish fields. Deliberately coarse for a filing source: those publish
+    #: on a monthly or quarterly rhythm, so polling more often than daily is load on
+    #: somebody else's server for no new data.
+    #:
+    #: `"*"` means every hour, and is APScheduler's own syntax passed through unchanged. It
+    #: exists for news: an RSS feed is a *window*, not an archive, and BusinessDay's holds
+    #: five items - so a feed polled daily silently loses whatever scrolled off, and RSS
+    #: has no backfill to recover it with. A figure that was never fetched is different in
+    #: kind from one that was fetched and found empty.
+    hour: int | str = 6
     minute: int = 0
+
+    @property
+    def runs_hourly(self) -> bool:
+        """Whether this job's hour field means "every hour" rather than one of them."""
+        return isinstance(self.hour, str)
+
+    @property
+    def clock(self) -> str:
+        """When it runs, for the health report - which has to render a wildcard too.
+
+        `f"{hour:02d}"` raises on a string, and this is the one place the schedule is
+        turned into text, so the wildcard is spelled out here rather than guarded at
+        every reader.
+        """
+        if isinstance(self.hour, str):
+            return f"hourly at :{self.minute:02d}"
+        return f"{self.hour:02d}:{self.minute:02d}"
+
     job_id: str = ""
     #: How often the source publishes something new, in days, at the longest. A run
     #: that writes nothing inside that span is a quiet day, not a finding; a window

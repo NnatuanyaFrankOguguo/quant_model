@@ -23,11 +23,13 @@ from packages.ingestion.cbn import (
 from packages.ingestion.edgar import EdgarCompanyRefresh
 from packages.ingestion.fred import FRED_SERIES, FredConnector
 from packages.ingestion.manual_csv import MANUAL_SOURCES
+from packages.ingestion.ngx import AfxKwayisiConnector
 from packages.ingestion.nigeria_data_portal import (
     ITEM_KEYS,
     NigeriaDataPortalCpiConnector,
     NigeriaDataPortalGdpConnector,
 )
+from packages.ingestion.rss import feed_connectors
 from packages.ingestion.yahoo import YahooChartConnector
 from packages.scheduler.runner import Expectation, ScheduledJob
 
@@ -202,7 +204,86 @@ def build_jobs() -> list[ScheduledJob]:
     jobs.extend(price_job(ticker) for ticker in US_UNIVERSE)
     # US statements before dawn UTC, one job per name, six minutes apart.
     jobs.extend(edgar_refresh_job(ticker) for ticker in US_UNIVERSE)
+    jobs.extend(_ngx_price_jobs())
+    jobs.extend(_news_jobs())
     return jobs
+
+
+#: Which pages of the NGX listing to fetch. A property of the market rather than of the
+#: connector, which is why it lives with the schedule: `Showing 1 - 100 of 147` on
+#: 2026-09-24, so two pages cover it. Growth past 200 listings needs a third, and the
+#: connector says so on every parse - it logs `ngx_listing_is_paginated` with `showing`
+#: against `of`, so the day the market outgrows this the log names the gap rather than the
+#: tail of the alphabet quietly disappearing.
+NGX_LISTING_PAGES = (1, 2)
+
+
+def _ngx_price_jobs() -> list[ScheduledJob]:
+    """Both pages of the NGX listing, after the Lagos close.
+
+    **After 13:30 UTC, and that is not a preference.** The listing is a live intraday
+    snapshot - it carries its own timestamp and the connector refuses to store a
+    pre-close reading as a close, because `price_history` has a `no_update` trigger and
+    a close written wrong can never be corrected in place. Run it before the close and it
+    caches the bytes and writes no bars, every day, correctly and uselessly.
+
+    Two jobs, because the listing is paginated - `Showing 1 - 100 of 147`. Distinct run
+    names, because `expected_run_names()` keys health on the run name and one name
+    covering two pages would let page two fail in silence.
+
+    Six minutes apart, not the sixty seconds the Crawl-delay demands: the bucket already
+    enforces that and would simply sleep, but a job that spends its first minute asleep
+    looks indistinguishable from one that has hung.
+    """
+    return [
+        ScheduledJob(
+            connector=AfxKwayisiConnector(),
+            params={"page": page},
+            # 14:05 and 14:11 UTC: 15:05 and 15:11 Lagos, comfortably past the 14:30 close.
+            hour=14,
+            minute=5 + (page - 1) * 6,
+            job_id=f"ngx_afx:{page}",
+            # A trading day. A weekend or a public holiday writes nothing, which is a
+            # quiet day rather than a finding; a week of them is the silent-failure shape.
+            publishes_every_days=7,
+        )
+        for page in NGX_LISTING_PAGES
+    ]
+
+
+def _news_jobs() -> list[ScheduledJob]:
+    """Every RSS feed, hourly and staggered.
+
+    Hourly because a feed is a *window*, not an archive. BusinessDay's holds five items,
+    so at a daily cadence whatever scrolled off between polls is gone - and RSS offers no
+    backfill to get it back. A story that was never fetched is a different kind of absence
+    from one that was fetched and found empty, and only the second is recoverable.
+
+    Staggered by ten minutes so three feeds do not all land in the same minute as each
+    other and as whatever else the hour holds. They are different hosts, so the per-host
+    buckets would not collide - this is about the single scheduler thread, which runs jobs
+    one after another by design.
+
+    Two of the three send `ETag`/`Last-Modified`, so most of these polls cost a 304 and no
+    body at all.
+    """
+    return [
+        ScheduledJob(
+            connector=connector,
+            params={},
+            hour="*",
+            minute=5 + offset * 10,
+            job_id=connector.name,
+            # A week, like every other daily source, and not the one day the polling
+            # cadence might suggest. This field is how long *silence* stays normal, not
+            # how often we look: a Nigerian business feed can sit still through a holiday
+            # weekend with nothing wrong, and `check_health` would cry wolf at anything
+            # shorter. The hourly poll is `hour="*"` above; the two are different
+            # questions and the schedule answers both separately.
+            publishes_every_days=7,
+        )
+        for offset, connector in enumerate(feed_connectors())
+    ]
 
 
 def expected_schedule() -> dict[str, Expectation]:
@@ -210,8 +291,7 @@ def expected_schedule() -> dict[str, Expectation]:
     Derived from the same list the scheduler runs, like `expected_run_names`; the manual
     paths are monthly uploads with no scheduled time."""
     schedule: dict[str, Expectation] = {
-        job.identity(): Expectation(f"{job.hour:02d}:{job.minute:02d}", job.publishes_every_days)
-        for job in build_jobs()
+        job.identity(): Expectation(job.clock, job.publishes_every_days) for job in build_jobs()
     }
     for source in MANUAL_SOURCES:
         schedule[f"manual_csv_{source.lower()}"] = Expectation(None, MONTHLY_DAYS)

@@ -149,6 +149,12 @@ def test_rerunning_the_same_file_writes_no_new_rows(
     """
     connector = ManualCsvConnector("NBS")
     register(db_session, connector)
+    # Counted as a delta, not as a total. This used to assert the table held exactly one
+    # row, which was true only while nothing else in the suite had ever committed a
+    # document - and stopped being true the moment the news and NGX connectors arrived
+    # with tests of their own. The claim was never about the table; it was about this
+    # file being stored once.
+    before = db_session.execute(select(func.count()).select_from(SourceDocument)).scalar_one()
     first = connector.run(db_session, path=csv_path)
     second = connector.run(db_session, path=csv_path)
 
@@ -158,8 +164,8 @@ def test_rerunning_the_same_file_writes_no_new_rows(
     assert second.status == "ok"
 
     # The identical file is stored once — the key is the content.
-    documents = db_session.execute(select(func.count()).select_from(SourceDocument)).scalar_one()
-    assert documents == 1
+    after = db_session.execute(select(func.count()).select_from(SourceDocument)).scalar_one()
+    assert after - before == 1
     assert second.source_document_id == first.source_document_id
 
 
