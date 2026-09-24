@@ -2,13 +2,14 @@ import { Fragment } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { api, type MacroSeries, failTheBuildInstead } from "@/lib/api";
+import { ApiTimeout, api, type MacroSeries, failTheBuildInstead } from "@/lib/api";
 import {
   NOT_LOADED,
   formatDay,
   sentenceCase,
   unitInWords,
   withUnit,
+  SERVICE_IS_SLOW,
 } from "@/lib/format";
 
 export const metadata: Metadata = {
@@ -70,16 +71,25 @@ export default async function MacroPage() {
     ({ series } = await api.macro());
   } catch (error) {
     failTheBuildInstead(error);
+    // A timeout is our budget expiring, not the API failing. Painted red and worded as
+    // a failure it sends a reader looking for a fault that is not there.
+    const slow = error instanceof ApiTimeout;
     const detail = error instanceof Error ? error.message : "unknown error";
     return (
       <>
         <h1>The economy</h1>
-        <div className="notice bad">
-          <h3>The economic series could not be loaded</h3>
+        <div className={slow ? "notice" : "notice bad"}>
+          <h3>
+            {slow
+              ? "This is taking longer than the page waits"
+              : "The economic series could not be loaded"}
+          </h3>
           <p>
-            This page asked the API for its list of series and did not get one. Nothing
-            is being hidden below — there is simply nothing to show until that call
-            succeeds.
+            {slow
+              ? SERVICE_IS_SLOW
+              : "This page asked the API for its list of series and did not get one. " +
+                "Nothing is being hidden below — there is simply nothing to show " +
+                "until that call succeeds."}
           </p>
           <p>
             Reported as: <span className="num">{detail}</span>

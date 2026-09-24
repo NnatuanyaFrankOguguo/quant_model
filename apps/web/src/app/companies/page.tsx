@@ -1,8 +1,14 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { ApiError, api, type CompanySummary, failTheBuildInstead } from "@/lib/api";
-import { count, day, isMissing, NOT_REPORTED } from "@/lib/format";
+import {
+  ApiError,
+  ApiTimeout,
+  api,
+  type CompanySummary,
+  failTheBuildInstead,
+} from "@/lib/api";
+import { SERVICE_IS_SLOW, count, day, isMissing, NOT_REPORTED } from "@/lib/format";
 
 export const metadata: Metadata = {
   title: "Companies",
@@ -184,6 +190,22 @@ function Heading() {
  */
 function CouldNotLoad({ error }: { error: unknown }) {
   const status = error instanceof ApiError ? error.status : null;
+
+  if (error instanceof ApiTimeout) {
+    return (
+      <>
+        <Heading />
+        {/* `.notice`, not `.notice bad`. Nothing is broken, and painting a slow answer
+            red tells the reader to go looking for a fault that is not there. */}
+        <div className="notice">
+          <h3>This is taking longer than the page waits</h3>
+          <p>{SERVICE_IS_SLOW}</p>
+          <p>Reload the page and the list should appear.</p>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <Heading />

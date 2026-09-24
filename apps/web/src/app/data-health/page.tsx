@@ -2,8 +2,8 @@ import { Fragment } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { api, type HealthReport, type JobHealth } from "@/lib/api";
-import { describeSchedule, formatMoment } from "@/lib/format";
+import { ApiTimeout, api, type HealthReport, type JobHealth } from "@/lib/api";
+import { SERVICE_IS_SLOW, describeSchedule, formatMoment } from "@/lib/format";
 
 export const metadata: Metadata = {
   title: "Data health",
@@ -75,16 +75,25 @@ export default async function DataHealthPage({
   try {
     report = await api.health(windowDays);
   } catch (error) {
+    // See the note on /macro: slow is not broken, and must not be dressed as broken.
+    const slow = error instanceof ApiTimeout;
     const detail = error instanceof Error ? error.message : "unknown error";
     return (
       <>
         <h1>Data health</h1>
-        <div className="notice bad">
-          <h3>The health report could not be loaded</h3>
+        <div className={slow ? "notice" : "notice bad"}>
+          <h3>
+            {slow
+              ? "This is taking longer than the page waits"
+              : "The health report could not be loaded"}
+          </h3>
           <p>
-            This page asks the API whether its own loading jobs have been running, and
-            that request did not come back. So the honest answer to &ldquo;is the data
-            fresh?&rdquo; right now is: unknown. Not fine, and not broken — unknown.
+            {slow
+              ? SERVICE_IS_SLOW
+              : "This page asks the API whether its own loading jobs have been " +
+                "running, and that request did not come back. So the honest answer " +
+                "to “is the data fresh?” right now is: unknown. Not fine, " +
+                "and not broken — unknown."}
           </p>
           <p>
             Reported as: <span className="num">{detail}</span>

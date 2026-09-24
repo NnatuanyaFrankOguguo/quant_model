@@ -17,6 +17,14 @@
  * problem: nothing would have told us when they drifted apart.
  */
 
+/**
+ * What a reader is told when a request outran the page's patience. One sentence, used
+ * wherever it can happen, so the same event never reads as two different problems.
+ */
+export const SERVICE_IS_SLOW =
+  "The data service is answering, but more slowly than this page waits for. Nothing " +
+  "is broken and no figures are missing — reloading usually works.";
+
 // ---------------------------------------------------------------------------
 // The words used when there is no value.
 //

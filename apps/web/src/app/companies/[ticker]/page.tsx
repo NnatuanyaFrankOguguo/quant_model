@@ -3,8 +3,16 @@ import type { ReactNode } from "react";
 import { Suspense } from "react";
 import Link from "next/link";
 
-import { ApiError, api, type Ratios } from "@/lib/api";
-import { day, isMissing, money, moneyCompact, percent, ratio } from "@/lib/format";
+import { ApiError, ApiTimeout, api, type Ratios } from "@/lib/api";
+import {
+  SERVICE_IS_SLOW,
+  day,
+  isMissing,
+  money,
+  moneyCompact,
+  percent,
+  ratio,
+} from "@/lib/format";
 import { Valuation } from "./_valuation";
 
 interface PageProps {
@@ -389,6 +397,23 @@ function ValuationLoading() {
  */
 function CouldNotLoad({ ticker, error }: { ticker: string; error: unknown }) {
   const status = error instanceof ApiError ? error.status : null;
+
+  if (error instanceof ApiTimeout) {
+    return (
+      <>
+        <h1>{ticker}</h1>
+        {/* `.notice`, not `.notice bad`. Nothing is broken, and painting a slow answer
+            red tells the reader to go looking for a fault that is not there. */}
+        <div className="notice">
+          <h3>This is taking longer than the page waits</h3>
+          <p>{SERVICE_IS_SLOW}</p>
+          <p>
+            Reload the page. <Link href="/companies">Back to the list</Link>.
+          </p>
+        </div>
+      </>
+    );
+  }
 
   if (status === 404) {
     return (

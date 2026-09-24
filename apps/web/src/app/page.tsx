@@ -1,6 +1,12 @@
 import Link from "next/link";
-import { api, ApiError, failTheBuildInstead, type HoldingsSummary } from "@/lib/api";
-import { count } from "@/lib/format";
+import {
+  api,
+  ApiError,
+  ApiTimeout,
+  failTheBuildInstead,
+  type HoldingsSummary,
+} from "@/lib/api";
+import { SERVICE_IS_SLOW, count } from "@/lib/format";
 
 /**
  * The front door.
@@ -41,9 +47,11 @@ export default async function Home() {
   } catch (error) {
     failTheBuildInstead(error);
     unreachable =
-      error instanceof ApiError
-        ? `The data service answered ${error.status}.`
-        : "The data service did not answer.";
+      error instanceof ApiTimeout
+        ? SERVICE_IS_SLOW
+        : error instanceof ApiError
+          ? `The data service answered ${error.status}.`
+          : "The data service could not be reached.";
   }
 
   return (

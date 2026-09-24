@@ -24,7 +24,7 @@ const TOKEN = process.env.QUANT_API_TOKEN ?? "";
  * just no longer fires for one that is merely having a bad minute.
  */
 const TIMEOUT_MS =
-  process.env.NEXT_PHASE === "phase-production-build" ? 180_000 : 45_000;
+  process.env.NEXT_PHASE === "phase-production-build" ? 180_000 : 60_000;
 
 export class ApiError extends Error {
   constructor(
@@ -66,18 +66,48 @@ export function failTheBuildInstead(error: unknown): void {
   if (process.env.NEXT_PHASE === "phase-production-build") throw error;
 }
 
+/**
+ * Our budget expired. **Not** the same thing as the service failing, and a page must not
+ * write it as one.
+ *
+ * `/ratios` was measured at a median of 8.4s with a single 52s tail, so this is a real
+ * reader-facing case rather than a theoretical one. A page that says "it did not answer"
+ * when the truth is "we stopped waiting" tells the reader something that is not so about
+ * data that is perfectly fine - the same mistake as printing a zero for a missing figure,
+ * which is the one thing this app treats as unforgivable.
+ */
+export class ApiTimeout extends Error {
+  constructor(
+    readonly path: string,
+    readonly afterMs: number,
+  ) {
+    super(`no answer from ${path} within ${afterMs}ms`);
+  }
+}
+
 async function get<T>(path: string, personal = false): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (personal && TOKEN) headers.Authorization = `Bearer ${TOKEN}`;
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers,
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-    // Figures change when a connector runs, not when someone reloads. Sixty seconds is
-    // short enough that a fresh filing shows up promptly and long enough that reading
-    // three pages does not mean three round trips for the same answer.
-    next: { revalidate: 60 },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      headers,
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      // Figures change when a connector runs, not when someone reloads. Sixty seconds is
+      // short enough that a fresh filing shows up promptly and long enough that reading
+      // three pages does not mean three round trips for the same answer.
+      next: { revalidate: 60 },
+    });
+  } catch (cause) {
+    // `AbortSignal.timeout` rejects with a TimeoutError DOMException. Everything else -
+    // DNS, connection refused, TLS - is the service genuinely not reachable, and stays
+    // as it was.
+    if (cause instanceof Error && cause.name === "TimeoutError") {
+      throw new ApiTimeout(path, TIMEOUT_MS);
+    }
+    throw cause;
+  }
   if (!response.ok) {
     // The body is read before throwing because the API puts the *reason* there, and a
     // 422 from the DCF route is a sentence a page needs to render, not noise to swallow.
