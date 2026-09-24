@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/"  xmlns:sy="http://purl.org/rss/1.0/modules/syndication/">
+    <channel>
+        <title>Punch Newspapers - Business</title>
+        <atom:link href="https://rss.punchng.com" rel="self" type="application/rss+xml" />
+        <link> https://rss.punchng.com </link>
+        <description> Get the latest News in Nigeria </description>
+        <lastBuildDate> Thu, 24 Sep 2026 09:22:44 +0000</lastBuildDate>
+        <language> en-US </language>
+        <sy:updatePeriod> minutely	</sy:updatePeriod>
+        <sy:updateFrequency> 5	</sy:updateFrequency>
+        <docs>https://rss.punchng.com</docs>
+        <generator>https://rss.punchng.com</generator>
+
+            </channel>
+</rss>

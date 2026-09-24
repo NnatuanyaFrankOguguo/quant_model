@@ -129,6 +129,11 @@ MODEL_READABLE_TABLES: set[str] = {
     "corporate_actions",  # a backtest reads splits and dividends; known_as_of + ex_date
     "adjustment_factors",  # P7 check 19: only factors known by the decision date apply
     "fx_rates",  # a naira figure is converted at the rate known on the decision date
+    # --- P5 news, migration 0025 ---
+    # An article is knowable from the moment it is published, and P5.3's sentiment score
+    # joins straight back to it. `published_at` is the business timestamp; `known_as_of`
+    # is the Lagos date of it, generated from it so the two cannot drift.
+    "news_items",
     # --- later phases ---
     # "indicators", "ml_features", "news_sentiment"
 }
@@ -148,6 +153,10 @@ BUSINESS_DATE_COLUMNS: frozenset[str] = frozenset(
         "valid_from",
         # Corporate actions and their factors are dated by the ex-date, the day that matters.
         "ex_date",
+        # An article is *about* the moment it went out, which is the same instant it became
+        # knowable. The two columns are not redundant: one is a timestamp and the other the
+        # Lagos calendar date a point-in-time filter compares against (P5, migration 0025).
+        "published_at",
     }
 )
 

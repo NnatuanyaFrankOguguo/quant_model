@@ -28,6 +28,7 @@ import uuid
 from decimal import Decimal
 
 from sqlalchemy import (
+    ARRAY,
     CHAR,
     BigInteger,
     Boolean,
@@ -1055,6 +1056,91 @@ class WatchlistItem(Base):
     security: Mapped[Security] = relationship()
 
 
+# ---------------------------------------------------------------------------
+# §2.6 News (P5, migration 0025)
+# ---------------------------------------------------------------------------
+
+
+class NewsItem(Base):
+    """One article, as one feed served it at one moment. `docs/08` §2.6, migration 0025.
+
+    **Two dates that must never be confused.** `published_at` is when the world learned
+    it; `retrieved_at` is when we fetched it. Only the first may reach a feature join -
+    `docs/08` §1.3 puts `retrieved_at` in the "provenance and cache invalidation only,
+    never used in a feature join" row, and a sentiment model trained on articles joined by
+    our fetch time would be reading the scheduler's cron entry as if it were the market.
+    `known_as_of` exists so that join has the right column to use, and it is **generated**
+    from `published_at` rather than written, so the two cannot drift.
+
+    **Identity is `(data_source_id, item_key, content_hash)`, not the URL.** `docs/08`
+    §2.6's DDL has `url TEXT NOT NULL UNIQUE`; migration 0025 explains at length why that
+    is dropped. In one line: an edited headline under `UNIQUE (url)` is an UPDATE, and an
+    UPDATE to something a decision was made on is the write `CLAUDE.md` forbids and the
+    `no_update` trigger rejects. A correction is a second row, and the words the market
+    actually read at 09:00 survive it.
+
+    `content_hash` is SHA-256 over the normalised headline and body **only**, so the same
+    wire story republished by two outlets carries one hash under two `data_source_id`s.
+    The rows are not merged - attribution and the licence governing our copy are per
+    publisher - but `ix_news_items_content_hash` makes the duplicate a single lookup,
+    which is what stops a daily brief printing one event three times.
+    """
+
+    __tablename__ = "news_items"
+    __table_args__ = (
+        UniqueConstraint(
+            "data_source_id", "item_key", "content_hash", name="news_item_version_is_unique"
+        ),
+        CheckConstraint("btrim(headline) <> ''", name="news_headline_is_not_blank"),
+        # `IS NULL OR` first: a CHECK rejects a row only when its predicate is FALSE, and
+        # a predicate over NULL is NULL. Migration 0021 is what the short form cost.
+        CheckConstraint("body IS NULL OR btrim(body) <> ''", name="news_body_is_absent_or_present"),
+        CheckConstraint("content_hash ~ '^[0-9a-f]{64}$'", name="news_content_hash_is_sha256_hex"),
+        CheckConstraint("published_at <= retrieved_at", name="news_published_before_retrieved"),
+        Index("ix_news_items_known_as_of", "known_as_of", "published_at"),
+        Index("ix_news_items_item_key", "data_source_id", "item_key", "id"),
+        Index("ix_news_items_content_hash", "content_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    data_source_id: Mapped[int] = mapped_column(ForeignKey("data_sources.id"), nullable=False)
+    # The stored feed XML this row was parsed out of. Provenance on every row, and what
+    # makes a parser fix re-derivable without re-fetching a feed that has dropped the item.
+    source_document_id: Mapped[int] = mapped_column(
+        ForeignKey("source_documents.id"), nullable=False
+    )
+    # The feed's own `<guid>`, canonicalised when it is a URL; the canonical link when the
+    # feed serves no guid. A WordPress guid survives a slug rewrite, which is exactly the
+    # rename that would otherwise store one article twice.
+    item_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # As the feed served it: provenance, never identity.
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    # Identity. Tracking parameters removed - see `packages.ingestion.rss.canonical_url`.
+    url_canonical: Mapped[str] = mapped_column(Text, nullable=False)
+    headline: Mapped[str] = mapped_column(Text, nullable=False)
+    # The feed's summary, markup removed. NULL when the feed carried none; never "".
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The feed's own labels, verbatim. Empty when it listed none - a set of labels is not
+    # a figure, so the empty set is accurate rather than a fabricated zero.
+    categories: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default=text("'{}'::text[]")
+    )
+    published_at: Mapped[dt.datetime] = mapped_column(TZDateTime, nullable=False)
+    retrieved_at: Mapped[dt.datetime] = mapped_column(TZDateTime, nullable=False)
+    content_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    # Stored generated, so it is a fact about `published_at` rather than a copy of it.
+    # `AT TIME ZONE INTERVAL` and not `'Africa/Lagos'`: PostgreSQL marks the named-zone
+    # form STABLE (the zone database can change) and a generated column must be IMMUTABLE.
+    # WAT is UTC+1 all year, which `tests/unit/test_schema_conventions.py` asserts.
+    known_as_of: Mapped[dt.date] = mapped_column(
+        Date,
+        Computed("(published_at AT TIME ZONE INTERVAL '01:00')::date", persisted=True),
+        nullable=False,
+    )
+
+    data_source: Mapped[DataSource] = relationship()
+
+
 __all__ = [
     "AuditLog",
     "Base",
@@ -1067,6 +1153,7 @@ __all__ = [
     "LlmSpend",
     "MacroObservation",
     "MacroSeries",
+    "NewsItem",
     "Principal",
     "PrincipalToken",
     "Security",
