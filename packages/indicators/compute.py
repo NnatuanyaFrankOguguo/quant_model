@@ -1,8 +1,8 @@
 """The indicator catalogue: what is computed, from what, under which parameters. P6.2.
 
 Compute functions take data and return data and do no I/O (`docs/08` §6), which is what
-lets `tests/known_answer/` check them against hand-computed vectors. Persistence lives in
-`store.py`.
+lets `tests/known_answer/` check them against hand-computed vectors. Persistence, and
+the point-in-time vintage of a value, live in `store.py`.
 
 ## Nothing here is a signal
 
@@ -26,11 +26,33 @@ example differs from both by up to 0.10, since it is derived from prices rounded
 places and printed to four. A library checked against that table looks broken and is not.
 So the known-answer tests here compare against an independent implementation of the
 documented recurrence, never against a rounded published table.
+
+The other five were measured the same way on the same day, each against an
+implementation written from its definition. What 0.8.32 turned out to do:
+
+- **MACD** - EMAs seeded on the *mean of the first `n`*, not on the first close. The
+  signal line is that same seeding applied to the live MACD line, and the histogram is
+  `macd - signal` rather than twice it. Agreement: exact, bit for bit.
+- **Bollinger** - an SMA centre and a *population* deviation, `ddof=0`. 3e-14.
+- **ATR** - Wilder's smoothing over true range, *SMA-seeded*; not `ewm(adjust=False)`
+  from the first true range, which the library's name for it, `rma`, might suggest.
+  9e-16.
+- **OBV** - seeded at `+volume[0]`, not at zero. An unchanged close adds nothing. Exact.
+- **Stochastic** - raw %K over `k` bars, %K = SMA(raw, `smooth_k`), %D = SMA(%K, `d`).
+  4e-14.
+
+Two of those were live coin-flips rather than formalities. An EMA seeded on the first
+observation instead of on a mean differs from this one by 1.9 on the MACD line where the
+line begins, and an `ewm`-seeded ATR by 0.59 - both converging, both wrong for exactly
+the first few dozen bars a short window is made of. So every library call below pins its
+convention explicitly (`mamode=`, `ddof=`, `talib=False`) even where the value passed is
+already the default: a default is a fact about a version, and `talib=True` is what a
+later `pip install TA-Lib` would switch several of these to without a word. The point of
+measuring was to stop the arithmetic moving underneath us.
 """
 
 from __future__ import annotations
 
-import datetime as dt
 import hashlib
 import json
 from collections.abc import Callable, Mapping
@@ -113,8 +135,41 @@ def _column(result, length: int) -> list[float | None]:  # type: ignore[no-untyp
     return values
 
 
+def _absent(length: int) -> list[float | None]:
+    """A column that is "no value yet" throughout - too short a history, in other words.
+
+    `pandas-ta-classic` returns `None` there, not a frame of NaN: measured, RSI needs
+    `length` bars, MACD `slow`, Bollinger `length`, ATR `length`, Stochastic
+    `k + smooth_k + d - 2`, and OBV one. Iterating that `None` raises `TypeError`, and
+    raising is the wrong answer to it. A security that listed eleven days ago has no
+    14-day RSI, which is not an error and not a zero - it is the same absence as the
+    warm-up rows inside a longer series, and belongs in the database as the same NULL.
+    """
+    return [None] * length
+
+
+def _pick(frame, prefix: str):  # type: ignore[no-untyped-def]
+    """The one column of a multi-output result whose name starts with `prefix`.
+
+    Positional indexing would be shorter and wrong. `bbands` returns five columns rather
+    than the three we keep, and a release that inserts a sixth would silently re-point
+    `bb_upper` at someone else's arithmetic without failing a single test. Matching the
+    documented prefix and insisting the match is unique turns that into an exception.
+    """
+    matches = [c for c in frame.columns if c.startswith(prefix)]
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one column named {prefix}*, found {matches}")
+    return frame[matches[0]]
+
+
 # --------------------------------------------------------------------------------------
 # The six. `docs/03` P6.2: RSI, MACD, Bollinger Bands, ATR, OBV, Stochastic.
+#
+# Every recurrence below is written out in `tests/known_answer/indicators_worksheet.md`
+# and checked there against an independent implementation. None of them emits a signal:
+# there is no threshold, no crossing, no comparison of one output to another. Where a
+# name here reads like one - `macd_signal` is Appel's own term for the smoothing of the
+# MACD line - it names a moving average and nothing else.
 # --------------------------------------------------------------------------------------
 
 
@@ -123,8 +178,152 @@ def _rsi(bars: AdjustedBars, *, length: int) -> list[Series]:
     import pandas_ta_classic as ta
 
     frame = _frame(bars)
-    out = ta.rsi(frame["close"], length=length)
-    return [Series(f"rsi{length}", _column(out, len(bars)))]
+    out = ta.rsi(frame["close"], length=length, talib=False)
+    name = f"rsi{length}"
+    if out is None:
+        return [Series(name, _absent(len(bars)))]
+    return [Series(name, _column(out, len(bars)))]
+
+
+def _macd(bars: AdjustedBars, *, fast: int, slow: int, signal: int) -> list[Series]:
+    """Appel's MACD: two EMAs differenced, that difference smoothed, and the gap.
+
+    `signal` is Appel's name for the third moving average, a `signal`-period EMA of the
+    MACD line. It is a smoothing, not a recommendation - the crossing of `macd` and
+    `macd_signal` is the classic rule and this phase deliberately does not compute it.
+
+    Three outputs, one spec, one `param_hash`: they are one calculation with one
+    parameter set, and splitting them into three specs would make a change to `fast`
+    look like a change to three unrelated features.
+    """
+    import pandas_ta_classic as ta
+
+    n = len(bars)
+    out = ta.macd(_frame(bars)["close"], fast=fast, slow=slow, signal=signal, talib=False)
+    if out is None:
+        return [Series(name, _absent(n)) for name in ("macd", "macd_signal", "macd_hist")]
+    return [
+        Series("macd", _column(_pick(out, "MACD_"), n)),
+        Series("macd_signal", _column(_pick(out, "MACDs_"), n)),
+        Series("macd_hist", _column(_pick(out, "MACDh_"), n)),
+    ]
+
+
+def _bbands(bars: AdjustedBars, *, length: int, std: float) -> list[Series]:
+    """Bollinger bands: an SMA, and a population standard deviation either side of it.
+
+    `ddof=0` is passed rather than assumed. It is the library's default and it is also
+    Bollinger's definition, but the sample deviation is the other plausible reading, and
+    on a 20-bar window it is `sqrt(20/19)` larger - 2.6% further from the centre, 0.61 of
+    a price point at its worst on the test vector. Not a rounding difference, and not one
+    that would ever look like a bug either.
+    """
+    import pandas_ta_classic as ta
+
+    n = len(bars)
+    out = ta.bbands(_frame(bars)["close"], length=length, std=std, ddof=0, talib=False)
+    if out is None:
+        return [Series(name, _absent(n)) for name in ("bb_lower", "bb_mid", "bb_upper")]
+    # `bbands` also returns bandwidth and %B. Both are positions relative to the bands
+    # rather than the bands themselves, and neither is one of `docs/03` P6.2's six.
+    return [
+        Series("bb_lower", _column(_pick(out, "BBL_"), n)),
+        Series("bb_mid", _column(_pick(out, "BBM_"), n)),
+        Series("bb_upper", _column(_pick(out, "BBU_"), n)),
+    ]
+
+
+def _atr(bars: AdjustedBars, *, length: int) -> list[Series]:
+    """Wilder's average true range. Reads high and low, already adjusted by `series.py`.
+
+    There is no division by anything the data supplies - true range is a maximum of
+    three differences and Wilder's smoothing divides by the constant `length` - so a
+    security that did not move has an ATR of zero, which is a true measurement of a flat
+    market and not an absence. (`pandas-ta-classic` returns 2.2e-16 rather than 0.0 for
+    that case, because its true range adds a float epsilon to `high - low` to keep the
+    percentage variant we do not compute from dividing by zero. Immaterial, but it is
+    why a dead security's stored ATR is a denormal rather than a round zero.)
+    """
+    import pandas_ta_classic as ta
+
+    frame = _frame(bars)
+    name = f"atr{length}"
+    out = ta.atr(
+        frame["high"], frame["low"], frame["close"], length=length, mamode="rma", talib=False
+    )
+    if out is None:
+        return [Series(name, _absent(len(bars)))]
+    return [Series(name, _column(out, len(bars)))]
+
+
+def _obv(bars: AdjustedBars) -> list[Series]:
+    """On-balance volume: the running total of volume, signed by the close's direction.
+
+    Reads volume, which `adjusted_bars` has already divided by the split factor - the
+    inverse of what it did to the prices. Do not adjust it again; a 4-for-1 split that
+    scaled price down by four scaled share count up by four, and applying the price
+    factor to quantity would put a step in the running total that no one traded.
+
+    No warm-up: the first bar has a value. `pandas-ta-classic` seeds that first bar at
+    `+volume[0]` rather than at zero, so the whole series sits one bar's volume above a
+    zero-seeded one. OBV is read in differences and slopes, so an additive constant
+    changes nothing that anyone asks of it - but it does mean a value here is not
+    comparable with a value from a differently-seeded library, and that is worth knowing
+    before someone reconciles the two and concludes one of them is broken.
+    """
+    import pandas_ta_classic as ta
+
+    frame = _frame(bars)
+    out = ta.obv(frame["close"], frame["volume"], talib=False)
+    if out is None:
+        return [Series("obv", _absent(len(bars)))]
+    return [Series("obv", _column(out, len(bars)))]
+
+
+def _stoch(bars: AdjustedBars, *, k: int, d: int, smooth_k: int) -> list[Series]:
+    """Lane's stochastic oscillator: where the close sits in its recent high-low range.
+
+    **The degenerate window is handled here rather than left to the library.** When the
+    highest high of the window equals its lowest low - a security that did not trade for
+    `k` sessions, which for a thin NGX listing is not hypothetical - raw %K is `0/0` and
+    there is no answer.
+    `pandas-ta-classic` returns 0.0, not by choosing that answer but by adding a float
+    epsilon to the denominator to avoid the exception, and 0.0 says "at the very bottom
+    of its range", which is a claim about a market that did not move. That is the
+    zero-for-an-absence mistake `_column` exists to prevent, arriving through the back
+    door, so the affected bars are set to None instead.
+
+    A smoothed value that averaged in an undefined one is undefined too, so the mask is
+    widened through both smoothings: `smooth_k` bars for %K, then `d` more for %D. It
+    cannot be done by value - a legitimate %K of exactly 0.0 (the close at the low of a
+    real range) is common and must survive.
+    """
+    import pandas_ta_classic as ta
+
+    frame = _frame(bars)
+    n = len(bars)
+    out = ta.stoch(
+        frame["high"],
+        frame["low"],
+        frame["close"],
+        k=k,
+        d=d,
+        smooth_k=smooth_k,
+        mamode="sma",
+        talib=False,
+    )
+    if out is None:
+        return [Series(name, _absent(n)) for name in ("stoch_k", "stoch_d")]
+
+    no_range = frame["high"].rolling(k).max() == frame["low"].rolling(k).min()
+    # `min_periods=1` so the warm-up rows, where the rolling max is NaN and the
+    # comparison is therefore False, stay untainted - they are already None.
+    tainted_k = no_range.astype(float).rolling(smooth_k, min_periods=1).max() > 0
+    tainted_d = tainted_k.astype(float).rolling(d, min_periods=1).max() > 0
+    return [
+        Series("stoch_k", _column(_pick(out, "STOCHk_").where(~tainted_k), n)),
+        Series("stoch_d", _column(_pick(out, "STOCHd_").where(~tainted_d), n)),
+    ]
 
 
 CATALOGUE: dict[str, IndicatorSpec] = {
@@ -133,6 +332,24 @@ CATALOGUE: dict[str, IndicatorSpec] = {
     # point about `param_hash` is that two lengths of the same indicator are two
     # different features, and a catalogue holding only one of them never tests that.
     "rsi21": IndicatorSpec("rsi21", {"length": 21}, ("rsi21",), _rsi),
+    "macd": IndicatorSpec(
+        "macd",
+        {"fast": 12, "slow": 26, "signal": 9},
+        ("macd", "macd_signal", "macd_hist"),
+        _macd,
+    ),
+    "bbands": IndicatorSpec(
+        "bbands", {"length": 20, "std": 2.0}, ("bb_lower", "bb_mid", "bb_upper"), _bbands
+    ),
+    # `atr14` carries its period in the name and `bb_upper` does not, following the
+    # column names `docs/08` §2.7's DDL comment gives ('rsi14', 'macd_hist'). The name
+    # is a label; `param_hash` is what actually separates two parameter sets, which is
+    # why two Bollinger widths can share the name `bb_upper` without colliding.
+    "atr14": IndicatorSpec("atr14", {"length": 14}, ("atr14",), _atr),
+    "obv": IndicatorSpec("obv", {}, ("obv",), _obv),
+    "stoch": IndicatorSpec(
+        "stoch", {"k": 14, "d": 3, "smooth_k": 3}, ("stoch_k", "stoch_d"), _stoch
+    ),
 }
 
 
@@ -143,15 +360,3 @@ def compute(bars: AdjustedBars, spec: IndicatorSpec) -> list[Series]:
     if names != spec.outputs:
         raise ValueError(f"{spec.key} declared outputs {spec.outputs} but produced {names}")
     return series
-
-
-def known_as_of_for(bars: AdjustedBars, index: int, *, window: int) -> dt.date:
-    """When the value at `index` became knowable: the newest vintage among its inputs.
-
-    An indicator is knowable once every bar it consumed was knowable, so this is a max
-    over the window rather than the vintage of the last bar. A restated bar inside the
-    window pushes the whole value's vintage forward, which is the honest answer - the
-    number could not have been computed before the restatement existed.
-    """
-    start = max(0, index - window + 1)
-    return max(bars.known_as_of[start : index + 1])
