@@ -64,6 +64,7 @@ __all__ = [
     "register",
     "store_raw",
     "upsert_document",
+    "warn_if_no_rows_written",
     "write_macro_records",
 ]
 
@@ -273,15 +274,7 @@ class Connector(ABC, Generic[RecordT]):
         with step("record run") as recording:
             record_run(session, result)
             recording.result(status=result.status, rows_written=result.rows_written)
-        if result.status == "ok" and result.rows_written == 0:
-            # Not an error — re-fetching an unchanged page is normal. But it is the signature
-            # of a silent scraper failure, so it is said out loud rather than inferred later
-            # from a query nobody runs.
-            _log.warning(
-                "connector_wrote_no_rows",
-                connector=self.name,
-                records_parsed=result.records_parsed,
-            )
+        warn_if_no_rows_written(result, connector=self.name)
         return result
 
     def write(self, session: Session, records: list[RecordT], *, source_document_id: int) -> int:
@@ -650,4 +643,30 @@ def record_run(session: Session, result: ConnectorRunResult) -> None:
             "connector_run_row_failed",
             connector=result.connector_name,
             error_type=type(exc).__name__,
+        )
+
+
+def warn_if_no_rows_written(result: ConnectorRunResult, *, connector: str) -> None:
+    """Say out loud that a successful run wrote nothing. `OPERATIONS.md` §2.3.
+
+    Not an error - re-fetching an unchanged page is normal, and alerting on one quiet run is
+    how a check earns a mute. But zero rows on `status='ok'` is also the exact signature of
+    the silent scraper failure, so it is stated at the moment it happens rather than inferred
+    later from a query nobody runs.
+
+    It lives out here, beside `record_run`, because the connector that most needs it is the
+    one that overrides `run()` and so never reaches the line inside it. `EdgarCompanyRefresh`
+    composes several sub-connectors and assembles its own result: each part announced its own
+    silence while the composite - the thing the health check expects one of per company per
+    night - said nothing at all.
+
+    `connector` is the identity to report under: a connector's own `name` for a single-source
+    run, and the job's `run_name` for a composite, whose `name` is the same string for every
+    company it serves and so could not say which one went quiet.
+    """
+    if result.status == "ok" and result.rows_written == 0:
+        _log.warning(
+            "connector_wrote_no_rows",
+            connector=connector,
+            records_parsed=result.records_parsed,
         )

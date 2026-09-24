@@ -984,6 +984,46 @@ def test_the_refresh_runs_identity_then_statements_and_records_all_three(
     assert again.status == "ok" and again.rows_written == 0
 
 
+def test_the_refresh_flags_its_own_zero_row_night(
+    db_session: Session, local_store: LocalDiskBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """P4 check 14, for the job the health check actually watches.
+
+    The composite overrides `run()`, so it never reaches the zero-row warning inside it: for
+    a while `edgar:<ticker>` was the one run per company per night that could write nothing
+    and say nothing, while every sub-connector it drives announced its own silence. A company
+    whose statements quietly stopped arriving would have shown quiet parts and an unremarked
+    whole, which is the wrong way round - the whole is what is scheduled.
+
+    Reported under the job's name rather than `edgar_refresh`, because that string is the
+    same for every company and a warning carrying it cannot say which one went quiet.
+    """
+    import structlog
+
+    register(db_session, _refresh_connector(monkeypatch))
+    first = _refresh_connector(monkeypatch).run(db_session, run_name="edgar:AAPL", ticker="AAPL")
+    assert first.status == "ok" and first.rows_written > 0
+
+    # The same fixtures a second time: every fact is already stored, so nothing is inserted.
+    with structlog.testing.capture_logs() as logs:
+        again = _refresh_connector(monkeypatch).run(
+            db_session, run_name="edgar:AAPL", ticker="AAPL"
+        )
+    assert again.status == "ok" and again.rows_written == 0
+
+    quiet = [e for e in logs if e["event"] == "connector_wrote_no_rows"]
+    composite = [e for e in quiet if e["connector"] == "edgar:AAPL"]
+    assert len(composite) == 1, "the composite run must flag itself, not only its parts"
+    assert composite[0]["log_level"] == "warning"
+    assert composite[0]["records_parsed"] == again.records_parsed
+    # The parts still speak for themselves; the job no longer relies on them to.
+    assert {e["connector"] for e in quiet} >= {
+        "edgar:AAPL",
+        EdgarSubmissionsConnector.name,
+        EdgarCompanyFactsConnector.name,
+    }
+
+
 def test_a_failing_statements_load_fails_the_job_and_names_the_stage(
     db_session: Session, local_store: LocalDiskBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:

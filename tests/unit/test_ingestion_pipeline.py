@@ -4,15 +4,21 @@
 ordering is the part of the contract that unit tests of `parse()` cannot reach. In particular
 this is where `rows_written` is proved to count rows *inserted* rather than records parsed —
 the distinction the silent-failure detector depends on.
+
+P4 check 14 lives here for the same reason: a connector pointed at a real, well-formed,
+empty page, run through `run()` end to end, and the warning that must be heard when it
+writes nothing.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import re
 from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+import structlog
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -20,7 +26,13 @@ from packages.common.models import ConnectorRun, MacroObservation, MacroSeries, 
 from packages.common.storage import LocalDiskBackend, sha256_hex
 from packages.common.timez import utcnow
 from packages.ingestion import base as ingestion_base
-from packages.ingestion.base import RawResponse, register
+from packages.ingestion.base import (
+    Connector,
+    DataSourceLicence,
+    MacroRecord,
+    RawResponse,
+    register,
+)
 from packages.ingestion.edgar import EdgarSubmissionsConnector
 from packages.ingestion.manual_csv import ManualCsvConnector
 
@@ -487,3 +499,169 @@ def test_missed_jobs_queue_rather_than_stampede() -> None:
     assert executor._pool._max_workers == 1, "jobs run one after another"
     for job in scheduler.get_jobs():
         assert job.coalesce is True and job.max_instances == 1
+
+
+# --------------------------------------------------------------------------------------
+# P4 check 14 — point a connector at an empty page
+# --------------------------------------------------------------------------------------
+
+#: A page that still loads and carries nothing: HTTP 200, well-formed HTML, the table
+#: exactly where it has always been, and not one row inside it. This is what a scraper gets
+#: the morning after a site is redesigned. Nothing about it is wrong enough to raise, which
+#: is the whole reason `rows_written` is counted rather than assumed.
+EMPTY_PAGE = b"""<!doctype html>
+<html>
+  <head><title>Monetary policy rate</title></head>
+  <body>
+    <h1>Monetary policy rate</h1>
+    <table id="rates">
+      <thead><tr><th>Date</th><th>Rate</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="note">No records for the selected period.</p>
+  </body>
+</html>
+"""
+
+#: The same page before the redesign, carrying two decisions the selector matches.
+POPULATED_PAGE = EMPTY_PAGE.replace(
+    b"<tbody></tbody>",
+    b"<tbody>"
+    b"<tr><td>2026-09-21</td><td>27.50</td></tr>"
+    b"<tr><td>2026-09-23</td><td>27.25</td></tr>"
+    b"</tbody>",
+)
+
+#: Stands in for the CSS path or XPath a real scraper carries. The only property this check
+#: needs from it is the one every selector has: when the markup moves it matches nothing,
+#: and it does so without complaining.
+ROW_SELECTOR = re.compile(rb"<tr><td>([\d-]+)</td><td>([\d.]+)</td></tr>")
+
+
+class _ScrapedPageConnector(Connector):
+    """A minimal scraper: fetch a page, read the rate table out of it, write the rows.
+
+    Real enough for the check to mean something - it reads its records out of the markup
+    rather than being handed them, so an empty parse here is produced the way the real one
+    is - and small enough that the only behaviour under test is what `run()` does with it.
+    """
+
+    name = "scraped_page"
+
+    def __init__(self, page: bytes) -> None:
+        self._page = page
+
+    def declare_licence(self) -> DataSourceLicence:
+        return DataSourceLicence(
+            source_name="Scraped Page (test)",
+            licence_type="test fixture, never redistributed",
+            redistribution_allowed=False,
+            attribution_required=False,
+            terms_reviewed_on=dt.date(2026, 9, 1),
+            reviewed_by="test",
+        )
+
+    def fetch(self, **params: object) -> RawResponse:
+        return RawResponse(
+            data=self._page,
+            media_type="text/html",
+            url="https://example.invalid/rates",
+            http_status=200,
+        )
+
+    def parse(self, raw: RawResponse) -> list[MacroRecord]:
+        return [
+            MacroRecord(
+                series_code="NG_MPR",
+                as_of_date=dt.date.fromisoformat(as_of.decode()),
+                # A policy rate is known on the day it is announced: the two dates coincide
+                # here, which no other connector may assume.
+                known_as_of=dt.date.fromisoformat(as_of.decode()),
+                value=Decimal(rate.decode()),
+            )
+            for as_of, rate in ROW_SELECTOR.findall(raw.data)
+        ]
+
+
+def test_an_empty_page_is_flagged_rather_than_passing_for_a_quiet_night(
+    db_session: Session, local_store: LocalDiskBackend
+) -> None:
+    """P4 check 14: point a connector at an empty page and `rows_written=0` is flagged.
+
+    Every other signal this run produces says the source is healthy - HTTP 200, well-formed
+    HTML, no exception, a stored document, and a `connector_runs` row reading `ok`. The only
+    thing that says otherwise is `connector_wrote_no_rows`, so what is asserted here is that
+    the warning was **emitted**, not that the branch which would emit it exists.
+
+    `run()` has a second zero-row warning, `every parsed record was already present`, and it
+    is deliberately absent here. The two are not interchangeable. That one fires when the
+    parse produced records and the database already held every one of them - a re-fetch,
+    which is normal and is covered by the test below. This one fires when the parse produced
+    nothing at all. `connector_wrote_no_rows` standing alone, with no such explanation beside
+    it, is the shape of a selector that stopped matching rather than of a quiet night.
+    """
+    connector = _ScrapedPageConnector(EMPTY_PAGE)
+    register(db_session, connector)
+    db_session.commit()
+    before = _observation_count(db_session)
+
+    with structlog.testing.capture_logs() as logs:
+        result = connector.run(db_session)
+
+    assert result.status == "ok", result.error
+    assert result.records_parsed == 0, "the page parsed cleanly - it simply held no rows"
+    assert result.rows_written == 0
+    assert _observation_count(db_session) == before
+
+    # The run is recorded, and recorded as a success, which is exactly the trap.
+    run_row = (
+        db_session.execute(
+            select(ConnectorRun)
+            .where(ConnectorRun.connector_name == connector.name)
+            .order_by(ConnectorRun.id.desc())
+        )
+        .scalars()
+        .first()
+    )
+    assert run_row is not None
+    assert run_row.status == "ok"
+    assert run_row.rows_written == 0
+    assert run_row.http_status == 200
+
+    quiet = [entry for entry in logs if entry["event"] == "connector_wrote_no_rows"]
+    assert len(quiet) == 1, "the silence is said out loud, exactly once"
+    assert quiet[0]["log_level"] == "warning"
+    assert quiet[0]["connector"] == "scraped_page"
+    assert quiet[0]["records_parsed"] == 0
+    assert not [e for e in logs if e["event"] == "every parsed record was already present"], (
+        "nothing was parsed, so nothing can have been present already"
+    )
+
+
+def test_a_refetched_page_is_flagged_too_but_says_why(
+    db_session: Session, local_store: LocalDiskBackend
+) -> None:
+    """The other zero-row path: records parsed, every one of them already stored.
+
+    Same flag, and it must be: `rows_written` counts rows inserted, so a connector
+    re-fetching an unchanged page reports zero exactly as a broken one does, and the
+    detector cannot tell them apart from the count. What tells them apart is the second
+    warning, which fires here and not above - so both paths are covered, or the distinction
+    is only an intention.
+    """
+    connector = _ScrapedPageConnector(POPULATED_PAGE)
+    register(db_session, connector)
+    db_session.commit()
+    assert connector.run(db_session).rows_written == 2
+
+    with structlog.testing.capture_logs() as logs:
+        again = connector.run(db_session)
+
+    assert again.status == "ok"
+    assert again.records_parsed == 2, "the selector still matches; the rows are simply held"
+    assert again.rows_written == 0
+
+    quiet = [entry for entry in logs if entry["event"] == "connector_wrote_no_rows"]
+    assert len(quiet) == 1 and quiet[0]["records_parsed"] == 2
+    explained = [e for e in logs if e["event"] == "every parsed record was already present"]
+    assert len(explained) == 1, "the line that says this zero is a re-fetch, not a failure"

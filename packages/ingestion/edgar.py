@@ -79,6 +79,7 @@ from packages.ingestion.base import (
     RawResponse,
     record_run,
     store_raw,
+    warn_if_no_rows_written,
 )
 from packages.normalize.chart import (
     SOURCE_SYSTEM_BY_METHOD,
@@ -1325,6 +1326,12 @@ class EdgarCompanyRefresh(EdgarConnector):
         with step("record run") as recording:
             record_run(session, result)
             recording.result(status=result.status, rows_written=result.rows_written)
+        # The same warning `Connector.run()` emits, which this override never reaches. Each
+        # sub-connector above announces its own silence; without this the composite - the one
+        # run the health check expects per company per night - announced none.
+        # Reported under `recorded_as` (`edgar:<ticker>`), because `self.name` is
+        # `edgar_refresh` for every company and would not say which one went quiet.
+        warn_if_no_rows_written(result, connector=recorded_as)
         return result
 
     def _cik_for(self, session: Session, params: dict[str, object]) -> str:
