@@ -13,4 +13,9 @@ Two rules from the source documents shape everything here:
 
 And one from `SPEC.md` §4.1: **a ratio with a missing input is None** — never 0, never
 infinity. A P/E where earnings are missing is unknown, and it must say so.
+
+`scenarios` (P6.1, added 2026-09-24) is the same two rules applied to a *named* assumption
+set: the user's numbers are saved, the answer is not, and re-running recomputes it at the
+scenario's own `inputs_as_of`. It is the only module here that touches the database, and
+its arithmetic is still a pure function of the assumptions and the facts handed to it.
 """

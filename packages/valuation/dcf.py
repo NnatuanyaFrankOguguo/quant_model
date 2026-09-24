@@ -118,6 +118,11 @@ def _run(assumptions: DcfAssumptions) -> DcfResult:
     terminal_value = (
         projected[-1] * (one + assumptions.terminal_growth) / (r - assumptions.terminal_growth)
     )
+    # Discounted from the END of year N even under `mid_year`, which is deliberate and
+    # is worked through in `tests/known_answer/dcf_worksheet.md` Case C: the explicit
+    # years shift by half a year, the terminal value does not. Noted here because a
+    # careful reader of this function alone read the asymmetry as an oversight and went
+    # looking for the bug - the convention is defensible, but only if it is visible.
     pv_terminal = terminal_value / _power(one + r, horizon)
     enterprise_value = sum_pv + pv_terminal
     equity_value = enterprise_value - assumptions.net_debt

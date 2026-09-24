@@ -47,17 +47,18 @@ one - an `ON CONFLICT DO UPDATE` here would raise, by design.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from packages.common.models import Indicator
+from packages.common.models import Indicator, PriceHistory
 from packages.indicators.compute import CODE_VERSION, IndicatorSpec, compute
 from packages.indicators.series import AdjustedBars
 
-__all__ = ["StoreResult", "running_vintages", "store_for_security"]
+__all__ = ["StoreResult", "backfill", "running_vintages", "store_for_security"]
 
 
 @dataclass(frozen=True)
@@ -153,3 +154,64 @@ def store_for_security(
     ).scalar_one()
 
     return StoreResult(security_id, len(payload), after - before, tuple(names))
+
+
+def backfill(
+    session: Session,
+    *,
+    decision_date: dt.date,
+    security_ids: list[int] | None = None,
+    start: dt.date | None = None,
+    specs: list[IndicatorSpec] | None = None,
+    price_series: str = "adjusted",
+    on_progress: Callable[[StoreResult], None] | None = None,
+) -> list[StoreResult]:
+    """Every catalogue indicator over every security, or a named subset.
+
+    `start` bounds the history rather than the universe, and the two are not
+    interchangeable. `SPEC.md` 2A is explicit that a feature set must never be computed
+    "across a survivorship-filtered universe", so dropping *securities* to save space
+    would corrupt P7 in the one way it cannot detect. Dropping early *history* leaves
+    every security in and simply begins later, which a backtest window states anyway.
+
+    Worth knowing when choosing one: this universe's 24 securities are all present from
+    2010, and only 11 of them exist in 1970. A window that reaches back past 2010 is a
+    window whose composition changes underneath it.
+
+    **This is resumable, and on Neon it will need to be.** A full-universe run takes
+    twenty minutes or so, and Neon closes a connection held that long mid-statement -
+    the first run of this died on the twentieth security with "server closed the
+    connection unexpectedly". Nothing was lost: `store_for_security` commits per
+    security and every insert is ON CONFLICT DO NOTHING, so re-running is safe. Pass
+    `security_ids` with the ones still missing rather than starting again, since a
+    security already done costs a full recompute to write nothing.
+    """
+    from packages.indicators.compute import CATALOGUE
+    from packages.indicators.series import adjusted_bars
+
+    if specs is None:
+        specs = list(CATALOGUE.values())
+    if security_ids is None:
+        security_ids = [
+            row[0]
+            for row in session.execute(
+                select(PriceHistory.security_id).distinct().order_by(PriceHistory.security_id)
+            ).all()
+        ]
+
+    results: list[StoreResult] = []
+    for security_id in security_ids:
+        bars = adjusted_bars(
+            session, security_id=security_id, decision_date=decision_date, start=start
+        )
+        result = store_for_security(
+            session,
+            security_id=security_id,
+            bars=bars,
+            specs=specs,
+            price_series=price_series,
+        )
+        results.append(result)
+        if on_progress is not None:
+            on_progress(result)
+    return results
