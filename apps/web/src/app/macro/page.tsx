@@ -259,7 +259,16 @@ export default async function MacroPage() {
           </tbody>
         </table>
       </div>
-      <p className="scroll-hint">This table scrolls sideways.</p>
+      {/* Conditional on purpose. A flat "this table scrolls" is only true while the
+          columns happen to overflow, and column widths changed twice on this page
+          alone. `.scroll-hint` hides above an 860px *viewport*, which is not the
+          same question as whether the *container* overflows - inside `details.more`
+          the container stops growing at --prose (~551px) and the two diverge. This
+          wording asserts nothing about the current width, so it cannot go stale. */}
+      <p className="scroll-hint">
+        If this table is wider than your screen, it scrolls sideways rather than the
+        page.
+      </p>
 
       <details className="more">
         <summary>Why the observation count can be zero when the value cannot</summary>
