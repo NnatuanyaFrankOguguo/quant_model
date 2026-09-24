@@ -230,6 +230,14 @@ class DataSource(Base):
     `redistribution_allowed` is `NOT NULL` because that is the whole mechanism: it forces
     an answer at registration time. A connector whose source row is absent or incomplete
     cannot be enabled.
+
+    `expected_run_interval_hours` (`docs/10` §5.3, migration `0024`) is the register's second
+    job: it is what makes *absence* answerable. Every other health signal in this schema is
+    computed from `connector_runs` rows that exist, so a connector the scheduler stopped
+    launching produces no row, no group and no finding. A declared interval gives
+    `scripts/check_heartbeat.py` something to measure silence against. NULL means no one is
+    watching this source rather than that it is fine — which is exactly the distinction the
+    column exists to restore, so it is reported rather than skipped.
     """
 
     __tablename__ = "data_sources"
@@ -246,6 +254,9 @@ class DataSource(Base):
     reviewed_by: Mapped[str] = mapped_column(Text, nullable=False)
     rate_limit_per_sec: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Hours, not days: the shortest cadence here is daily, and a day-granular column could
+    # not express the 26-hour grace a daily job needs without rounding it to two days.
+    expected_run_interval_hours: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class SourceDocument(Base):

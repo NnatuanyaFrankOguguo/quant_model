@@ -28,23 +28,31 @@ from dataclasses import dataclass
 from typing import Any
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.orm import Session
 
 from packages.common.console import reset_steps, step
 from packages.common.db import get_session
-from packages.common.models import ConnectorRun
+from packages.common.models import ConnectorRun, DataSource
 from packages.common.timez import utcnow
 from packages.ingestion.base import Connector, ConnectorRunResult, record_run, register
 
 __all__ = [
     "ConnectorHealth",
     "ScheduledJob",
+    "SourceHeartbeat",
     "build_scheduler",
     "check_health",
+    "check_heartbeat",
     "run_job",
 ]
+
+#: The only value `Connector.run()` ever writes for a run that worked. `connector_runs.status`
+#: is plain `Text` with no check constraint, so this is a convention rather than a guarantee -
+#: which is why the heartbeat also carries the last *attempt*, and never infers success from
+#: the mere existence of a row.
+OK_STATUS = "ok"
 
 _log = structlog.get_logger(__name__)
 
@@ -372,3 +380,157 @@ def check_health(
             )
         )
     return health
+
+
+@dataclass(frozen=True)
+class SourceHeartbeat:
+    """One `data_sources` row, judged against the interval it declares. `docs/10` §5.3.
+
+    `ConnectorHealth` above answers *"how did the runs that happened go?"*. This answers the
+    question that has no rows to look at: *"has this source been heard from at all?"*
+
+    The two timestamps are kept apart on purpose, because they fail differently and the
+    operator's next move differs:
+
+    * `last_success_at` - the newest `finished_at` among runs with `status='ok'`. The
+      deadline is measured against this one, following §5.3's `max(cr.finished_at)`.
+    * `last_attempt_at` - the newest `started_at` of any run, successful or not. Recent
+      attempt with an old success means the scheduler is alive and the connector is broken;
+      both old means nothing launched it at all. §5.3 is about the second case, and a report
+      that could not tell it from the first would send the reader to the wrong place.
+    """
+
+    source_name: str
+    #: NULL in the database means nobody is watching this source; `unmonitored` carries it.
+    expected_run_interval_hours: int | None
+    #: The job identities whose runs count as this source being heard from, from
+    #: `packages.scheduler.jobs.expected_run_names_by_source`. Empty means nothing feeds it.
+    run_names: tuple[str, ...]
+    last_success_at: dt.datetime | None
+    last_attempt_at: dt.datetime | None
+    hours_since_success: float | None
+    #: True when the deadline has passed, or was never met at all. The reason is in `finding`.
+    overdue: bool
+    #: True when no interval is declared. Never also `overdue`: an expectation that was never
+    #: set cannot be missed. Reported separately rather than dropped, because a source nobody
+    #: watches and a source that is fine look identical - the whole complaint of §5.3.
+    unmonitored: bool
+    finding: str | None
+
+
+def _latest(seen: dict[str, dt.datetime | None], names: tuple[str, ...]) -> dt.datetime | None:
+    """The newest timestamp across the jobs feeding one source, ignoring those with none."""
+    stamps = [stamp for name in names if (stamp := seen.get(name)) is not None]
+    return max(stamps) if stamps else None
+
+
+def check_heartbeat(
+    session: Session,
+    *,
+    run_names_by_source: dict[str, set[str]],
+    now: dt.datetime | None = None,
+) -> list[SourceHeartbeat]:
+    """Every registered source, with the evidence that it is still being run. `docs/10` §5.3.
+
+    Starts from `data_sources` rather than from `connector_runs`, and that inversion is the
+    entire point. `check_health` can only report connectors that appear in the runs table, so
+    a job the scheduler stopped launching leaves the report without a trace. Here the row
+    exists whether or not anything ran, so the absence has something to be absent from.
+
+    `run_names_by_source` is a parameter rather than an import because
+    `packages.scheduler.jobs` imports this module - the same reason `health_report` takes its
+    `expected` map. The mapping is not decoration: `connector_runs.connector_name` holds job
+    identities (`fred:DGS10`, `edgar:AAPL`) while `data_sources.source_name` holds publishers
+    (`FRED`, `SEC EDGAR`), so §5.3's `ON cr.connector_name = ds.source_name` matches nothing
+    if it is run literally, and reports every source as never-run for ever.
+
+    Judged per *source*, not per job, because that is the table §5.3's `ALTER TABLE` puts the
+    column on. The cost is worth stating plainly: 23 of the 24 Yahoo jobs could stop and
+    `Yahoo Finance` would still look alive on the last one. `scripts/check_connectors.py`
+    covers a single job going quiet; this covers a whole source going dark, which is the
+    failure that one cannot see.
+    """
+    now = now or utcnow()
+    names = sorted({name for feeders in run_names_by_source.values() for name in feeders})
+
+    last_success: dict[str, dt.datetime | None] = {}
+    last_attempt: dict[str, dt.datetime | None] = {}
+    if names:
+        recorded = session.execute(
+            select(
+                ConnectorRun.connector_name,
+                # Successful runs only. The CASE yields NULL for everything else, so a run
+                # that failed cannot be mistaken for a heartbeat by `max()`.
+                func.max(case((ConnectorRun.status == OK_STATUS, ConnectorRun.finished_at))),
+                func.max(ConnectorRun.started_at),
+            )
+            .where(ConnectorRun.connector_name.in_(names))
+            .group_by(ConnectorRun.connector_name)
+        ).all()
+        for name, success_at, attempt_at in recorded:
+            last_success[name] = success_at
+            last_attempt[name] = attempt_at
+
+    registered = session.execute(
+        select(DataSource.source_name, DataSource.expected_run_interval_hours).order_by(
+            DataSource.source_name
+        )
+    ).all()
+
+    beats: list[SourceHeartbeat] = []
+    for source_name, interval in registered:
+        run_names = tuple(sorted(run_names_by_source.get(source_name, ())))
+        success_at = _latest(last_success, run_names)
+        attempt_at = _latest(last_attempt, run_names)
+        hours_since = (now - success_at).total_seconds() / 3600 if success_at else None
+
+        overdue = False
+        finding: str | None = None
+        if interval is None:
+            finding = (
+                "no expected_run_interval_hours recorded - nothing can say whether this "
+                "source stopped, so it will read as healthy for as long as it is dead"
+            )
+        elif not run_names:
+            overdue = True
+            finding = (
+                f"expects a run every {interval}h and no job in the schedule writes runs for "
+                f"it: either the connector was removed or the interval names a source that "
+                f"nothing feeds"
+            )
+        elif success_at is None and attempt_at is None:
+            overdue = True
+            finding = (
+                f"never ran: no connector_runs row exists for any of {', '.join(run_names)}, "
+                f"and a job that never ran fails exactly like one that runs and returns "
+                f"nothing, except quieter"
+            )
+        elif success_at is None:
+            overdue = True
+            finding = (
+                f"has run and never succeeded - last launched "
+                f"{attempt_at:%Y-%m-%d %H:%MZ}; the scheduler is alive, the connector is not"
+            )
+        elif hours_since is not None and hours_since > interval:
+            overdue = True
+            finding = f"last succeeded {hours_since:.1f}h ago; a run is expected every {interval}h"
+            if attempt_at is not None and attempt_at > success_at:
+                finding += (
+                    f" - last launched {attempt_at:%Y-%m-%d %H:%MZ}, so it is running and "
+                    f"failing rather than not running"
+                )
+
+        beats.append(
+            SourceHeartbeat(
+                source_name=source_name,
+                expected_run_interval_hours=interval,
+                run_names=run_names,
+                last_success_at=success_at,
+                last_attempt_at=attempt_at,
+                hours_since_success=hours_since,
+                overdue=overdue,
+                unmonitored=interval is None,
+                finding=finding,
+            )
+        )
+    return beats

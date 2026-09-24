@@ -37,6 +37,7 @@ __all__ = [
     "build_jobs",
     "edgar_refresh_job",
     "expected_run_names",
+    "expected_run_names_by_source",
     "expected_schedule",
     "price_job",
 ]
@@ -227,3 +228,31 @@ def expected_run_names() -> set[str]:
     names = {job.identity() for job in build_jobs()}
     names.update(f"manual_csv_{source.lower()}" for source in MANUAL_SOURCES)
     return names
+
+
+def expected_run_names_by_source() -> dict[str, set[str]]:
+    """Every `data_sources.source_name` mapped to the run names that count as it being alive.
+
+    `docs/10` §5.3's SQL joins `connector_runs.connector_name = data_sources.source_name`.
+    Those two columns have never held the same vocabulary, and nothing in the schema says so:
+    `source_name` is the publisher on the licensing register - 'FRED', 'SEC EDGAR', 'Yahoo
+    Finance' - while `connector_name` is a *job identity* - 'fred:DGS10', 'edgar:AAPL',
+    'yahoo:AAPL' - which `run_job` writes and this module's docstring explains. Run as
+    written, the join matches on nothing, every source reports as never-run, and the check
+    meant to end a silent failure becomes one. This function is that bridge.
+
+    Derived from `build_jobs()` rather than written out, for the same reason
+    `expected_run_names` is: a mapping maintained by hand goes quiet about exactly the job
+    somebody forgot to add to it, and the whole subject here is what silence hides.
+    `declare_licence()` is the authority for which register row a connector belongs to
+    because it is the same call `register()` makes on every run, so the two cannot drift.
+
+    Manual CSV paths map to their agency directly - `manual_csv_nbs` is how the NBS row is
+    heard from, and for the NBS and the DMO it is the only way.
+    """
+    by_source: dict[str, set[str]] = {}
+    for job in build_jobs():
+        by_source.setdefault(job.connector.declare_licence().source_name, set()).add(job.identity())
+    for source in MANUAL_SOURCES:
+        by_source.setdefault(source, set()).add(f"manual_csv_{source.lower()}")
+    return by_source
