@@ -84,14 +84,19 @@ class ScheduledJob:
 
     @property
     def clock(self) -> str:
-        """When it runs, for the health report - which has to render a wildcard too.
+        """When it runs, as a fixed-width clock. `**:15` means every hour at a quarter past.
 
-        `f"{hour:02d}"` raises on a string, and this is the one place the schedule is
-        turned into text, so the wildcard is spelled out here rather than guarded at
-        every reader.
+        `f"{hour:02d}"` raises on a string, and this is the one place a schedule becomes
+        text, so the wildcard is handled here rather than guarded at every reader.
+
+        Deliberately still five characters and still `HH:MM`-shaped. This string reaches
+        `JobHealth.scheduled_at_utc`, which is served **anonymously** and documents itself
+        as `'HH:MM' UTC` - a field in a public response is a contract, and a first attempt
+        at this returned "hourly at :15", which broke it. `**` is the conventional wildcard
+        and reads correctly in the operations table without anything having to parse it.
         """
         if isinstance(self.hour, str):
-            return f"hourly at :{self.minute:02d}"
+            return f"**:{self.minute:02d}"
         return f"{self.hour:02d}:{self.minute:02d}"
 
     job_id: str = ""
@@ -261,7 +266,7 @@ def _scheduled_run(job: ScheduledJob) -> ConnectorRunResult:
 class Expectation:
     """What the schedule expects of one name: when it runs, and how often it should write."""
 
-    scheduled_at_utc: str | None  # 'HH:MM', or None for a path a human feeds
+    scheduled_at_utc: str | None  # 'HH:MM', '**:MM' hourly, or None for a manual path
     publishes_every_days: int
 
 
@@ -275,7 +280,7 @@ class JobHealth:
     """
 
     name: str
-    scheduled_at_utc: str | None  # 'HH:MM' for a scheduled job; None for a manual path
+    scheduled_at_utc: str | None  # 'HH:MM', '**:MM' hourly; None for a manual path
     expected: bool  # in the schedule or the manual list, as opposed to merely seen
     last_run_at: dt.datetime | None
     last_status: str | None

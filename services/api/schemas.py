@@ -67,7 +67,11 @@ class JobHealth(BaseModel):
 
     name: str
     scheduled_at_utc: str | None = Field(
-        default=None, description="'HH:MM' UTC, or null for a manual path"
+        default=None,
+        description=(
+            "'HH:MM' UTC for a job that runs once a day, '**:MM' for one that runs "
+            "every hour, or null for a path a human feeds"
+        ),
     )
     expected: bool
     last_run_at: dt.datetime | None = None

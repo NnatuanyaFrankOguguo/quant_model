@@ -19,6 +19,7 @@ tests do not wait on a timeout.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -99,7 +100,14 @@ def test_the_operations_report_is_served_anonymously_and_judges_every_job(client
     assert body["needs_a_human"] == any(j["level"] != "ok" for j in body["jobs"])
     for job in body["jobs"]:
         if job["scheduled_at_utc"] is not None:
-            assert len(job["scheduled_at_utc"]) == 5, "HH:MM"
+            # The shape, not the width. `len == 5` was a proxy for "it is a clock" and a
+            # weak one: it would accept "hello" and reject a perfectly good "9:05". It also
+            # passes by luck for `**:05`, which is the hourly form this field gained - so
+            # the assertion now says what it means, and says it for both forms.
+            assert re.fullmatch(r"(?:[01]\d|2[0-3]|\*\*):[0-5]\d", job["scheduled_at_utc"]), (
+                f"{job['name']}: scheduled_at_utc is {job['scheduled_at_utc']!r}, which is "
+                f"neither HH:MM nor the **:MM the schema documents for an hourly job"
+            )
 
 
 def test_the_operations_page_shows_a_banner_not_a_stack_trace(
