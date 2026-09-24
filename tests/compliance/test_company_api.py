@@ -294,6 +294,78 @@ def test_dcf_runs_on_the_callers_assumptions_and_echoes_every_input(client, appl
     assert 0 < Decimal(body["terminal_share_of_value"]) < 1
 
 
+def test_scenario_runs_on_the_callers_assumptions_and_shows_both_sides(
+    client, apple_loaded
+) -> None:
+    """P6.1 / T8. The scenario endpoint answers with the figures and their provenance."""
+    response = client.post(
+        "/v1/public/companies/AAPL/scenario",
+        json={
+            "growth_rates": ["0.08", "0.06", "0.04"],
+            "discount_rate": "0.09",
+            "terminal_growth": "0.02",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["ticker"] == "AAPL"
+    assert body["dcf"]["value_per_share"] is not None
+    # Both sides, always: a scenario on its own is a number with nothing to read against.
+    assert body["ratios"].keys() == body["ratios_as_reported"].keys()
+    # No rate move was asked for, so there is nothing to compare against and no FX block.
+    assert body["fx"] is None
+    assert body["dcf_before_fx"] is None
+
+    # Every figure says where it came from - the caller's, or a named period or bar.
+    sources = {item["name"]: item["source"] for item in body["inputs"]}
+    assert sources["discount_rate"] == "user"
+    assert sources["growth_rates"] == "user"
+    assert "FY" in sources["base_free_cash_flow_before_fx"]
+
+
+def test_scenario_refuses_rather_than_choosing_a_rate(client, apple_loaded) -> None:
+    """`SPEC.md` T8: the model does not pick the assumptions. An absent one is a 422."""
+    response = client.post(
+        "/v1/public/companies/AAPL/scenario",
+        json={"growth_rates": ["0.05"], "terminal_growth": "0.02"},
+    )
+    assert response.status_code == 422
+    assert "discount_rate" in " ".join(response.json()["fields"])
+
+
+def test_scenario_refuses_a_rate_move_nothing_is_exposed_to(client, apple_loaded) -> None:
+    """And names all three ways the caller could have said what was exposed.
+
+    `docs/10` §4.7: the body says only `invalid_request` about what was wrong, but an
+    error nobody can act on is one they stop reading.
+    """
+    response = client.post(
+        "/v1/public/companies/AAPL/scenario",
+        json={
+            "growth_rates": ["0.05"],
+            "discount_rate": "0.09",
+            "terminal_growth": "0.02",
+            "fx": {"scenario_rate": "2000"},
+        },
+    )
+    assert response.status_code == 422
+    assert set(response.json()["fields"]) == {
+        "fx.cost_exposure",
+        "fx.revenue_exposure",
+        "fx.foreign_debt",
+    }
+
+
+def test_scenario_on_an_unknown_ticker_is_a_404_not_a_422(client, apple_loaded) -> None:
+    """A ticker that is not held and assumptions that are wrong are different problems."""
+    response = client.post(
+        "/v1/public/companies/NOSUCH/scenario",
+        json={"growth_rates": ["0.05"], "discount_rate": "0.09", "terminal_growth": "0.02"},
+    )
+    assert response.status_code == 404
+
+
 def test_dcf_never_chooses_the_assumptions(client, apple_loaded) -> None:
     """No growth, no discount rate, no terminal growth - no answer. A 422, not a default."""
     response = client.get("/v1/public/companies/AAPL/dcf", params={"discount_rate": "0.09"})

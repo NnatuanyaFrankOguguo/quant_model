@@ -22,9 +22,10 @@ from packages.ingestion.edgar import SOURCE_NAME as EDGAR_SOURCE
 from packages.ingestion.yahoo import SOURCE_NAME as PRICE_SOURCE
 from packages.scheduler.jobs import expected_schedule
 from packages.scheduler.runner import health_report
-from packages.valuation import snapshot
-from packages.valuation.dcf import DcfAssumptions, dcf
+from packages.valuation import scenarios, snapshot
+from packages.valuation.dcf import DcfAssumptions, DcfResult, dcf
 from services.api.deps import get_mode
+from services.api.errors import FieldedHTTPException
 from services.api.middleware.assert_response import PublicAPIRoute
 from services.api.routers import API_V1
 from services.api.schemas import (
@@ -37,9 +38,11 @@ from services.api.schemas import (
     CompanyList,
     CompanyRatioHistory,
     CompanyRatios,
+    CompanyScenario,
     CompanyStatements,
     ConnectorHealthReport,
     DcfAssumptionsUsed,
+    DcfNumbers,
     DividendPaid,
     DividendYear,
     Figure,
@@ -56,6 +59,9 @@ from services.api.schemas import (
     PublicPing,
     RatioHistoryPoint,
     RecentFilings,
+    ScenarioFxEffect,
+    ScenarioInput,
+    ScenarioRequest,
     SharesUsed,
     StatementPeriod,
 )
@@ -659,6 +665,143 @@ def _reaction(r: snapshot.PriceReaction | None) -> PriceReaction | None:
         after_5=_bar(r.after_5),
         return_1d=r.return_1d,
         return_5d=r.return_5d,
+    )
+
+
+@router.post("/companies/{ticker}/scenario", response_model=CompanyScenario)
+async def company_scenario(ticker: str, request: ScenarioRequest) -> CompanyScenario:
+    """Run the caller's assumptions against the company's stored facts. P6.1, T8.
+
+    Both sides come back - the figures as reported and the figures under the scenario -
+    because a scenario on its own is a number with nothing to read it against.
+
+    Nothing here is chosen by the system. `SPEC.md` T8's acceptance criterion is that the
+    model does not pick the rates, so an absent one is a 422 naming it rather than a
+    default, and a rate move naming nothing exposed to it is refused rather than costed
+    at zero. A missing *fact* is named the same way: an operator who supplies forty
+    figures and is told only `invalid_request` has no way to find the one at fault, which
+    is what `FieldedHTTPException` exists for.
+
+    Compute only. Saving a scenario is per principal, and this is a public route with no
+    principal to save it against.
+    """
+    decision_date = request.as_known_on or utctoday()
+    try:
+        assumptions = scenarios.ScenarioAssumptions(
+            growth_rates=tuple(request.growth_rates),
+            discount_rate=request.discount_rate,
+            terminal_growth=request.terminal_growth,
+            mid_year=request.mid_year,
+            base_free_cash_flow=request.base_free_cash_flow,
+            net_debt=request.net_debt,
+            shares=request.shares,
+            overrides=dict(request.overrides),
+            fx=(
+                scenarios.FxShock(
+                    scenario_rate=request.fx.scenario_rate,
+                    base_rate=request.fx.base_rate,
+                    cost_exposure=request.fx.cost_exposure,
+                    revenue_exposure=request.fx.revenue_exposure,
+                    foreign_debt=request.fx.foreign_debt,
+                    tax_rate=request.fx.tax_rate,
+                )
+                if request.fx is not None
+                else None
+            ),
+            period_label=request.period_label,
+        )
+    except scenarios.ScenarioRefusedError as refused:
+        raise _refused(refused) from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_request") from None
+
+    with get_session() as session:
+        ref = snapshot.find_security(session, ticker)
+        if ref is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        try:
+            facts = scenarios.facts_for(
+                session,
+                security_id=ref.security_id,
+                inputs_as_of=decision_date,
+                period_label=request.period_label,
+            )
+            result = scenarios.run_scenario(assumptions, facts)
+        except scenarios.ScenarioRefusedError as refused:
+            raise _refused(refused) from None
+        except ValueError:
+            raise HTTPException(status_code=422, detail="invalid_request") from None
+
+    return CompanyScenario(
+        ticker=ref.ticker,
+        legal_name=ref.legal_name,
+        inputs_as_of=result.facts.inputs_as_of,
+        currency=result.facts.currency or ref.currency,
+        period_label=result.facts.period_label,
+        inputs=[
+            ScenarioInput(name=item.name, value=_input_value(item.value), source=item.source)
+            for item in result.inputs
+        ],
+        line_items_as_reported=dict(result.line_items_as_reported),
+        line_items_under_scenario=dict(result.line_items_under_scenario),
+        fx=(
+            ScenarioFxEffect(
+                base_rate=result.fx.base_rate,
+                scenario_rate=result.fx.scenario_rate,
+                move=result.fx.move,
+                revenue_effect=result.fx.revenue_effect,
+                cost_effect=result.fx.cost_effect,
+                operating_pre_tax=result.fx.operating_pre_tax,
+                operating_after_tax=result.fx.operating_after_tax,
+                debt_revaluation=result.fx.debt_revaluation,
+            )
+            if result.fx is not None
+            else None
+        ),
+        dcf=_dcf_numbers(result.dcf),
+        dcf_before_fx=(
+            _dcf_numbers(result.dcf_before_fx) if result.dcf_before_fx is not None else None
+        ),
+        ratios=dict(result.ratios),
+        ratios_as_reported=dict(result.ratios_as_reported),
+        code_version=result.code_version,
+    )
+
+
+def _refused(error: scenarios.ScenarioRefusedError) -> HTTPException:
+    """A refusal, naming the fields at fault where the engine knows them.
+
+    `docs/10` §4.7: the body still says only `invalid_request` about *what* was wrong -
+    the names of the inputs are not their values - but naming them is the difference
+    between an error somebody can act on and one they stop reading.
+    """
+    missing = getattr(error, "missing", ())
+    if missing:
+        return FieldedHTTPException(status_code=422, detail="invalid_request", fields=list(missing))
+    return HTTPException(status_code=422, detail="invalid_request")
+
+
+def _input_value(value: object) -> str | list[str] | bool | None:
+    """A resolved input for the wire. Decimals become strings, as everywhere else here."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, tuple | list):
+        return [str(part) for part in value]
+    return str(value)
+
+
+def _dcf_numbers(result: DcfResult) -> DcfNumbers:
+    return DcfNumbers(
+        projected_free_cash_flow=list(result.projected_free_cash_flow),
+        discount_factors=list(result.discount_factors),
+        present_values=list(result.present_values),
+        sum_of_present_values=result.sum_of_present_values,
+        terminal_value=result.terminal_value,
+        present_value_of_terminal=result.present_value_of_terminal,
+        enterprise_value=result.enterprise_value,
+        equity_value=result.equity_value,
+        value_per_share=result.value_per_share,
+        terminal_share_of_value=result.terminal_share_of_value,
     )
 
 

@@ -796,20 +796,14 @@ class DcfAssumptionsUsed(BaseModel):
 
 
 @register_public_type
-class CompanyDcf(BaseModel):
-    """A discounted-cash-flow result computed from the caller's own assumptions.
+class DcfNumbers(BaseModel):
+    """Every line of a discounted-cash-flow result, and nothing about whose it is.
 
-    The growth, discount and terminal rates are the caller's; the model never chooses them.
-    The base cash flow, net debt and share count default to the company's stored figures
-    as known on the date and are echoed back so the arithmetic can be checked line by
-    line. This is arithmetic on stated inputs, not an opinion about the company.
+    Split out so a scenario can carry two of these - the answer, and the answer without
+    the exchange-rate move - without a second definition of what a DCF result looks like
+    drifting away from this one.
     """
 
-    ticker: str
-    legal_name: str
-    as_known_on: date
-    currency: str
-    assumptions: DcfAssumptionsUsed
     projected_free_cash_flow: list[Decimal]
     discount_factors: list[Decimal]
     present_values: list[Decimal]
@@ -826,3 +820,139 @@ class CompanyDcf(BaseModel):
             "discount rate barely moves the answer, look here first."
         ),
     )
+
+
+class FxShockRequest(BaseModel):
+    """An exchange-rate move, and what the caller says is exposed to it.
+
+    Every field is the caller's. The system holds no view on where a rate is going, and
+    `SPEC.md` T8 forbids it acquiring one: a scenario naming no exposure is refused
+    rather than quietly costed at zero, because a shock nothing is exposed to is almost
+    always a question the asker has not finished writing.
+    """
+
+    scenario_rate: Decimal = Field(description="The rate to assume, e.g. 2000 NGN/USD")
+    base_rate: Decimal | None = Field(
+        default=None, description="The rate to move from. Defaults to the one held for the date."
+    )
+    cost_exposure: Decimal | None = Field(
+        default=None, description="Fraction of cost of sales priced in the foreign currency"
+    )
+    revenue_exposure: Decimal | None = Field(
+        default=None, description="Fraction of revenue earned in the foreign currency"
+    )
+    foreign_debt: Decimal | None = Field(
+        default=None, description="Debt denominated in the foreign currency, in that currency"
+    )
+    tax_rate: Decimal | None = Field(
+        default=None, description="Required whenever an operating exposure is given"
+    )
+
+
+class ScenarioRequest(BaseModel):
+    """The caller's complete assumption set. Nothing here is chosen by the system.
+
+    `DATA_FOUNDATION.md` §6.5 - "user-set assumptions only" - so the three rates have no
+    defaults and a 422 naming them is the answer when they are absent. The three optional
+    figures are optional only because a *fact* can stand in: the statements as known on
+    the date. When one does, the response says which period it came from.
+    """
+
+    growth_rates: list[Decimal] = Field(description="Growth per projected year, as fractions")
+    discount_rate: Decimal = Field(description="Discount rate (WACC) as a fraction")
+    terminal_growth: Decimal = Field(
+        description="Perpetual growth; must be below the discount rate"
+    )
+    mid_year: bool = Field(default=False, description="Mid-year discounting convention")
+    base_free_cash_flow: Decimal | None = None
+    net_debt: Decimal | None = None
+    shares: Decimal | None = None
+    overrides: dict[str, Decimal] = Field(
+        default_factory=dict,
+        description="Canonical line-item key -> the figure to assume instead of the reported one",
+    )
+    fx: FxShockRequest | None = None
+    period_label: str | None = Field(
+        default=None, description="Which period to run against. Defaults to the newest FY known."
+    )
+    as_known_on: date | None = Field(
+        default=None, description="Point-in-time date. Defaults to today."
+    )
+
+
+@register_public_type
+class ScenarioInput(BaseModel):
+    """One figure that entered the arithmetic, and where it came from.
+
+    `CLAUDE.md`: show the work in every mode. `source` is `user` for something typed and
+    otherwise a sentence naming the period, bar or rate it was read from. Nothing is
+    elided, including the figures the caller supplied, so the workings can be checked
+    without knowing which half of the inputs were theirs.
+    """
+
+    name: str
+    value: str | list[str] | bool | None
+    source: str
+
+
+@register_public_type
+class ScenarioFxEffect(BaseModel):
+    """What the rate move did, in reporting-currency units, line by line."""
+
+    base_rate: Decimal
+    scenario_rate: Decimal
+    move: Decimal = Field(description="scenario_rate / base_rate - 1")
+    revenue_effect: Decimal
+    cost_effect: Decimal
+    operating_pre_tax: Decimal
+    operating_after_tax: Decimal
+    debt_revaluation: Decimal = Field(
+        description="Added to net debt. Non-cash, and not tax-effected."
+    )
+
+
+@register_public_type
+class CompanyScenario(BaseModel):
+    """A DCF and a ratio set under the caller's assumptions, beside the reported figures.
+
+    Both sides are returned on purpose. The scenario alone is a number with nothing to
+    read it against; the pair shows what the assumption actually did, which is the whole
+    question a scenario is asked to answer. There is no verdict and no target: `SPEC.md`
+    T8's acceptance is that the model does not choose, and the only opinion in this
+    response is the one the caller typed.
+    """
+
+    ticker: str
+    legal_name: str
+    inputs_as_of: date
+    currency: str
+    period_label: str | None
+    inputs: list[ScenarioInput]
+    line_items_as_reported: dict[str, Decimal | None]
+    line_items_under_scenario: dict[str, Decimal | None]
+    fx: ScenarioFxEffect | None
+    dcf: DcfNumbers
+    dcf_before_fx: DcfNumbers | None = Field(
+        default=None,
+        description="The same DCF without the rate move, so the move's effect is visible",
+    )
+    ratios: dict[str, Decimal | None]
+    ratios_as_reported: dict[str, Decimal | None]
+    code_version: str
+
+
+@register_public_type
+class CompanyDcf(DcfNumbers):
+    """A discounted-cash-flow result computed from the caller's own assumptions.
+
+    The growth, discount and terminal rates are the caller's; the model never chooses them.
+    The base cash flow, net debt and share count default to the company's stored figures
+    as known on the date and are echoed back so the arithmetic can be checked line by
+    line. This is arithmetic on stated inputs, not an opinion about the company.
+    """
+
+    ticker: str
+    legal_name: str
+    as_known_on: date
+    currency: str
+    assumptions: DcfAssumptionsUsed

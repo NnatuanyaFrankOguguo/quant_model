@@ -35,6 +35,7 @@ from services.api.schemas import (
     CompanyList,
     CompanyRatioHistory,
     CompanyRatios,
+    CompanyScenario,
     CompanyStatements,
     ConnectorHealthReport,
     CorrectionRateReport,
@@ -104,6 +105,9 @@ MANIFEST: dict[str, RouteSpec] = {
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyFilings
     ),
     "GET /v1/public/filings/recent": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, RecentFilings),
+    "POST /v1/public/companies/{ticker}/scenario": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyScenario
+    ),
     "GET /v1/public/companies/{ticker}/dcf": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyDcf
     ),
