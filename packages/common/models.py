@@ -1394,6 +1394,16 @@ class NewsSentiment(Base):
         CheckConstraint(
             "label IN ('positive', 'negative', 'neutral')", name="news_sentiment_label_known"
         ),
+        CheckConstraint("tier IN ('bulk', 'ambiguous')", name="news_sentiment_tier_known"),
+        CheckConstraint(
+            "reason IN ('no_sentiment_words', 'clear', 'conflicting_words', 'lexicon_gap', "
+            "'false_friend', 'name_in_lexicon')",
+            name="news_sentiment_reason_known",
+        ),
+        CheckConstraint(
+            "(tier = 'bulk') = (reason IN ('clear', 'no_sentiment_words'))",
+            name="news_sentiment_tier_matches_reason",
+        ),
     )
 
     news_id: Mapped[int] = mapped_column(ForeignKey("news_items.id"), primary_key=True)
@@ -1401,6 +1411,12 @@ class NewsSentiment(Base):
     model_version: Mapped[str] = mapped_column(Text, primary_key=True)
     score: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
     label: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Whether the lexicon was trusted on this headline, and what decided it. Migration
+    #: 0030: on this corpus 20 of 44 articles score exactly 0.0000 and most of those are
+    #: unreadable rather than neutral, so a score stored without its reason is not
+    #: evidence. `tier` is 'bulk' or 'ambiguous'; `reason` is the router's finding.
+    tier: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
     scored_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

@@ -57,6 +57,12 @@ dev = [
   # being true when `packages/ingestion/documents.py` landed. The heavy members of `data`
   # (pandas, numpy, pymupdf, anthropic) are still absent.
   "pdfplumber",
+  # Same reason as pdfplumber, for P5.3. `tests/unit/test_sentiment.py` asserts facts
+  # about the *installed lexicon* - which terms VADER scores, and the four ratios the
+  # conflict threshold is derived from - so without this the tiering tests would skip in
+  # CI, which is the silent pass this repository keeps finding. ~130 KB, no compiled
+  # dependencies; the heavy members of `data` are still absent.
+  "vaderSentiment",
   "pytest-cov",
   "hypothesis",
   "ruff",
