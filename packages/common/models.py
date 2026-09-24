@@ -36,6 +36,7 @@ from sqlalchemy import (
     Computed,
     Date,
     DateTime,
+    Double,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -1276,6 +1277,98 @@ class NewsTag(Base):
     alias: Mapped[SecurityAlias | None] = relationship()
 
 
+class Indicator(Base):
+    """One indicator value for one security on one day, at one vintage. P6.2, P6.3.
+
+    `docs/08` §2.7, migration 0028. Three columns here are load-bearing and one of them
+    looks like bookkeeping.
+
+    **`price_series`** records whether the value was built on adjusted or raw prices.
+    `docs/03` P6's only 🔴 FRAGILE risk is an indicator computed on unadjusted prices -
+    *"Silent; corrupts P8's entire feature set"* - because a split leaves a cliff in a raw
+    close series that RSI reads as a crash. §2.7's note is the reason this is a column
+    rather than a convention: it makes the rule *"auditable in the DATA, not only by a
+    lint rule that cannot see rows already written."*
+
+    **`param_hash` is in the primary key.** RSI-14 and RSI-21 are different features and
+    share a `name` prefix by convention only. Without the hash in the key, one silently
+    overwrites the other and P8 trains on whichever ran last. `params` is stored beside it
+    because a hash nobody can invert is not provenance - a reader must be able to see
+    *which* fourteen-day convention produced the number.
+
+    **`known_as_of` is in the primary key**, as it is in `price_history` and
+    `ml_features`. Recomputing after a restatement writes a second row; the `no_update`
+    trigger from migration 0002 makes that the only option rather than the polite one.
+
+    `computed_at` is provenance, never a join key. The point-in-time date of an indicator
+    is `known_as_of` - the vintage of the newest bar that fed it. Joining a feature on our
+    processing clock would be reading the scheduler's cron entry as if it were the market
+    (`docs/08` §1.3).
+
+    Nothing here is a signal. `SPEC.md` 4.2's acceptance for T9 is "computed + stored",
+    and P6's exit criteria make "no signals generated anywhere" a hard gate.
+    """
+
+    __tablename__ = "indicators"
+    __table_args__ = (
+        CheckConstraint(
+            "price_series IN ('adjusted', 'raw')", name="indicators_price_series_known"
+        ),
+        CheckConstraint("known_as_of >= date", name="indicators_pit_sanity"),
+    )
+
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), primary_key=True)
+    date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, primary_key=True)
+    param_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    known_as_of: Mapped[dt.date] = mapped_column(Date, primary_key=True)
+    params: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    # DOUBLE PRECISION per `docs/08` §1.5: statistical values only, where precision loss
+    # is irrelevant and speed is not. A price is Numeric; an RSI is not a price.
+    value: Mapped[float | None] = mapped_column(Double, nullable=True)
+    price_series: Mapped[str] = mapped_column(Text, nullable=False)
+    computed_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    code_version: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class Scenario(Base):
+    """A named set of the owner's own assumptions. P6.1.
+
+    `docs/08` §2.9, migration 0028. `docs/03` P6.1 and `SPEC.md` T8: user assumptions in,
+    DCF out, and **no auto-generated targets**. Everything in `assumptions` was typed by a
+    person; nothing the system chose belongs in it.
+
+    **There is no stored result, on purpose.** `docs/03` P6's illustrative sketch shows a
+    `result_json`; §2.9's DDL does not, and carries `inputs_as_of` with the note
+    *"US-060: must reproduce identical output"* instead. A cached answer is one frozen
+    vintage that goes stale the moment a filing is restated, and it would make P6 check 7
+    - "same assumptions produce identical output" - unfalsifiable, since it would compare
+    a cached answer with itself. The assumptions and the as-of date are kept; the answer
+    is recomputed.
+
+    Unique per `(principal, security, name)`: P6 check 8 is that two principals' scenarios
+    do not collide, and "bear" means different things to different people.
+    """
+
+    __tablename__ = "scenarios"
+    __table_args__ = (
+        UniqueConstraint("principal_id", "security_id", "name", name="scenarios_named_once"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    principal_id: Mapped[int] = mapped_column(ForeignKey("principals.id"), nullable=False)
+    security_id: Mapped[int] = mapped_column(ForeignKey("securities.id"), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    assumptions: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    inputs_as_of: Mapped[dt.date] = mapped_column(Date, nullable=False)
+    code_version: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 __all__ = [
     "AuditLog",
     "Base",
@@ -1284,6 +1377,7 @@ __all__ = [
     "DataSource",
     "Entitlement",
     "Exchange",
+    "Indicator",
     "Industry",
     "LlmSpend",
     "MacroObservation",
@@ -1292,6 +1386,7 @@ __all__ = [
     "NewsTag",
     "Principal",
     "PrincipalToken",
+    "Scenario",
     "Security",
     "SecurityAlias",
     "SourceDocument",
