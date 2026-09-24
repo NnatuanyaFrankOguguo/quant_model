@@ -1369,7 +1369,86 @@ class Scenario(Base):
     )
 
 
+class NewsSentiment(Base):
+    """One model's read of one headline. P5.3.
+
+    `docs/08` §2.6, migration 0029. **`model_version` is in the primary key**, and §2.6
+    says why: *"re-scoring with a new model adds rows rather than destroying the old
+    scores, so you can compare."* That is what makes the choice of scorer reversible -
+    the bulk tier starts on VADER, and FinBERT or an LLM later writes beside it instead
+    of over it. The `no_update` trigger makes adding a row the only option.
+
+    **Treat every score here as weak.** `docs/03` P5.3: the available models are trained
+    on US financial English, and *"Nigerian financial journalism has different idiom and
+    different framing conventions... do not let a sentiment score drive anything on its
+    own."* Nothing downstream may act on this column alone.
+
+    `scored_at` is provenance. The point-in-time date of a sentiment row is the article's
+    `NewsItem.known_as_of`; joining a feature on our processing clock would be reading
+    the scheduler's cron entry as if it were the market (`docs/08` §1.3).
+    """
+
+    __tablename__ = "news_sentiment"
+    __table_args__ = (
+        CheckConstraint("score >= -1 AND score <= 1", name="news_sentiment_score_in_range"),
+        CheckConstraint(
+            "label IN ('positive', 'negative', 'neutral')", name="news_sentiment_label_known"
+        ),
+    )
+
+    news_id: Mapped[int] = mapped_column(ForeignKey("news_items.id"), primary_key=True)
+    model: Mapped[str] = mapped_column(Text, primary_key=True)
+    model_version: Mapped[str] = mapped_column(Text, primary_key=True)
+    score: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    scored_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AlertDelivery(Base):
+    """This content went to this principal once, and must not go again. P5.4.
+
+    Migration 0029, which records at length why this table is here in P5 when `docs/08`
+    row 40 assigns it to P10. In short: `docs/03` P5.4 requires the brief to be
+    idempotent, `alerts` is a P10 table, and a brief has no rule behind it - so
+    `alert_id` is nullable and stays null for a brief.
+
+    The hash is over the **content**, which is what lets one table serve a scheduled
+    brief and a triggered alert alike: the same figures on the same morning hash the same
+    however they were produced. `docs/03` P5.4 on why this matters at all - *"A retry
+    after a network blip that double-sends is how a useful bot becomes a muted one."*
+
+    Unique per `(principal, hash)` rather than globally: `CLAUDE.md` makes the brief per
+    principal, so two people receiving identical content is two deliveries, and neither
+    suppresses the other.
+    """
+
+    __tablename__ = "alert_deliveries"
+    __table_args__ = (
+        UniqueConstraint("principal_id", "idempotency_hash", name="alert_deliveries_sent_once"),
+        CheckConstraint(
+            "status IN ('pending', 'sent', 'failed', 'suppressed')",
+            name="alert_deliveries_status_known",
+        ),
+        CheckConstraint(
+            "(status <> 'sent') OR (delivered_at IS NOT NULL)",
+            name="alert_deliveries_sent_has_a_time",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    alert_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    principal_id: Mapped[int] = mapped_column(ForeignKey("principals.id"), nullable=False)
+    idempotency_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    channel: Mapped[str] = mapped_column(Text, nullable=False)
+    delivered_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
 __all__ = [
+    "AlertDelivery",
     "AuditLog",
     "Base",
     "Company",
@@ -1383,6 +1462,7 @@ __all__ = [
     "MacroObservation",
     "MacroSeries",
     "NewsItem",
+    "NewsSentiment",
     "NewsTag",
     "Principal",
     "PrincipalToken",

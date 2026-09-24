@@ -32,6 +32,12 @@ data = [
   "pandas",
   "numpy",
   "pandas-ta-classic",
+  # P5.3's bulk sentiment tier. Lexicon-based and ~130 KB, against FinBERT's transformers
+  # + torch: `docs/03` P5.3 offers either, and warns that both are trained on US financial
+  # English and must be treated as a weak signal whichever is chosen. `news_sentiment`
+  # keeps `model_version` in its primary key, so a second scorer writes beside this one
+  # rather than over it and the choice stays reversible.
+  "vaderSentiment",
   "pdfplumber",
   "pymupdf",
   "anthropic",
