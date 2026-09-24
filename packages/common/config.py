@@ -132,7 +132,10 @@ def _known_secret_values() -> list[str]:
     except Exception:  # noqa: BLE001 - settings may be unavailable mid-failure
         return []
     values: list[str] = []
-    for candidate in (settings.fred_api_key,):
+    # Every literal key this process can hold. An Anthropic error carries the request
+    # context back in its message, so a key left out of this list is one that reaches the
+    # log the first time the API refuses a call.
+    for candidate in (settings.fred_api_key, settings.anthropic_api_key):
         if candidate:
             values.append(candidate)
     for url in (settings.database_url, settings.test_database_url):
@@ -175,6 +178,12 @@ class Settings(BaseSettings):
     # and email (`DATA_FOUNDATION.md` §C). Absent is a legitimate state: the EDGAR
     # connectors refuse to run rather than send an anonymous request and be blocked.
     sec_user_agent: str | None = None
+
+    # P4.2. The reconciliation step, and nothing else in the system, needs this. Absent is
+    # a legitimate state and a common one: the deterministic half of the extraction
+    # pipeline runs without it, the manual entry path (P3.2) needs no key at all, and
+    # `ClaudeReconciler` refuses at the moment of use rather than at import.
+    anthropic_api_key: str | None = None
 
     def __repr__(self) -> str:
         """Credential-free repr. See the module docstring for why this is not optional."""

@@ -44,7 +44,7 @@ import datetime as dt
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 import structlog
 from sqlalchemy.orm import Session
@@ -108,6 +108,7 @@ class ModelCall:
     cache_hit: bool = False
 
 
+@runtime_checkable
 class Reconciler(Protocol):
     """The one box in P4.1's flowchart that needs an API key.
 
@@ -117,6 +118,11 @@ class Reconciler(Protocol):
 
     `estimate_usd` runs *before* the call, because the budget gate needs a number to add to
     the month's spend and a limit enforced after the fact is an audit.
+
+    `runtime_checkable` so a test can assert an implementation satisfies it. That only
+    checks the members are present, not their signatures - but a missing `estimate_usd` is
+    the drift that would surface as an `AttributeError` on the first real document, at
+    the moment an API key finally exists and nobody is looking for a typo.
     """
 
     model_name: str
