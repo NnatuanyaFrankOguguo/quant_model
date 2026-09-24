@@ -27,12 +27,19 @@ import httpx
 from packages.common.config import get_settings
 from packages.common.timez import utctoday
 from packages.ingestion.base import (
+    CachedDocument,
     Connector,
     DataSourceLicence,
     MacroRecord,
     RawResponse,
+    revalidated,
 )
-from packages.ingestion.polite import PoliteFetcher, require_document, shared_fetcher
+from packages.ingestion.polite import (
+    NotModified,
+    PoliteFetcher,
+    require_document,
+    shared_fetcher,
+)
 
 __all__ = [
     "FRED_SERIES",
@@ -162,6 +169,26 @@ class FredConnector(Connector):
                 dates.append(parsed)
         return dates
 
+    def cache_url(self, **params: object) -> str | None:
+        """The URL `fetch` will record, which is the one `source_documents` is keyed on.
+
+        Must be the *recorded* shape, not the requested one: the request carries the API
+        key and the stored row does not, so keying the lookup on the request would find
+        nothing, every time, quietly.
+        """
+        return self._recorded_url(**params)
+
+    def _recorded_url(self, **params: object) -> str:
+        """Key-stripped, window-bearing. Shared by `cache_url` and `fetch` so the string
+        the lookup asks for and the string the row is written under cannot drift apart -
+        which they would the first time somebody changed one of them."""
+        series_id = str(params["series_id"])
+        realtime_start, realtime_end = resolve_realtime_window(params, today=utctoday())
+        return (
+            f"{_BASE_URL}?series_id={series_id}&file_type=json"
+            f"&realtime_start={realtime_start}&realtime_end={realtime_end}"
+        )
+
     def fetch(self, **params: object) -> RawResponse:
         """One FRED series over one real-time window.
 
@@ -178,6 +205,7 @@ class FredConnector(Connector):
         run is still one fetch and one parse, so the contract in `docs/08` §5 holds; there
         are just more runs.
         """
+        cached = params.pop("cached", None)
         series_id = str(params["series_id"])
         realtime_start, realtime_end = resolve_realtime_window(params, today=utctoday())
         query = {
@@ -193,22 +221,32 @@ class FredConnector(Connector):
         # because without it you cannot tell which slice of history this file is.
         # `PoliteFetcher` would redact an `api_key` anyway; this is the exact shape we want
         # rather than the shape redaction happens to leave behind.
-        recorded = (
-            f"{_BASE_URL}?series_id={series_id}&file_type=json"
-            f"&realtime_start={realtime_start}&realtime_end={realtime_end}"
-        )
+        recorded = self._recorded_url(**params)
         try:
-            return require_document(
-                self._fetcher.get(
-                    _BASE_URL,
-                    params=query,
-                    rate_per_sec=self.rate_limit_per_sec,
-                    politeness_delay_sec=self.politeness_delay_sec,
-                    media_type="application/json",
-                    timeout=self._timeout,
-                    record_url=recorded,
-                )
+            answer = self._fetcher.get(
+                _BASE_URL,
+                params=query,
+                rate_per_sec=self.rate_limit_per_sec,
+                politeness_delay_sec=self.politeness_delay_sec,
+                media_type="application/json",
+                timeout=self._timeout,
+                record_url=recorded,
+                # Only sent when `run()` found a previous document for this exact URL and
+                # the server gave us something to ask with. FRED sends `Last-Modified` and
+                # honours it; measured, including that a stale validator still returns 200.
+                etag=cached.etag if isinstance(cached, CachedDocument) else None,
+                last_modified=(
+                    cached.last_modified if isinstance(cached, CachedDocument) else None
+                ),
             )
+            if isinstance(answer, NotModified):
+                # 1.6 MB not transferred. The bytes come back out of storage and go through
+                # `parse` exactly as a fresh body would, so nothing downstream can tell -
+                # which is the point: a parser improvement must not be skipped because the
+                # source had nothing new to say.
+                assert isinstance(cached, CachedDocument)  # noqa: S101 - a 304 needs one
+                return revalidated(cached)
+            return require_document(answer)
         except httpx.HTTPStatusError as exc:
             # A 400 is terminal to the fetcher and never retried, which is right - but FRED
             # puts the *reason* in the body, and one particular reason is actionable. The

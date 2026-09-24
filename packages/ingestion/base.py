@@ -54,6 +54,7 @@ from packages.common.timez import utcnow
 
 __all__ = [
     "Connector",
+    "CachedDocument",
     "ConnectorRunResult",
     "DataSourceLicence",
     "LicenceNotDeclaredError",
@@ -61,7 +62,9 @@ __all__ = [
     "RawResponse",
     "RecordT",
     "record_run",
+    "revalidated",
     "register",
+    "cached_document",
     "store_raw",
     "upsert_document",
     "warn_if_no_rows_written",
@@ -141,6 +144,31 @@ class RawResponse:
 
 
 @dataclass(frozen=True)
+class CachedDocument:
+    """What we already hold for a URL, so the next request can ask whether it changed.
+
+    Handed to `fetch()` by `run()` - which has the session `fetch()` does not - and only to
+    a connector that opted in by overriding `cache_url()`. Everything on it comes from the
+    newest `source_documents` row for that URL.
+    """
+
+    url: str
+    etag: str | None
+    last_modified: dt.datetime | None
+    #: Content address of the stored bytes. `StorageBackend.get` is keyed on the hash, not
+    #: on `storage_key`, and a 304 is answered by reading them back rather than refetching.
+    sha256: str
+    media_type: str
+    document_id: int
+
+    @property
+    def can_revalidate(self) -> bool:
+        """Whether there is anything to send. A stored row with neither validator is a row
+        the server never gave us a way to ask about."""
+        return self.etag is not None or self.last_modified is not None
+
+
+@dataclass(frozen=True)
 class MacroRecord:
     """One normalized macro observation.
 
@@ -193,6 +221,27 @@ class Connector(ABC, Generic[RecordT]):
     def declare_licence(self) -> DataSourceLicence:
         """MUST state redistribution rights. Enforced by `register()`."""
 
+    def cache_url(self, **params: object) -> str | None:
+        """The URL a fetch with these params would request, or `None` to opt out. P4 check 13.
+
+        Returning a URL opts this connector into conditional requests. `run()` looks up what
+        was stored for it last time and passes a `CachedDocument` to `fetch` as `cached`, so
+        a connector that overrides this must accept that keyword and use it; one that does
+        not override it is never handed one and behaves exactly as before.
+
+        It exists because the URL is built inside `fetch`, and `fetch` has no session to
+        look anything up with. Rather than give every `fetch` a session - a much larger
+        change, and one that would let a fetch reach the domain tables - the connector says
+        what it is about to ask for, and `run()` does the asking on its behalf.
+
+        **Only worth overriding for a source that actually sends a validator.** Measured on
+        the live endpoints: FRED and SEC's ticker file send `Last-Modified` and honour
+        `If-Modified-Since`; EDGAR's submissions, CBN, the Nigeria Data Portal and Yahoo
+        send neither, and Yahoo sends `Cache-Control: no-store`. Opting in against a source
+        that sends nothing costs a database read per run and saves nothing.
+        """
+        return None
+
     @abstractmethod
     def fetch(self, **params: object) -> RawResponse:
         """Return raw bytes. Never parses, never writes to the domain tables."""
@@ -228,9 +277,20 @@ class Connector(ABC, Generic[RecordT]):
             # Each stage is a numbered step on the console. The steps observe; the
             # try/except below is what decides, exactly as it did before they existed.
             with step("fetch", connector=self.name) as fetching:
-                raw = self.fetch(**params)
+                # `cached` reaches `fetch` only for a connector that named a URL, which is
+                # the same act as declaring it knows what to do with one.
+                url = self.cache_url(**params)
+                cached = cached_document(session, url) if url else None
+                raw = self.fetch(**params, cached=cached) if url else self.fetch(**params)
                 http_status = raw.http_status
-                fetching.result(http_status=raw.http_status, bytes=len(raw.data))
+                fetching.result(
+                    http_status=raw.http_status,
+                    bytes=len(raw.data),
+                    # 304 says the bytes came from our own storage. Recorded because
+                    # `rows_written=0` on a revalidated run is expected rather than the
+                    # silent-scraper signature it otherwise looks exactly like.
+                    revalidated=raw.http_status == 304,
+                )
             with step("store raw") as storing:
                 document = store_raw(session, raw, connector=self)
                 source_document_id = document.id
@@ -612,6 +672,61 @@ def _same_rate(stored: Decimal | None, declared: float | None) -> bool:
     if stored is None or declared is None:
         return stored is None and declared is None
     return float(stored) == float(declared)
+
+
+def cached_document(session: Session, url: str) -> CachedDocument | None:
+    """The newest stored response for this URL, or `None` if we have never fetched it.
+
+    Newest by `id`, which on this table is newest by insertion and therefore by
+    `retrieved_at`. Not filtered on having a validator: a caller wants to know what it
+    holds, and `can_revalidate` answers the separate question of whether the server gave us
+    a way to ask about it.
+
+    No index on `source_documents.url`, deliberately. The table is 311 rows and grows by
+    about one per connector run - twenty thousand a year at the current schedule - which
+    Postgres scans in well under a millisecond, once per run. An index would be write
+    amplification bought with a migration for no measurable read. Worth revisiting if this
+    table ever reaches the low millions.
+    """
+    row = session.execute(
+        select(SourceDocument)
+        .where(SourceDocument.url == url)
+        .order_by(SourceDocument.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    return CachedDocument(
+        url=url,
+        etag=row.etag,
+        last_modified=row.last_modified,
+        sha256=row.sha256,
+        media_type=row.media_type,
+        document_id=row.id,
+    )
+
+
+def revalidated(cached: CachedDocument, *, storage: StorageBackend | None = None) -> RawResponse:
+    """The bytes we already hold, returned as though they had just been fetched.
+
+    This is what "serves from cache" means in P4 check 13. The document is read back out of
+    object storage and handed to `parse()` exactly as a fresh body would be, so nothing
+    downstream of `fetch` can tell the difference and no parser improvement is skipped just
+    because the source had nothing new to say.
+
+    `http_status` is 304 rather than 200, because the run record should say what actually
+    happened on the wire: zero rows written after a revalidation is the expected outcome,
+    and after a real 200 it is the silent-scraper signature.
+    """
+    store = storage or get_storage()
+    return RawResponse(
+        data=store.get(cached.sha256),
+        media_type=cached.media_type,
+        url=cached.url,
+        http_status=304,
+        etag=cached.etag,
+        last_modified=cached.last_modified,
+    )
 
 
 def record_run(session: Session, result: ConnectorRunResult) -> None:
