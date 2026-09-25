@@ -546,6 +546,26 @@ class PriceUsed(BaseModel):
     )
     source_document_id: int
     attribution: str
+    previous_close_raw: Decimal | None = Field(
+        default=None, description="The close before this one, as traded."
+    )
+    previous_date: dt.date | None = None
+    change: Decimal | None = Field(
+        default=None,
+        description=(
+            "Move from the previous bar as a fraction, computed on **adjusted** closes. "
+            "Null when there is no earlier bar - a first day of trading has no move, and "
+            "a zero there would assert one. Never derive this from the two `close_raw` "
+            "figures: a split between the bars makes that reading nonsense."
+        ),
+    )
+    actions_between: int = Field(
+        default=0,
+        description=(
+            "Corporate actions falling between the two bars. Above zero, the two raw "
+            "closes are not directly comparable and only `change` is meaningful."
+        ),
+    )
 
 
 class SharesUsed(BaseModel):

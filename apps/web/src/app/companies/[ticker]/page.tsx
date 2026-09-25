@@ -1,23 +1,26 @@
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
-import { Suspense } from "react";
-import Link from "next/link";
 
-import { ApiError, ApiTimeout, api, type Ratios } from "@/lib/api";
+import { Disclose } from "@/components/disclose";
+import { api, failTheBuildInstead, type Ratios } from "@/lib/api";
+import { day } from "@/lib/format";
+
+import { Metric, Panel, ScrollHint } from "../_ui";
 import {
-  SERVICE_IS_SLOW,
-  day,
-  isMissing,
-  money,
-  moneyCompact,
-  percent,
-  ratio,
-} from "@/lib/format";
-import { Valuation } from "./_valuation";
+  FALLBACK_LEAD,
+  FigureTable,
+  INPUT_GROUPS,
+  MARGINS,
+  MARKET_RESERVE,
+  OVERVIEW_MARKET,
+  RATIO_GROUPS,
+  offered,
+  reported,
+  write,
+} from "./_figures";
+import { CompanyProblem } from "./_states";
 
 interface PageProps {
   params: Promise<{ ticker: string }>;
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -25,214 +28,198 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   return {
     title: decodeURIComponent(ticker).toUpperCase(),
     description:
-      "One company's figures, each one explained in plain words and shown with the " +
-      "filing it came from and the day it became public.",
+      "One company at a glance: the headline figures from its latest filing, what the " +
+      "market is paying for it, and the filed lines the ratios were built from.",
   };
 }
 
+/** The margins group and the multiples group, whose explanations are reused here. */
+const MARGIN_NOTE = RATIO_GROUPS[0];
+const MULTIPLE_NOTE = RATIO_GROUPS[RATIO_GROUPS.length - 1];
+
 /**
- * One company.
+ * Overview — the company at a glance.
  *
- * `DESIGN.md` §2 caps the lead at four headline figures, so the page opens with the four
- * margins and nothing else. They are one idea rather than four - a margin - which is why
- * one `.explain` covers all four and why the other ten figures are folded away in three
- * groups, each group being one further idea.
+ * Two metric rows and the filed lines behind them. The header, the tabs and the page's
+ * only `<h1>` live in the layout, so this starts at `<h2>`.
  */
-export default async function CompanyPage({ params, searchParams }: PageProps) {
-  const { ticker: rawTicker } = await params;
-  const ticker = decodeURIComponent(rawTicker);
-  const query = await searchParams;
+export default async function OverviewPage({ params }: PageProps) {
+  const { ticker: raw } = await params;
+  const ticker = decodeURIComponent(raw);
 
   let data: Ratios;
   try {
+    // The same URL the layout asked for, so Next serves it from this request's own fetch
+    // cache. The header is fetched once however many tabs get opened.
     data = await api.ratios(ticker);
   } catch (error) {
-    return <CouldNotLoad ticker={ticker} error={error} />;
+    failTheBuildInstead(error);
+    return <CompanyProblem ticker={ticker} error={error} withHeading={false} />;
   }
 
   const r = data.ratios;
-  const noMargins =
-    isMissing(r.gross_margin) &&
-    isMissing(r.operating_margin) &&
-    isMissing(r.net_margin) &&
-    isMissing(r.fcf_margin);
+  const currency = data.currency;
 
-  const submitted =
-    query.discount_rate !== undefined ||
-    query.growth !== undefined ||
-    query.terminal_growth !== undefined;
+  /**
+   * Three of the twenty-four companies held - JPM, BAC, UNH - report none of the four
+   * margins. That is bank and insurer accounting, not a gap in the data: there is no
+   * cost of making a product to set against sales, so there is nothing for a margin to
+   * measure. Where that happens the heading changes and the page leads with figures they
+   * do report, taken in a fixed order so two banks lead with the same four in the same
+   * places, and drawn only from figures the Financials tab explains.
+   */
+  const noMargins = !MARGINS.some((spec) => reported(spec, r));
+  const lead = noMargins ? FALLBACK_LEAD.filter((spec) => reported(spec, r)) : MARGINS;
+  /**
+   * The market row, with anything the lead already showed taken out and the count made
+   * back up from the reserve. Nothing appears twice on the page, and the row stays at
+   * twelve - which is what lets it fill its last track at every width instead of leaving
+   * the grid's own background showing as a grey block.
+   */
+  const taken = new Set(lead.map((spec) => spec.key));
+  const market = [
+    ...OVERVIEW_MARKET.filter((spec) => !taken.has(spec.key)),
+    ...MARKET_RESERVE.filter((spec) => !taken.has(spec.key)),
+  ].slice(0, OVERVIEW_MARKET.length);
+  const noMultiples = !market.some((spec) => reported(spec, r));
 
   return (
     <>
-      <p className="faint">
-        <Link href="/companies">← All companies</Link>
-      </p>
+      <h2>
+        {noMargins
+          ? "What it earned on what it holds"
+          : "How much of what it sold it kept"}
+      </h2>
 
-      <h1>
-        {data.ticker} — {data.legal_name}
-      </h1>
-      <p className="lede">
-        Figures from its {data.filing_type} for {data.period_label}, the period ending{" "}
-        {day(data.period_end)}. Every one of them is described below in plain words, and
-        every one says where it came from.
-      </p>
-
-      <h2>{noMargins ? "What it earned on what it holds" : "How much of what it sold it kept"}</h2>
-
-      {noMargins ? (
-        <>
-          <div className="grid cols-4">
-            {fallbackLead(r, data.currency).map((figure) => (
-              <Stat
-                key={figure.name}
-                value={figure.value}
-                name={figure.name}
-                note={figure.note}
-              />
-            ))}
-          </div>
-
-          <div className="explain">
-            <span className="tag">Why these, and not margins</span>
-            <p>
-              A margin measures profit against sales, so it needs both — and this filing
-              does not report them in that shape. Not every company files that way: banks
-              and insurers commonly do not, because they have no cost of making a product
-              to set against what they sold. Nothing has been estimated in their place,
-              and no zero is standing in for a blank.
-            </p>
-            <p>
-              So the figures above measure the year&rsquo;s profit against what the
-              company owns and what its owners put into it, which this filing does report.
-              Each one is explained again in the groups below.
-            </p>
-          </div>
-
-          <details className="more">
-            <summary>What a margin is, for when you meet one</summary>
-            <MarginExplainer currency={data.currency} />
-          </details>
-        </>
+      {lead.length === 0 ? (
+        <div className="notice">
+          <h3>No headline figure is reported for this period</h3>
+          <p>
+            This filing reports neither the four margins nor the returns that stand in for
+            them. Nothing has been estimated in their place and no zero is standing in for
+            a blank. The tables below show every line it does report.
+          </p>
+        </div>
       ) : (
-        <>
-          <div className="grid cols-4">
-            <Stat
-              value={percent(r.gross_margin)}
-              name="Gross margin"
-              note="left after the cost of making and delivering the product"
+        <div className="metrics">
+          {lead.map((spec) => (
+            <Metric
+              key={spec.key}
+              name={spec.short ?? spec.name}
+              value={write(spec, r, currency)}
             />
-            <Stat
-              value={percent(r.operating_margin)}
-              name="Operating margin"
-              note="left after that, and after the cost of running the company"
-            />
-            <Stat
-              value={percent(r.net_margin)}
-              name="Net margin"
-              note="left after everything, including interest and tax"
-            />
-            <Stat
-              value={percent(r.fcf_margin)}
-              name="Free cash flow margin"
-              note="cash left after running the company and buying equipment"
-            />
-          </div>
-
-          <div className="explain">
-            <span className="tag">What a margin is</span>
-            <MarginExplainer currency={data.currency} />
-          </div>
-        </>
+          ))}
+        </div>
       )}
 
-      <h2>The other ten figures</h2>
-      <p className="muted">
-        Folded away rather than laid out, because fourteen numbers on one screen is how a
-        reader loses all fourteen. Open a group to see it.
-      </p>
-
-      <details className="more">
-        <summary>What it owns and what it owes</summary>
-        <div>
+      {noMargins ? (
+        <div className="notice">
+          <h3>Why these, and not margins</h3>
           <p>
-            These compare the things a company has against the money it owes. Four of them
-            are ratios rather than amounts: a ratio of 2 means the first thing is twice
-            the size of the second.
+            A margin measures profit against sales, so it needs both — and this filing
+            does not report them in that shape. Not every company files that way: banks
+            and insurers commonly do not, because they have no cost of making a product to
+            set against what they sold. Nothing has been estimated in their place.
           </p>
-          <Meaning name="Current ratio" value={ratio(r.current_ratio)}>
-            Things it could turn into cash within a year, divided by the bills due within
-            a year. At 1.00 the two are the same size. Below 1.00 the bills due within the
-            year are the larger of the two; above 1.00 the resources are.
-          </Meaning>
-          <Meaning name="Debt to equity" value={ratio(r.debt_to_equity)}>
-            Long-term borrowing divided by the money the owners have in the company. At
-            1.00 there is one unit borrowed for every unit the owners put in.
-          </Meaning>
-          <Meaning name="Liabilities to assets" value={ratio(r.liabilities_to_assets)}>
-            Everything owed divided by everything owned. At 0.60, 60 of every 100 of what
-            the company owns is owed to somebody else and the other 40 belongs to the
-            owners.
-          </Meaning>
-          <Meaning name="Interest coverage" value={ratio(r.interest_coverage)}>
-            Profit from operating the business, divided by the interest bill for the year.
-            At 5, the year&rsquo;s operating profit was five times the interest due on the
-            borrowing.
-          </Meaning>
-          <Meaning name="Net debt" value={moneyCompact(r.net_debt, data.currency)}>
-            Long-term borrowing with the cash on hand taken off. A negative figure means
-            there is more cash on hand than long-term borrowing.
-          </Meaning>
-        </div>
-      </details>
-
-      <details className="more">
-        <summary>What the owners get back for their money</summary>
-        <div>
           <p>
-            These three set the year&rsquo;s profit against something else — the money the
-            owners put in, everything the company owns, or a single share.
+            So the figures above measure the year&rsquo;s profit against what the company
+            owns and what its owners put into it, which this filing does report. Each one
+            is explained again on the <b>Financials</b> tab.
           </p>
-          <Meaning name="Return on equity" value={percent(r.roe)}>
-            The year&rsquo;s profit measured against the money the owners have in the
-            company. At 15%, there was 15 of profit in the year for every 100 of
-            owners&rsquo; money.
-          </Meaning>
-          <Meaning name="Return on assets" value={percent(r.roa)}>
-            The same profit measured against everything the company owns, whoever paid for
-            it. It comes out below return on equity whenever any of those things were paid
-            for with borrowed money.
-          </Meaning>
-          <Meaning name="Earnings per share" value={money(r.eps, data.currency)}>
-            The year&rsquo;s profit divided by the number of shares: the slice of that
-            profit sitting behind one share. It is not money paid to you. It stays inside
-            the company unless some of it is handed out as a dividend.
-          </Meaning>
         </div>
-      </details>
+      ) : null}
 
-      <details className="more">
-        <summary>Cash, and profit before the deductions</summary>
-        <div>
+      <Disclose brief={MARGIN_NOTE.brief}>{MARGIN_NOTE.detail}</Disclose>
+
+      <h2>What the market is paying</h2>
+
+      {noMultiples ? (
+        <div className="notice">
+          <h3>No multiple can be put together for this period</h3>
           <p>
-            Two amounts rather than ratios, both in {data.currency}, and both for the same
-            period as everything above.
+            A multiple needs a price and a figure from the filing to set it against, and
+            for this period the API holds neither half of any pair. Nothing has been
+            estimated in their place.
           </p>
-          <Meaning
-            name="Free cash flow"
-            value={moneyCompact(r.free_cash_flow, data.currency)}
-          >
-            The cash the business generated over the year, after paying for the equipment
-            and property it bought. It is the figure the valuation further down starts
-            from.
-          </Meaning>
-          <Meaning name="EBITDA" value={moneyCompact(r.ebitda, data.currency)}>
-            The name is the list of what has been left out: Earnings Before Interest, Tax,
-            Depreciation and Amortisation. It is not a line in the accounts — it is put
-            together by adding those four back on — and it is here because it is quoted so
-            widely.
-          </Meaning>
         </div>
-      </details>
+      ) : (
+        <div className="metrics">
+          {market.map((spec) => (
+            <Metric
+              key={spec.key}
+              name={spec.short ?? spec.name}
+              value={write(spec, r, currency)}
+            />
+          ))}
+        </div>
+      )}
+
+      <Disclose brief={MULTIPLE_NOTE.brief}>
+        {MULTIPLE_NOTE.detail}
+        <p>
+          That row ends with the per-share amounts the first ratios divide by, which are
+          not multiples themselves. They sit beside them so the arithmetic is visible in
+          one place; the <b>Financials</b> tab groups them with the other per-share
+          figures.
+        </p>
+      </Disclose>
+
+      <h2>What the filing reported</h2>
+
+      <div className="grid">
+        {INPUT_GROUPS.map((group) => {
+          // Filtered against the keys this company's filing actually carries. A bank
+          // sends deposits and loans where a manufacturer sends revenue and cost of
+          // revenue; a key the API never offered is not a missing figure, and printing
+          // "not reported" against a line that does not exist in this kind of filing
+          // would say something untrue.
+          const figures = group.figures.filter((spec) => offered(spec, data.inputs));
+          if (figures.length === 0) return null;
+          const anyReported = figures.some((spec) => reported(spec, data.inputs));
+
+          return (
+            <Panel key={group.title} title={group.title}>
+              {anyReported ? (
+                <>
+                  <div className="scroller">
+                    <FigureTable
+                      caption={group.caption}
+                      figures={figures}
+                      values={data.inputs}
+                      currency={currency}
+                    />
+                  </div>
+                  <ScrollHint />
+                </>
+              ) : (
+                <div className="panel-body">
+                  <div className="notice">
+                    <p>
+                      This filing carries none of these lines in a form the loader could
+                      read, so none is shown. Nothing has been estimated in their place.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </Panel>
+          );
+        })}
+      </div>
+
+      <Disclose brief="These are the filed lines the ratios were built from, not figures this page worked out.">
+        <p>
+          Everything in this block came out of the filing named below, as filed. The
+          ratios higher up the page were worked out from these lines by the server, never
+          by your browser — which is why a ratio can be absent while the lines behind it
+          are present, and never the other way round.
+        </p>
+        <p>
+          Large amounts are shortened — 98.77B rather than twelve digits — because twelve
+          digits of precision is not information a reader can use and thirteen characters
+          of it crowds everything else off a narrow screen. The full figure is what the
+          server holds and what every ratio was worked out from.
+        </p>
+      </Disclose>
 
       <div className="source">
         <dl>
@@ -247,208 +234,20 @@ export default async function CompanyPage({ params, searchParams }: PageProps) {
           <dt>Shown as known on</dt>
           <dd>{day(data.as_known_on)}</dd>
           <dt>Currency</dt>
-          <dd>{data.currency}</dd>
+          <dd>{currency}</dd>
           <dt>Attribution</dt>
           <dd>{data.attribution}</dd>
+          {data.price === null ? null : (
+            <>
+              <dt>Price</dt>
+              <dd>
+                close of {day(data.price.date)}, knowable {day(data.price.known_as_of)}
+              </dd>
+              <dt>Price attribution</dt>
+              <dd>{data.price.attribution}</dd>
+            </>
+          )}
         </dl>
-      </div>
-
-      <Suspense fallback={<ValuationLoading />}>
-        <Valuation
-          ticker={data.ticker}
-          currency={data.currency}
-          price={data.price}
-          filing={{
-            period_label: data.period_label,
-            period_end: data.period_end,
-            known_as_of: data.known_as_of,
-            attribution: data.attribution,
-          }}
-          discountRate={first(query.discount_rate)}
-          growth={first(query.growth)}
-          terminalGrowth={first(query.terminal_growth)}
-          submitted={submitted}
-        />
-      </Suspense>
-    </>
-  );
-}
-
-/**
- * What to lead with when the four margins are absent - three of the twenty-four companies
- * held, and not a gap in the data: a bank reports deposits and loans, not sales and the
- * cost of making something, so there is nothing for a margin to measure.
- *
- * Drawn only from figures this page already explains further down, and taken in this
- * order until four are found. Deterministic, so two banks lead with the same figures in
- * the same places, and it can never put a word in the lead that the reader meets nowhere
- * else. Fewer than four is allowed - DESIGN.md §2 caps the lead, it does not fill it.
- */
-function fallbackLead(r: Ratios["ratios"], currency: string) {
-  const candidates = [
-    {
-      present: r.roe,
-      name: "Return on equity",
-      value: percent(r.roe),
-      note: "the year's profit against the money its owners have in it",
-    },
-    {
-      present: r.roa,
-      name: "Return on assets",
-      value: percent(r.roa),
-      note: "the same profit against everything the company owns",
-    },
-    {
-      present: r.eps,
-      name: "Earnings per share",
-      value: money(r.eps, currency),
-      note: "that profit divided by the number of shares",
-    },
-    {
-      present: r.liabilities_to_assets,
-      name: "Liabilities to assets",
-      value: ratio(r.liabilities_to_assets),
-      note: "how much of what it owns is owed to somebody else",
-    },
-  ];
-  return candidates.filter((c) => !isMissing(c.present)).slice(0, 4);
-}
-
-/**
- * The same three paragraphs whether the four margins are shown or explained in their
- * absence. One copy, because a reader who meets the idea on a bank's page and again on a
- * manufacturer's should meet exactly the same words - and because two copies drift.
- */
-function MarginExplainer({ currency }: { currency: string }) {
-  return (
-    <>
-      <p>
-        A margin answers one question: out of every 100 {currency} the company took from
-        its customers, how much was still there after a particular set of costs? The
-        first three take out more each time — first what it cost to make the product,
-        then the cost of running the company, then interest and tax.
-      </p>
-      <p>
-        The fourth counts cash instead of profit, and the two are not the same number.
-        Profit records a sale on the day it is made; cash records it on the day the money
-        actually arrives.
-      </p>
-      <p>
-        A margin is a share of sales, so it says nothing about how large a company is —
-        only how much of what came in stayed in.
-      </p>
-    </>
-  );
-}
-
-/** One headline figure. Four of these is the whole lead, per `DESIGN.md` §2. */
-function Stat({ value, name, note }: { value: string; name: string; note: string }) {
-  return (
-    <div className="card">
-      <div className="stat-value">{value}</div>
-      <div className="stat-name">{name}</div>
-      <div className="stat-note">{note}</div>
-    </div>
-  );
-}
-
-/** A folded figure: its name, its value, and what it is — in that order. */
-function Meaning({
-  name,
-  value,
-  children,
-}: {
-  name: string;
-  value: string;
-  children: ReactNode;
-}) {
-  return (
-    <p>
-      <b>{name}</b> — <span className="num">{value}</span>
-      <br />
-      {children}
-    </p>
-  );
-}
-
-/** A query string can repeat a key. The first value is what the form sent. */
-function first(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-function ValuationLoading() {
-  return (
-    <section>
-      <h2>Put a value on it, using your own assumptions</h2>
-      <div className="notice">
-        <h3>Running the calculation</h3>
-        <p>
-          The valuation runs on the server, on the three rates in the address bar. This
-          takes a moment.
-        </p>
-      </div>
-    </section>
-  );
-}
-
-/**
- * The failed state. A ticker that does not exist and an API that is down are different
- * problems with different answers, so the page says which one happened.
- */
-function CouldNotLoad({ ticker, error }: { ticker: string; error: unknown }) {
-  const status = error instanceof ApiError ? error.status : null;
-
-  if (error instanceof ApiTimeout) {
-    return (
-      <>
-        <h1>{ticker}</h1>
-        {/* `.notice`, not `.notice bad`. Nothing is broken, and painting a slow answer
-            red tells the reader to go looking for a fault that is not there. */}
-        <div className="notice">
-          <h3>This is taking longer than the page waits</h3>
-          <p>{SERVICE_IS_SLOW}</p>
-          <p>
-            Reload the page. <Link href="/companies">Back to the list</Link>.
-          </p>
-        </div>
-      </>
-    );
-  }
-
-  if (status === 404) {
-    return (
-      <>
-        <h1>No company under “{ticker}”</h1>
-        <div className="notice bad">
-          <h3>Nothing is held for this ticker</h3>
-          <p>
-            The API holds no company under <b>{ticker}</b>. It may be spelled differently,
-            or it may simply not be loaded here — only a fixed set of companies is.
-          </p>
-          <p>
-            <Link href="/companies">The list of every company held</Link> is the place to
-            check.
-          </p>
-        </div>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <h1>{ticker}</h1>
-      <div className="notice bad">
-        <h3>These figures could not be loaded</h3>
-        <p>
-          The request for this company&rsquo;s figures did not come back
-          {status === null ? " at all" : ` — the API answered ${status}`}. Nothing is
-          shown, because a half-loaded set of figures would be worse than none.
-        </p>
-        <p>
-          Reload the page. If it keeps happening, the API is not answering; the{" "}
-          <Link href="/data-health">data health</Link> page is where that shows up.{" "}
-          <Link href="/companies">Back to the list</Link>.
-        </p>
       </div>
     </>
   );

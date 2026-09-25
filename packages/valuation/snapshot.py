@@ -19,7 +19,7 @@ from typing import Any, Literal
 from sqlalchemy import Select, and_, func, or_, select, tuple_
 from sqlalchemy.orm import Session
 
-from packages.common.adjust import cumulative_factor, factors_known
+from packages.common.adjust import adjusted_close, cumulative_factor, factors_known
 from packages.common.identity import CIK, current_identifiers, primary_tickers, resolve_security
 from packages.common.models import (
     Company,
@@ -703,6 +703,90 @@ def latest_price(session: Session, *, security_id: int, on: dt.date) -> PriceRef
         .limit(1)
     ).first()
     return PriceRef(*row) if row else None
+
+
+@dataclass(frozen=True)
+class PriceMove:
+    """The newest bar, the one before it, and the move between them.
+
+    The move is computed on **adjusted** closes and the raw closes are returned beside
+    it, because the two answer different questions and only one of them is safe to
+    subtract. A 4-for-1 split between two bars takes the raw close to a quarter, and a
+    move read off those two numbers is -75% on a day the security may have risen - the
+    same cliff that made RSI read Apple's 2020 split as the most violent sell-off in its
+    history (`packages/indicators/series.py`). `close_raw` is what the market printed;
+    `change` is what happened.
+
+    `actions_applied` is how many corporate actions sit between the two bars, so a reader
+    can see when the two figures are not directly comparable rather than infer it.
+    """
+
+    date: dt.date
+    close_raw: Decimal
+    known_as_of: dt.date
+    source_document_id: int
+    previous_date: dt.date | None
+    previous_close_raw: Decimal | None
+    #: `(adjusted_latest / adjusted_previous) - 1`, as a fraction. None when there is no
+    #: earlier bar to compare against - a first day of trading has no move, and saying
+    #: "0.00%" there would assert one.
+    change: Decimal | None
+    actions_applied: int
+
+
+def price_move(session: Session, *, security_id: int, on: dt.date) -> PriceMove | None:
+    """The newest bar on or before `on` and its move from the bar before it.
+
+    Split-safe by construction: both closes go through `adjusted_close`, which applies
+    only the factors knowable on the decision date (TG2). There is no default for `on`,
+    for the reason `adjust.py` gives - a move computed "as of today" is not the move any
+    past date could have seen.
+    """
+    latest = latest_price(session, security_id=security_id, on=on)
+    if latest is None:
+        return None
+
+    previous = session.execute(
+        select(PriceHistory.date)
+        .where(PriceHistory.security_id == security_id)
+        .where(PriceHistory.date < latest.date)
+        .where(PriceHistory.known_as_of <= on)
+        .order_by(PriceHistory.date.desc())
+        .limit(1)
+    ).scalar()
+
+    if previous is None:
+        return PriceMove(
+            latest.date,
+            latest.close_raw,
+            latest.known_as_of,
+            latest.source_document_id,
+            None,
+            None,
+            None,
+            0,
+        )
+
+    now_adj = adjusted_close(session, security_id=security_id, date=latest.date, decision_date=on)
+    was_adj = adjusted_close(session, security_id=security_id, date=previous, decision_date=on)
+    change: Decimal | None = None
+    applied = 0
+    if now_adj is not None and was_adj is not None and was_adj.close_adjusted != 0:
+        change = now_adj.close_adjusted / was_adj.close_adjusted - Decimal(1)
+        # Factors that apply to the earlier bar and not to the later one are exactly the
+        # actions that fell between them.
+        applied = was_adj.actions_applied - now_adj.actions_applied
+
+    return PriceMove(
+        latest.date,
+        latest.close_raw,
+        latest.known_as_of,
+        latest.source_document_id,
+        previous,
+        was_adj.close_raw if was_adj is not None else None,
+        change,
+        applied,
+    )
 
 
 def latest_share_count(

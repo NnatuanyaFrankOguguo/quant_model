@@ -377,6 +377,15 @@ async def company_ratios(
         backdrop = snapshot.backdrop_for(
             session, currency=snap.period.currency, decision_date=decision_date
         )
+        # Inside the session block, with the rest of the reads. The move comes from
+        # `price_move` rather than being derived from two closes here: it is computed on
+        # adjusted closes, so a split between the bars cannot turn a rise into a 75%
+        # fall. AD-3 also puts the arithmetic on this side of the wire.
+        move = (
+            snapshot.price_move(session, security_id=ref.security_id, on=decision_date)
+            if snap.price
+            else None
+        )
     price = (
         PriceUsed(
             date=snap.price.date,
@@ -385,6 +394,10 @@ async def company_ratios(
             age_days=(decision_date - snap.price.date).days,
             source_document_id=snap.price.source_document_id,
             attribution=price_attribution,
+            previous_close_raw=move.previous_close_raw if move else None,
+            previous_date=move.previous_date if move else None,
+            change=move.change if move else None,
+            actions_between=move.actions_applied if move else 0,
         )
         if snap.price
         else None

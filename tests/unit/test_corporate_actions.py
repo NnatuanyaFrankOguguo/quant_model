@@ -64,6 +64,7 @@ from packages.common.timez import utctoday
 from packages.ingestion import base as ingestion_base
 from packages.ingestion.base import RawResponse, register
 from packages.ingestion.edgar import EdgarSubmissionsConnector
+from packages.valuation import snapshot
 
 pytestmark = pytest.mark.invariant
 
@@ -242,6 +243,69 @@ def test_a_two_for_one_split_produces_a_continuous_adjusted_series(
     # And say plainly what "no artificial drop" means as a number.
     before, across = adjusted[1], adjusted[2]
     assert (across - before) / before == Decimal(0), "no artificial 50% drop"
+
+
+def test_a_days_move_across_a_split_is_not_a_fifty_percent_crash(
+    db_session: Session, security: int
+) -> None:
+    """`snapshot.price_move`, which is what the company page's headline figure renders.
+
+    The same trap as the adjusted series, one step further downstream. A page showing
+    "AAPL -50%" on the day of a 2-for-1 split is the most visible form this corruption
+    can take, and it is the one a reader would act on.
+
+    So the move is computed on adjusted closes and the raw closes are returned beside it.
+    `actions_between` is what lets a page say the two raw figures are not comparable
+    rather than leaving a reader to work out why 100 became 50.
+    """
+    _bars(
+        db_session,
+        security,
+        {
+            "2026-06-11": "100.00",
+            "2026-06-12": "100.00",
+            "2026-06-15": "50.00",  # ex-date: the quote halves and nothing happened
+            "2026-06-16": "55.00",
+        },
+    )
+    _action(
+        db_session, security, action_type="split", ex_date=SPLIT_EX, ratio_from="1", ratio_to="2"
+    )
+
+    across = snapshot.price_move(db_session, security_id=security, on=SPLIT_EX)
+    assert across is not None
+    assert across.date == SPLIT_EX
+    assert across.previous_date == dt.date(2026, 6, 12)
+
+    # The raw closes are returned untouched, and on their own they say -50%.
+    assert across.close_raw == Decimal("50.00")
+    assert across.previous_close_raw == Decimal("100.00")
+    naive = across.close_raw / across.previous_close_raw - Decimal(1)
+    assert naive == Decimal("-0.5"), "the trap this exists to avoid"
+
+    # The move actually reported is zero, because nothing happened to the holder.
+    assert across.change == Decimal(0)
+    assert across.actions_applied == 1, "a page must be able to say the raw closes differ"
+
+    # And the day after, with no action between, the adjusted move is the plain one:
+    # 55.00 against 50.00 is +10% whether or not either bar was adjusted.
+    after = snapshot.price_move(db_session, security_id=security, on=dt.date(2026, 6, 16))
+    assert after is not None
+    assert after.actions_applied == 0
+    assert after.change == Decimal("0.1")
+
+
+def test_a_security_with_one_bar_has_no_move_rather_than_a_zero_one(
+    db_session: Session, security: int
+) -> None:
+    """A first day of trading has no move. Zero would assert the price did not change."""
+    _bars(db_session, security, {"2026-06-11": "100.00"})
+
+    only = snapshot.price_move(db_session, security_id=security, on=dt.date(2026, 6, 11))
+    assert only is not None
+    assert only.previous_date is None
+    assert only.previous_close_raw is None
+    assert only.change is None, "no earlier bar means no move, which is not a move of zero"
 
 
 def test_the_factor_applies_to_bars_before_the_ex_date_and_not_on_it(

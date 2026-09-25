@@ -176,6 +176,39 @@ export function percent(value: string | null | undefined, digits = 1): string {
   }).format(parsed);
 }
 
+/**
+ * A move, written the way a price move is written: "+0.32%", "-1.47%", "0.00%".
+ *
+ * Always signed, because an unsigned move is ambiguous at a glance and the sign is half
+ * the information. Returns null rather than a phrase so the caller decides what an absent
+ * move should say - which is never "0.00%", since that asserts the price did not move.
+ */
+export function signedPercent(value: string | null | undefined, digits = 2): string | null {
+  const parsed = reading(value);
+  if (parsed === null) return null;
+  return new Intl.NumberFormat("en-US", {
+    style: "percent",
+    signDisplay: "exceptZero",
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(parsed);
+}
+
+/**
+ * Which way a move went: the class `.delta` needs to draw the right arrow and colour.
+ *
+ * `flat` is only ever returned for a move that is genuinely zero. An *absent* move is
+ * not flat, and a caller must handle null itself rather than letting a missing figure
+ * render as a dash that looks like a measurement.
+ */
+export function direction(value: string | null | undefined): "up" | "down" | "flat" | null {
+  const parsed = reading(value);
+  if (parsed === null) return null;
+  if (parsed > 0) return "up";
+  if (parsed < 0) return "down";
+  return "flat";
+}
+
 /** A bare ratio - 0.89, 1.06 - for the figures whose names end in "to". */
 export function ratio(value: string | null | undefined, digits = 2): string {
   const parsed = reading(value);

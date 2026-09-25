@@ -150,6 +150,23 @@ export interface PriceRef {
   known_as_of: string;
   age_days: number;
   attribution: string;
+  /**
+   * The bar before this one, and the move between them.
+   *
+   * `change` is a fraction computed by the API on **adjusted** closes, which is why it
+   * is sent rather than worked out here from the two `close_raw` figures. Those are as
+   * traded: a split between the bars takes the raw close to a quarter, and a move read
+   * off them would be -75% on a day the security rose. Measured on Apple's 2020 split -
+   * raw closes say -74.15%, the adjusted move is +3.39%.
+   *
+   * Null when there is no earlier bar. A first day of trading has no move, and a zero
+   * there would assert one.
+   */
+  previous_close_raw: string | null;
+  previous_date: string | null;
+  change: string | null;
+  /** Corporate actions between the two bars. Above zero the raw closes are not comparable. */
+  actions_between: number;
 }
 
 export interface Ratios {
