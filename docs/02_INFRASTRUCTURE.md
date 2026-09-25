@@ -373,16 +373,27 @@ uv run python scripts/seed_dev.py       # a principal, entitlements, data_source
 
 ### 2.3 Running the stack
 
-Four processes, as built (corrected 2026-09-14 — an earlier draft named a `Home.py` and a
-`packages.scheduler.run` module that never existed):
+The processes, as built (corrected 2026-09-14 — an earlier draft named a `Home.py` and a
+`packages.scheduler.run` module that never existed; corrected again 2026-09-25 for the API
+launcher and the web app):
 
 ```powershell
-.venv\Scripts\python.exe -m uvicorn services.api.main:app --port 8000            # the API
+.venv\Scripts\python.exe scripts\run_api.py                                      # the API, :8000
+npm --prefix apps\web run dev                                                    # the web app, :3000
 .venv\Scripts\python.exe -m streamlit run apps\streamlit\company_page.py --server.port 8501
 .venv\Scripts\python.exe -m streamlit run apps\streamlit\macro_dashboard.py --server.port 8502
 .venv\Scripts\python.exe -m streamlit run apps\streamlit\operations_page.py --server.port 8503
 .venv\Scripts\python.exe scripts\run_scheduler.py                                # runs forever
 ```
+
+**Start the API with `scripts\run_api.py`, not `python -m uvicorn` directly.** On Windows the
+plain command runs on the Proactor event loop, and CPython's Proactor closes the *listening*
+socket the first time a client resets a connection mid-accept (`WinError 64`). The process
+stays up and never answers again. The web app resets connections by design - every fetch
+that outruns its budget is aborted - so under normal use the plain command dies within
+minutes. Reproduced 2026-09-25: the default loop stopped answering after one burst of 400
+reset connections; the launcher, which selects the Selector loop, answered after five. If
+you must run uvicorn by hand, pass `--loop asyncio:SelectorEventLoop`.
 
 `run_scheduler.py --once` runs every job now and exits (non-zero on any failure, so it is
 usable as a scheduled task whose exit code is the alert); `--once --job edgar:KO` runs one.
