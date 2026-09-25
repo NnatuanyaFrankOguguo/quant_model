@@ -2,7 +2,14 @@ import { Fragment } from "react";
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { ApiError, ApiTimeout, api, failTheBuildInstead, type MacroSeries } from "@/lib/api";
+import {
+  ApiError,
+  ApiTimeout,
+  api,
+  failTheBuildInstead,
+  type MacroObservation,
+  type MacroSeries,
+} from "@/lib/api";
 import {
   NOT_LOADED,
   SERVICE_IS_SLOW,
@@ -11,7 +18,7 @@ import {
   unitInWords,
 } from "@/lib/format";
 import { Disclose } from "@/components/disclose";
-import { DayCell, Freshness, LatestValueCell } from "../_series";
+import { DayCell, Freshness, LatestValueCell, SparklineCell } from "../_series";
 
 export const metadata: Metadata = {
   title: "The economy",
@@ -32,6 +39,17 @@ export const metadata: Metadata = {
  * this file worked out is a figure the API did not send (AD-3), and the front page once
  * disagreed with this one about how many series exist for exactly that reason.
  */
+/**
+ * How much of each series the sparkline in its row shows.
+ *
+ * The API's own `limit`, which takes the *most recent* periods - so this is a window on
+ * the end of a series, never a sample of it. Sixty is enough shape for a daily rate and
+ * is the whole of every quarterly and annual series here, and each row's aria-label names
+ * the two dates it actually spans rather than repeating this number as though it were
+ * always the answer.
+ */
+const SPARKLINE_PERIODS = 60;
+
 export default async function MacroPage() {
   let series: MacroSeries[];
 
@@ -99,6 +117,28 @@ export default async function MacroPage() {
     );
   }
 
+  // One call per series for the sparklines, settled independently. DESIGN.md §4b: a
+  // chart must not be the reason a page fails, so a row whose observations did not come
+  // back loses its line and keeps every figure beside it.
+  //
+  // `failTheBuildInstead` is still the first statement in the catch. This route is
+  // static, and a build that could not reach the API has not produced a publishable page
+  // - a prerendered table of thirteen missing trends is exactly the artifact §8 exists to
+  // stop being served.
+  const trends = new Map<string, MacroObservation[] | null>(
+    await Promise.all(
+      series.map(async (item): Promise<[string, MacroObservation[] | null]> => {
+        try {
+          const page = await api.macroObservations(item.code, SPARKLINE_PERIODS);
+          return [item.code, page.observations];
+        } catch (error) {
+          failTheBuildInstead(error);
+          return [item.code, null];
+        }
+      }),
+    ),
+  );
+
   // One attribution per publisher, word for word - DESIGN.md §6 forbids paraphrasing one.
   // A Map keyed on the publisher's own name de-duplicates without altering a single
   // character of the string it stores.
@@ -125,8 +165,11 @@ export default async function MacroPage() {
             <caption>
               Every economic series this system holds, with the latest observation in
               each. <b>Value as of</b> is the period that observation covers;{" "}
-              <b>known as of</b> is the day it became public. A series with nothing in it
-              is still listed, so that an absence is visible rather than silent.
+              <b>known as of</b> is the day it became public. <b>Recent shape</b> draws
+              the end of each series — at most its last {SPARKLINE_PERIODS} periods — on
+              its own scale, and the code opens every figure behind it. A series with
+              nothing in it is still listed, so that an absence is visible rather than
+              silent.
             </caption>
             <thead>
               <tr>
@@ -135,6 +178,10 @@ export default async function MacroPage() {
                 <th scope="col" className="num">
                   Latest
                 </th>
+                {/* Deliberately not "Trend" on its own. Each line is scaled to its own
+                    row, so what the column shows is one series' recent shape and never a
+                    comparison between two of them. */}
+                <th scope="col">Recent shape</th>
                 {/* "Measured in", not "Unit", for the same reason as below: a header is
                     nowrap and a body cell is not, so a four-letter header squeezed
                     "per cent" onto two lines in every row of the table. */}
@@ -156,7 +203,13 @@ export default async function MacroPage() {
             <tbody>
               {series.map((item) => (
                 <tr key={item.code}>
-                  <th scope="row">{item.code}</th>
+                  {/* The code is the link to the series' own page, which is where its
+                      observations and both of their dates live. */}
+                  <th scope="row">
+                    <Link href={`/macro/${encodeURIComponent(item.code)}`}>
+                      {item.code}
+                    </Link>
+                  </th>
                   {/* The base period belongs with the name rather than with the unit:
                       it says what an index value is counted against, and the name cell
                       is the one wide enough to hold it on a single line. In the unit
@@ -169,6 +222,7 @@ export default async function MacroPage() {
                     ) : null}
                   </td>
                   <LatestValueCell series={item} />
+                  <SparklineCell series={item} points={trends.get(item.code) ?? null} />
                   <td>{unitInWords(item.unit)}</td>
                   <td>{sentenceCase(item.frequency)}</td>
                   <DayCell iso={item.latest_as_of} whenMissing={NOT_LOADED} />
@@ -193,6 +247,36 @@ export default async function MacroPage() {
           page.
         </p>
       </div>
+
+      <Disclose brief="Each line in Recent shape is drawn to its own scale, so two of them cannot be compared.">
+        <p>
+          A line twenty pixels high has to use all twenty of them or it shows nothing, so
+          each one is stretched between that series&rsquo; own highest and lowest figure
+          over the window. A policy rate that moved from 26.5 to 27.5 and an exchange rate
+          that moved from 300 to 1,600 therefore produce lines of the same height.
+        </p>
+        <p>
+          Read one line down its own row: it says when that series rose and when it fell.
+          Read two lines against each other and it says nothing at all, because the two
+          axes are different. The figures themselves are on each series&rsquo; own page,
+          with the scale printed in words.
+        </p>
+      </Disclose>
+
+      <Disclose brief="The observations column counts stored versions, and a series has fewer periods than versions.">
+        <p>
+          A statistical agency revises. The same month of US CPI is published, then
+          restated, and each publication is stored here as its own row with its own{" "}
+          <b>known as of</b> — which is what makes it possible to ask what was knowable on
+          a given day rather than what we know now.
+        </p>
+        <p>
+          So the count in that column is of rows, not of months, and a series that has
+          been restated holds more rows than it has periods. A series&rsquo; own page
+          counts the periods instead, and both counts are printed there side by side so
+          neither can be mistaken for the other.
+        </p>
+      </Disclose>
 
       <Disclose brief="CPI is the price of one fixed basket of what households buy, measured over and over.">
         <p>

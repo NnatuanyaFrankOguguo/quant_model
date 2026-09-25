@@ -1,5 +1,6 @@
-import type { MacroSeries } from "@/lib/api";
-import { NOT_LOADED, formatDay, withUnit } from "@/lib/format";
+import type { MacroObservation, MacroSeries } from "@/lib/api";
+import { NOT_LOADED, NOT_REPORTED, count, formatDay, withUnit } from "@/lib/format";
+import { Sparkline, extremes } from "@/components/sparkline";
 
 /**
  * The cells an economic series is written into.
@@ -64,4 +65,62 @@ export function DayCell({
 }) {
   const written = formatDay(iso);
   return written ? <td>{written}</td> : <td className="absent">{whenMissing}</td>;
+}
+
+/**
+ * The recent shape of a series, in a table cell.
+ *
+ * An additive export: the overview at `/` renders the same three cells above and does
+ * not fetch observations, so nothing there changes by this existing.
+ *
+ * `points` is what the observations endpoint returned for this series, and three
+ * different absences reach here as three different things. `null` is our fetch not
+ * coming back, which is `NOT_LOADED` - ours. An empty array is a series nothing has been
+ * loaded into, which is the same phrase for the same reason, and the freshness pill
+ * beside it already says "nothing loaded". Points that exist but carry no figures are
+ * the publisher's absence and say so in their own words rather than borrowing ours.
+ *
+ * Every row is scaled to its own highest and lowest figure, which is what makes a
+ * sparkline legible at 20 pixels and also what makes comparing two of them meaningless.
+ * The page says so beneath the table.
+ */
+export function SparklineCell({
+  series,
+  points,
+}: {
+  series: MacroSeries;
+  points: MacroObservation[] | null;
+}) {
+  if (points === null || points.length === 0) {
+    return <td className="absent">{NOT_LOADED}</td>;
+  }
+
+  const edges = extremes(points);
+  if (edges === null) {
+    // Periods were loaded and not one of them carries a figure. That absence is the
+    // publisher's, not ours, so it borrows the publisher's phrase - and `.absent` is
+    // `white-space: nowrap`, so a longer sentence here would hold the column open at the
+    // width of its own excuse.
+    return <td className="absent">{NOT_REPORTED}</td>;
+  }
+  if (edges.plotted < 2) {
+    // One point is not a line. Drawing one anyway would put a direction on the screen
+    // that nobody measured.
+    return <td className="absent">one period only</td>;
+  }
+
+  return (
+    <td>
+      <Sparkline
+        points={points}
+        label={
+          `${series.name}: ${count(edges.plotted)} periods, ` +
+          `${formatDay(edges.first.as_of_date)} to ${formatDay(edges.last.as_of_date)}, ` +
+          `lowest ${withUnit(edges.low.value as string, series.unit)}, ` +
+          `highest ${withUnit(edges.high.value as string, series.unit)}. ` +
+          `Every figure is on this series' own page.`
+        }
+      />
+    </td>
+  );
 }

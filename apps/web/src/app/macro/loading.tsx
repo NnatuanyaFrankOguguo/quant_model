@@ -10,7 +10,7 @@ export default function LoadingMacro() {
     <>
       <h1>The economy</h1>
       <div className="notice">
-        <h3>Loading the economic series</h3>
+        <h2>Loading the economic series</h2>
         <p>
           Fetching every series and its latest observation. The first request after a
           quiet spell wakes the database, which takes a few seconds longer than the

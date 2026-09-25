@@ -496,10 +496,15 @@ h3 {
 /* For a label too long to cut. "Free cash flow per share" needs 158px and gets
    135 at 1280, and a silently truncated label is worse than a two-line one -
    the reader cannot tell which figure they are looking at. */
+/* Two fixed lines, not a minimum. With `min-height` a one-line label and a
+   two-line one produce different tile heights, so the figures below them stop
+   sharing a baseline across the row - which is the whole reason the row is a
+   grid. Two lines is the cap; a label needing three should be shortened. */
 .metric-name.wrap {
   white-space: normal;
-  overflow: visible;
-  min-height: 2em;
+  overflow: hidden;
+  height: 2.4em;
+  line-height: 1.2;
 }
 .metric-value {
   font-size: 1.0625rem;
@@ -568,6 +573,9 @@ td.absent {
 .scroller {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  /* A containment context so a `<caption>` can be sized against the *scroller*
+     rather than the table or the viewport - see the caption rule below. */
+  container-type: inline-size;
 }
 
 table {
@@ -579,6 +587,15 @@ table {
    1015px table at 320px the text ran off the right of the phone and could only
    be read by scrolling the table sideways. Sticking it to the scroller's left
    edge keeps it in view; the width cap stops it stretching to the table's. */
+/* A `<caption>` is as wide as its *table*, so on a 1279px table it laid out
+   across 1279px and only the leftmost slice was readable without scrolling
+   sideways. Stuck to the scroller's left edge it stays in view, and `100cqw` -
+   the scroller's own inline size - is what bounds it.
+
+   An earlier attempt used `100vw`. That was wrong in the same direction it was
+   meant to fix: the scroller is about 271px inside a 320px viewport once the
+   page padding is taken off, so a 320px cap still clipped the caption on every
+   table in the app by roughly 49px. */
 caption {
   text-align: left;
   font-size: var(--fs-small);
@@ -586,7 +603,7 @@ caption {
   padding: 0 var(--gap) var(--gap-sm);
   position: sticky;
   left: 0;
-  max-width: 100vw;
+  max-width: 100cqw;
 }
 /* Not sticky, deliberately. `position: sticky` on a header only works against
    an ancestor that scrolls in that axis, and every table here sits in
@@ -648,8 +665,25 @@ th.nowrap {
   white-space: normal;
   min-width: 18rem;
 }
+/* An opt-in sticky row label. `th[scope="row"]` is deliberately `static` above,
+   which is right for a table you can read across - but a statements table is
+   line items down and twenty fiscal periods across, and by the tenth column
+   the line's name has scrolled away and the figures mean nothing. It needs an
+   opaque background of its own, because the row-hover rule paints one and a
+   transparent sticky cell would let the scrolled columns show through it. */
+.scroller th[scope="row"].sticky {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--paper-raised);
+  border-right: 1px solid var(--line);
+}
 tbody tr:hover td,
 tbody tr:hover th[scope="row"] {
+  background: var(--paper-sunk);
+}
+/* After the hover rule, so a hovered sticky label still tints with its row. */
+.scroller tbody tr:hover th[scope="row"].sticky {
   background: var(--paper-sunk);
 }
 tbody tr:last-child td,
@@ -708,6 +742,25 @@ thead th[aria-sort="descending"] > button.sort::after {
 thead th[aria-sort="ascending"] > button.sort,
 thead th[aria-sort="descending"] > button.sort {
   color: var(--act-deep);
+}
+
+/* An `<svg>` is `display: inline` by default, so it sits on the text baseline
+   with descender space beneath it and rides high in a table cell. */
+.sparkline {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* A chart that fills its panel. Without this, sizing one meant geometry
+   attributes only - `preserveAspectRatio="none"` plus `vector-effect` on every
+   stroke - which works but forbids `<text>` inside the SVG, because non-uniform
+   scaling would distort the glyphs. */
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .scroll-hint {
@@ -904,6 +957,20 @@ thead th[aria-sort="descending"] > button.sort {
   letter-spacing: normal;
 }
 
+/* A marker attached to a figure - a restatement flag, a footnote letter. Small
+   and raised, and distinct from `.hint`, which is an aside *beside* a field
+   rather than a mark *on* a value. Carries no colour of its own: a marker that
+   was red would be making a claim about the figure it marks. */
+.mark {
+  font-size: var(--fs-micro);
+  font-weight: 650;
+  color: var(--ink-faint);
+  vertical-align: super;
+  line-height: 1;
+  margin-left: 2px;
+  cursor: help;
+}
+
 .muted {
   color: var(--ink-soft);
 }
@@ -964,7 +1031,8 @@ label {
   margin-bottom: var(--gap-xs);
 }
 input[type="text"],
-input[type="number"] {
+input[type="number"],
+input[type="date"] {
   width: 100%;
   height: 34px;
   padding: 0 var(--gap-sm);

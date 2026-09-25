@@ -208,6 +208,9 @@ It must work on a phone. It is *better* on a large screen and that is fine to sa
   tells a narrow reader it scrolls and hides above 900px.
 - Grids use `repeat(auto-fit, minmax(min(100%, Npx), 1fr))`. The `min(100%, …)` is what
   stops overflow at 320px.
+- **`th[scope="row"].sticky`** pins a row label while the columns scroll under it. Opt-in:
+  it is right for a statements table twenty periods wide, where the line's name is gone by
+  the tenth column, and wrong for a table you can read across.
 - `.wrap-cell` and `.nowrap` pull in opposite directions and neither is automatic.
   `.nowrap` keeps one line in a body cell — use it on dates, tickers and pills, because
   once a cell wraps the whole row's height doubles and the density is gone. `.num`
@@ -256,7 +259,8 @@ From `globals.css`, plus `<Disclose>` from `@/components/disclose`.
 
 `.shell` `.brand` `.topbar` `.rail` `.main` `.search` `.security-head` `.delta.up|down|flat`
 `.tabs` `.metrics` `.metric` `.metric-name` `.metric-value` `.absent` `.panel` `.panel-head`
-`.panel-body` `.grid` `.scroller` `table` `.wrap-cell` `.nowrap` `.scroll-hint` `.disclose`
+`.panel-body` `.grid` `.scroller` `table` `.wrap-cell` `.nowrap` `th.sticky` `.scroll-hint`
+`.disclose` `.sparkline` `.chart` `.mark` `.hint` `button.sort`
 `.pill.ok|attention|broken|neutral` `.notice` `.notice.bad` `.source` `.page-note` `.prose`
 `.muted` `.faint` `.num` `button` `.button.quiet`
 

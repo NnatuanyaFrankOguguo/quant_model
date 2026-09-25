@@ -258,6 +258,28 @@ export function money(value: string | null | undefined, currency: string): strin
 }
 
 /**
+ * An amount at the precision it was given, not at two decimal places.
+ *
+ * `money()` fixes two decimals, which is right for a share price and wrong for a figure
+ * that is genuinely smaller than a cent. Apple's May 1987 dividend is 0.000536 in
+ * today's share terms, and `money()` prints it as **$0.00** - a real payment rendered as
+ * nothing, which is the zero-for-a-figure mistake in its most literal form. §6: print a
+ * figure the system was given verbatim.
+ */
+export function moneyPrecise(
+  value: string | null | undefined,
+  currency: string,
+  maxDigits = 6,
+): string {
+  const parsed = reading(value);
+  if (parsed === null) return NOT_REPORTED;
+  return currencyFormat(currency, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: maxDigits,
+  }).format(parsed);
+}
+
+/**
  * An amount shortened: "$98.77B". For company-sized totals, where twelve digits of
  * precision is not information a reader can use and thirteen characters of it crowds
  * everything else off a 320px screen.
