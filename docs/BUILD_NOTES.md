@@ -4,7 +4,7 @@
 > tracker says *what state each phase is in*; this says *what happened*, because most of
 > what was learned does not fit in a table cell.
 >
-> Covers 25 commits, 69 files, +15,854 / −658 lines. Last updated 2026-09-25.
+> Covers 30 commits, 86 files, +21,036 / −659 lines. Last updated 2026-09-25.
 
 ---
 
@@ -15,8 +15,12 @@
 | Database | 320 MB · 43 tables · migration head `0030_p5_sentiment_tier` |
 | Tests | **1,306 passing**, 7 skipped, 1 environmental error |
 | Phases closed this stretch | **P5.3**, **P5.4**, **P6** (🧪), **P9.5** (the web app) |
+| Web app | 11 pages, **charts on the company and macro pages**, a screener |
 | Indicator rows computed | 842,088 across all 24 securities |
 | Nigerian securities | **0** — and this is the thing blocking most of the rest |
+
+**Start the API with `scripts/run_api.py`.** Not plain uvicorn — see §4, "the API that died
+four times".
 
 **The single most important fact:** none of the 25 Nigerian companies in
 [UNIVERSE.md](UNIVERSE.md) is loaded. That blocks P3's gate, P4's gate, the Nigerian half
@@ -48,7 +52,7 @@ A 63-point error on a day the stock rose, inherited silently by every downstream
 ### P5.3 — Sentiment tiering
 
 VADER for the bulk tier, the LLM tier built and gated on the absent key. The intellectual
-content turned out to be what "ambiguous" means, and the obvious answer is wrong — see §4.
+content turned out to be what "ambiguous" means, and the obvious answer is wrong — see §5.
 
 ### P5.4 — The daily brief
 
@@ -56,27 +60,43 @@ Per-principal composition, idempotent delivery, Telegram send gated on the missi
 
 ### P9.5 — The web app
 
-Six routes, twice: built once as an explanatory essay, rejected by the owner, rebuilt in
-the idiom of a stock research site (persistent rail, ticker search, dense tables, tabs).
-The second version is the right one and the rejection was correct.
+Built once as an explanatory essay, rejected by the owner, rebuilt in the idiom of a stock
+research site (persistent rail, ticker search, dense tables, tabs). The second version is
+the right one and the rejection was correct.
+
+Then the visualisation layer, which had not existed at all — the only SVG in the app was the
+search icon, and **no endpoint could return a price series**. Two endpoints first
+(`/companies/{ticker}/prices`, `/companies/{ticker}/indicators`), then four pages in
+parallel:
+
+| route | what is there |
+|---|---|
+| `/companies/[ticker]/chart` | interactive price chart, line or candles, volume, all 12 indicator series, 1M–Max |
+| `/companies/[ticker]/financials` | the statements — line items down, up to 20 fiscal years across |
+| `/companies/[ticker]/filings` | filing history and dividends |
+| `/companies` | a screener: sortable, filterable, ten columns |
+| `/macro` | a sparkline per series |
+| `/macro/[code]` | one series charted, with period *and* vintage on all its rows |
+
+Every chart draws the **adjusted** series. Across Apple's split the plotted close runs
+124.81 → 129.04 (+3.39%); the raw close would have drawn 499.23 → 129.04, a −74.15% collapse
+on a day the stock rose. And the vintage lever finally shows in the product:
+`?as_known_on=2018-12-01` gives AAPL's FY2018 current liabilities as $116.87B, today's page
+gives $115.93B with a restatement marker — both readings, both dates.
 
 ---
 
 ## 3. What is left
 
-### Not blocked — buildable today
+### Not blocked, not yet built
 
-| | data ready |
+| | |
 |---|---|
-| **Price chart** on the company page | 269,298 bars ✓ |
-| **Financial statements** as FY columns | 58,205 line items, 8,212 statements ✓ |
-| **Screener** — sort and filter `/companies` | ✓ |
-| **Filings + dividends** tabs | endpoints exist ✓ |
-| **Macro series detail** + sparklines | 28,092 observations ✓ |
-| **Indicators on the chart** | 842,088 rows ✓ |
-| News + sentiment page | 44 articles — thin until NGX lands |
-
-*(All six of the first are in progress as of this writing.)*
+| News + sentiment page | 44 articles — thin until NGX lands, but buildable |
+| Watchlists UI | tables exist, 0 rows, no page |
+| Company comparison | no page |
+| The scenario endpoint in the UI | `POST …/scenario` exists; the Valuation tab still uses the older DCF route |
+| `GET /macro/series/{code}` | the detail page makes two calls because this does not exist |
 
 ### Blocked on the owner
 
@@ -100,6 +120,37 @@ a survivor-only universe produces confident nonsense, and you will not be able t
 ## 4. The headaches
 
 The useful section. Every one of these was found, not theorised.
+
+### The API that died four times
+
+The worst headache of the stretch, and the one that looked most like something else. The
+API would stop answering — no crash, process still running, port still bound — while pages
+either kept serving cached figures or said the service was slow. A restart fixed it for a
+few minutes. It happened four times in one session.
+
+The log held one clue, repeated: `Accept failed on a socket` with `WinError 64`. The cause
+is one line in CPython. On Windows uvicorn runs on the Proactor event loop, which accepts
+connections with `AcceptEx`; when a client resets a connection before that accept
+completes, the handler logs the error and then closes the **listening** socket. Nothing is
+ever accepted again, and nothing says so.
+
+And this web app resets connections by design: it abandons any fetch that outruns its
+budget, Next abandons in-flight fetches on navigation, and every `curl --max-time` in a
+check script does the same. The more the app was used, the sooner the API went deaf.
+
+Reproduced before anything was changed, with a script that fires bursts of 400 reset
+connections at a fresh server:
+
+| loop | result |
+|---|---|
+| default (Proactor) | stopped answering after the **first** burst |
+| Selector | still answering after three bursts — 1,200 resets |
+| `scripts/run_api.py` | still answering after 2,000 |
+
+`scripts/run_api.py` runs uvicorn on the Selector loop on Windows and leaves every other
+platform alone. A test asserts that uvicorn really resolves the setting to a Selector loop,
+so an upgrade that changed that would fail instead of quietly bringing the bug back.
+`docs/02` §2.3 now starts the API this way.
 
 ### Things that lied about being fine
 
@@ -126,6 +177,12 @@ backend is alive. Verify with a direct `curl`, not through the app.
 eight lines to the output file and threw away every traceback, leaving three errors I
 could only guess at. Re-ran it capturing everything; the cause was a Neon disconnect at
 fixture teardown.
+
+**I called a feature broken when my check was.** I reported the chart's Max range as
+broken. My check had asked for `range=Max`; the app's value is `MAX`, and an unknown value
+falls back to the default one-year range on purpose, because a URL is user input. I was
+looking at a correct one-year chart and calling it a broken Max. When a check disagrees
+with the code, check the check first.
 
 ### Things that were silently wrong
 
@@ -169,7 +226,9 @@ against what was a 45-second budget, so a company whose data is perfectly fine c
 render *"the request did not come back at all."* `ApiTimeout` is now its own state: the
 service answered, we stopped waiting. Verified against a socket server that accepts the
 connection and answers nothing — **a dead port does not reproduce this**, because it fails
-instantly instead of timing out.
+instantly instead of timing out. Whether an abandoned fetch surfaces bare or wrapped as
+another error's `cause` depends on the fetch implementation, so `isTimeout` walks the cause
+chain rather than trusting one shape.
 
 **I committed a HEAD that could not import its own scheduler.** `jobs.py` imported
 `packages.brief`, which was untracked at the time. Unwound it; every commit since is
@@ -179,6 +238,16 @@ verified standalone by stashing all untracked files and importing.
 starlette, uvicorn and others, and wrote the new dependency into the core list — when the
 project deliberately keeps the analytical stack in an optional extra. Use `uv pip install`
 and declare by hand.
+
+**A one-line CSS fix of mine clipped every table.** `caption { max-width: 100vw }` was
+meant to keep a sticky caption on screen, but `100vw` is the viewport, not the scrolling
+box the table sits in. The fix is `100cqw` — the scroller's own width, through a container
+query unit.
+
+**Two names that would have failed at runtime.** `PriceBar` was defined twice in the
+schemas module, the second definition silently replacing the first (now `AdjustedBar`).
+The ratios route referred to `session_for_move`, a name that did not exist, and would have
+raised `NameError` on its first request. Both caught before commit.
 
 ### Things where the documents disagreed
 
@@ -203,6 +272,13 @@ silently wrong rather than obviously missing.
 **`next dev` and `next build` both write to `.next`**, so building while the preview runs
 clobbers the runtime and every chunk 500s — which reads as a broken page rather than a
 clobbered directory. `NEXT_DIST_DIR` now exists for that.
+
+**A shell string ate a backslash and left a carriage return in the docs.** Writing
+`scripts\run_api.py` into `docs/02` through a shell heredoc, `\r` became a real carriage
+return — the file read `scripts`, CR, `un_api.py`, which most viewers display as if nothing
+were wrong. Repaired, then every one of the 86 files changed this stretch was scanned for
+control characters: none left. Write Windows paths with an editor, not through a shell
+string.
 
 ---
 
@@ -246,20 +322,78 @@ holds data."* One of them had been anticipated *wrongly* in a comment, and corre
 tripped a second test that refuses to accept "inherited from a parent" without a NOT NULL
 key to reach one through.
 
+**A crash that looked random was made deterministic before anything was changed.** "It
+stops answering sometimes" became "it stops answering after one burst of 400 resets, every
+time" — and only then was the loop swapped. That is why the fix can be trusted: the script
+that killed the old server fails to kill the new one, and a test pins the one line of
+uvicorn the fix depends on.
+
+**The charts cost the browser almost nothing they do not need.** The sparklines on
+`/macro` and the chart on each macro series page are inline SVG drawn on the server — no charting
+JavaScript ships for them at all. Only the interactive price chart loads a library, and it
+loads it on that page alone. None of them derives a figure: the numbers a reader reads are
+the API's own strings printed beside the picture, never read off it.
+
 ---
 
 ## 6. Known, unfixed
 
-- **A critical advisory against `next@15.5.4`**, plus two high (postcss, sharp — both via
-  Next). Pre-existing, not introduced by any dependency added here. Needs a Next upgrade.
-- **`/macro` prints `23.0101235833333%`.** That is the rule working as written — print a
-  figure the system was *given* verbatim, round only what it *derived* — but thirteen
-  decimal places is upstream float noise, not published precision. The clean fix is a
-  rounded display with the exact value in the `.source` block.
-- **`/companies/NOSUCH` renders its 404 page with HTTP 200.**
+Each of these was re-checked against the running API or the database on 2026-09-25, not
+carried over from memory. Two items I expected to list did not survive that check and are
+not here.
+
+### Data
+
+- **Four companies' latest five years are attached to a proxy statement.** Caterpillar,
+  Chevron and JPMorgan FY2021–FY2025, and Home Depot FY2022–FY2026 — 20 annual statements —
+  cite a DEF 14A rather than a 10-K, so their source links open a proxy statement.
+  JPMorgan's FY2025 column carries 18 line items where its FY2020 column carries 32: no
+  income tax, no interest income or expense, no pre-tax profit — on exactly the years a
+  reader looks at first. The likely cause is the pay-versus-performance table that proxy
+  statements have carried since 2023, XBRL-tagged, with five years of figures; not yet
+  confirmed, and not yet known whether the missing line items share that cause. Also unexamined: 123 annual
+  statements attached to a 10-Q and 56 to an 8-K (some 8-Ks are legitimate recasts).
+- **`correction_reason` is null on every figure.** 3,445 line items are marked
+  `restatement`; none says why. For a restatement the new filing is arguably the reason, but
+  `docs/08` §10 asks for the field on every correction, and the UI has nothing to print.
 - **The indicator backfill runs from 2015, not 1970.** Full history adds ~1 GB to a 320 MB
   database, and only 11 of the 24 securities exist before 2010 — so the deep history has a
   changing-composition problem `SPEC.md` 2A warns against. Extending: 2010 `+387 MB`,
   2000 `+596 MB`, 1970 `+1.04 GB`.
-- **`uv.lock` is untracked.** Created accidentally; commit it or delete it, but an
-  untracked lockfile silently changes what `uv sync` does next.
+
+### API
+
+- **`/indicators` lacks what every other series endpoint has:** no `attribution`, no
+  `truncated`, no `end` parameter, and no cap on its size.
+- **An invalid `period_type` answers 200 with no periods.** `/statements?period_type=ZZ`
+  should be a 422; an empty 200 reads as "this company reported nothing".
+- **A macro series has two counts and neither is labelled.** `/macro/series` gives
+  `observation_count` — every stored row, all vintages; the observations endpoint gives
+  `total_available` — one per period. `US_CPI_INDEX` is 3,362 and 956. Both are right; a
+  reader cannot tell they measure different things.
+- **`/prices` has no relative range,** so the chart page turns "1Y" into a start date
+  itself (`windowStart` in `chart/_view.ts`) — the one piece of date arithmetic in the
+  client, documented where it happens. A `range=` parameter would remove it.
+
+### Web app
+
+- **A critical advisory against `next@15.5.4`**, plus two high (postcss, sharp — both via
+  Next). Pre-existing, not introduced by any dependency added here. Needs a Next upgrade.
+- **`/companies/NOSUCH` and `/macro/NOSUCH` answer HTTP 200.** Neither page calls
+  `notFound()`; both print their own "not found" message. An unknown route does return 404.
+- **`/macro` prints `23.0101235833333%`.** That is the rule working as written — print a
+  figure the system was *given* verbatim, round only what it *derived* — but thirteen
+  decimal places is upstream float noise, not published precision. The clean fix is a
+  rounded display with the exact value in the `.source` block. The owner's call.
+- **The chart's Max range weighs 1.56 MB** on the production build: every bar held, in one
+  payload.
+- **Unverified: what a visitor without JavaScript sees on a streamed page.** A reviewer
+  reported they would get the loading state instead of the table. On the dev server the
+  table has no hidden ancestor; the production build was not checked.
+
+### Repository
+
+- **`uv.lock` and `.claude/` are untracked.** The lockfile was created accidentally —
+  commit it or delete it, but an untracked lockfile silently changes what `uv sync` does
+  next. `.claude/` is local tool configuration (`launch.json`, `settings.local.json`,
+  `skills/`). Both the owner's call.
