@@ -18,9 +18,14 @@ export function CompanyTabs({ ticker }: { ticker: string }) {
   const pathname = usePathname();
   const base = `/companies/${encodeURIComponent(ticker)}`;
 
+  // The full set, declared in one place so three people adding a tab each do not each
+  // edit this list. Order is the reading order of a company: what it is, what it did,
+  // what it filed, what it might be worth.
   const tabs = [
     { href: base, text: "Overview" },
+    { href: `${base}/chart`, text: "Chart" },
     { href: `${base}/financials`, text: "Financials" },
+    { href: `${base}/filings`, text: "Filings" },
     { href: `${base}/valuation`, text: "Valuation" },
   ];
 
