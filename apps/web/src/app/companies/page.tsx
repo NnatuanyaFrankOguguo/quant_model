@@ -9,16 +9,16 @@ import {
   type CompanySummary,
   failTheBuildInstead,
 } from "@/lib/api";
-import { NOT_LOADED, SERVICE_IS_SLOW, count, day, isMissing } from "@/lib/format";
+import { SERVICE_IS_SLOW } from "@/lib/format";
 
-import { NumCell, ScrollHint, WordCell } from "./_ui";
+import { Screener } from "./_screener";
 
 export const metadata: Metadata = {
   title: "Stocks",
   description:
-    "Every company loaded, with how many reporting periods are held, the period the " +
-    "newest figures cover, the day they became public, and whether the next report is " +
-    "past its due date.",
+    "Every company loaded, sortable by any column and filterable by ticker or name, " +
+    "with how many reporting periods are held, the period the newest figures cover, " +
+    "the day they became public, and whether the next report is past its due date.",
 };
 
 /**
@@ -28,6 +28,16 @@ export const metadata: Metadata = {
  * to put above it - a count of these rows would be a number the API did not send, and
  * AD-3 puts arithmetic on the server. What each column means is explained below the
  * table, one disclosure per idea, so a reader who already knows can scan and leave.
+ *
+ * The fetch stays here, in the server component, and the rows are handed to `<Screener>`
+ * as a prop. That is what keeps the page working with JavaScript off: a client component
+ * still renders on the server, so the first byte of HTML carries the whole table already
+ * sorted, and hydration only wakes up the filter box and the column buttons. A screener
+ * that fetched in the browser would show an empty table until it did not.
+ *
+ * Every column comes from the one `/v1/public/companies` call. Nothing here fans out per
+ * row: a market figure beside each company would cost a request per company, which is a
+ * cost the reader pays and the table does not need.
  */
 export default async function StocksPage() {
   let companies: CompanySummary[];
@@ -58,59 +68,7 @@ export default async function StocksPage() {
     <>
       <Heading />
 
-      <div className="scroller">
-        <table>
-          {/* Short on purpose. A `<caption>` is as wide as its table, and this table is
-              851px wide against a 288px phone - so a long caption runs off the right of
-              the screen and has to be scrolled to, which a caption exists to avoid. The
-              longer description is the `.page-note` above. */}
-          <caption>Every company loaded, and how much of each.</caption>
-          <thead>
-            <tr>
-              <th scope="col">Ticker</th>
-              <th scope="col">Company</th>
-              <th scope="col">Exchange</th>
-              <th scope="col" className="num">
-                Periods
-              </th>
-              <th scope="col">Period end</th>
-              <th scope="col">Filed on</th>
-              <th scope="col">Next report</th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {companies.map((company) => (
-              <tr key={company.ticker}>
-                {/* The ticker labels the row, so it is a row header - `DESIGN.md` §9. */}
-                <th scope="row">
-                  <Link href={`/companies/${encodeURIComponent(company.ticker)}`}>
-                    {company.ticker}
-                  </Link>
-                </th>
-                {/* The name gets `.nowrap` too. This table is wider than a phone and
-                    scrolls sideways either way, so letting the longest legal name wrap
-                    buys no width back - it only turns a 36px row into a 73px one and
-                    takes the even row rhythm a screener is read by with it. */}
-                <td className="nowrap">{company.legal_name}</td>
-                <WordCell text={exchangeOf(company)} nowrap />
-                <NumCell text={count(company.statement_periods)} />
-                <WordCell text={day(company.latest_period_end)} nowrap />
-                <WordCell text={day(company.latest_filing_date)} nowrap />
-                <WordCell text={nextReport(company)} nowrap />
-                <td className="nowrap">
-                  {company.filing_overdue ? (
-                    <span className="pill attention">Past due</span>
-                  ) : (
-                    <span className="pill ok">Not due</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <ScrollHint />
+      <Screener companies={companies} />
 
       <Disclose brief="A period end and a filed on date are two different days, and the gap between them is the point.">
         <p>
@@ -157,6 +115,11 @@ export default async function StocksPage() {
           <dd>the period ending on that row&rsquo;s own latest period end</dd>
           <dt>When it became knowable</dt>
           <dd>that row&rsquo;s own filed on date</dd>
+          <dt>Ordering</dt>
+          <dd>
+            a column is sorted by the field the API sent for it, and nothing on this page
+            is worked out from two of them
+          </dd>
           <dt>Attribution</dt>
           <dd>
             This endpoint returns no attribution string of its own, so none is shown here
@@ -179,23 +142,6 @@ function Heading() {
       </p>
     </>
   );
-}
-
-/** The exchange, or the phrase for the kind of absence it is. Never an empty cell. */
-function exchangeOf(company: CompanySummary): string {
-  return isMissing(company.exchange) ? NOT_LOADED : company.exchange;
-}
-
-/**
- * "10-K, due 29 Dec 2026". Both halves come from the API; neither is worked out here.
- * When there is no form there is nothing to be due, so the whole cell is the absence.
- */
-function nextReport(company: CompanySummary): string {
-  if (isMissing(company.next_filing_form)) return NOT_LOADED;
-  const due = company.next_filing_due_by;
-  return isMissing(due)
-    ? (company.next_filing_form as string)
-    : `${company.next_filing_form}, due ${day(due)}`;
 }
 
 /**

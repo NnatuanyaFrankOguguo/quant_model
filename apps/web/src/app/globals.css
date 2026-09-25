@@ -657,6 +657,59 @@ tbody tr:last-child th {
   border-bottom: none;
 }
 
+/* A sortable column header.
+   The global `button` rule is a filled blue control 34px tall, which is wrong
+   inside a `<th>` and leaks: its `min-height` alone took the header row from
+   33px to 50px and widened the table by ~16px a column. This resets it to the
+   header's own type, and the arrow is drawn from `aria-sort` - so the state a
+   screen reader announces is the state that draws, and the two cannot diverge. */
+thead th > button.sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  min-height: 0;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+thead th > button.sort:hover {
+  color: var(--act-deep);
+  background: none;
+}
+/* Unsorted columns show a faint two-way arrow only on hover, so ten headers do
+   not read as ten pieces of state. The sorted one always shows its direction. */
+thead th > button.sort::after {
+  content: "95";
+  color: var(--ink-faint);
+  opacity: 0;
+  font-size: 0.9em;
+}
+thead th > button.sort:hover::after,
+thead th > button.sort:focus-visible::after {
+  opacity: 1;
+}
+thead th[aria-sort="ascending"] > button.sort::after {
+  content: "91";
+  color: var(--act);
+  opacity: 1;
+}
+thead th[aria-sort="descending"] > button.sort::after {
+  content: "93";
+  color: var(--act);
+  opacity: 1;
+}
+thead th[aria-sort="ascending"] > button.sort,
+thead th[aria-sort="descending"] > button.sort {
+  color: var(--act-deep);
+}
+
 .scroll-hint {
   font-size: var(--fs-micro);
   color: var(--ink-faint);
@@ -665,11 +718,14 @@ tbody tr:last-child th {
   padding: var(--gap-sm) var(--gap);
   margin: 0;
 }
-@media (min-width: 900px) {
-  .scroll-hint {
-    display: none;
-  }
-}
+/* No media query. Whether a table scrolls is a fact about the *table* and its
+   container, not about the viewport - the screener is 1279px inside a ~1007px
+   column at 1280, so hiding the hint above 900px hid it from exactly the
+   readers who needed it. The wording is conditional ("if this table is wider
+   than your screen") and therefore true at every width, so showing it always
+   is honest; one line of 11px faint text costs less than a reader not knowing
+   a column exists. Showing it only where a table really overflows would mean
+   measuring in the browser, which is not worth a client component. */
 
 /* ---------------------------------------------------------------------------
    THE DISCLOSURE
