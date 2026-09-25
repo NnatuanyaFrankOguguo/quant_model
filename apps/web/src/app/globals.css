@@ -854,6 +854,13 @@ thead th[aria-sort="descending"] > button.sort {
 .disclose .full p {
   margin: 0 0 var(--gap-sm);
 }
+/* The `--prose` cap is for reading and wrong for a table. A thirteen-column
+   table inside a disclosure was being squeezed to 74ch and forced to scroll on
+   a 1440px screen - the cap protecting the prose was hiding the data. */
+.disclose .full > .scroller,
+.disclose .full > table {
+  max-width: none;
+}
 .disclose[open] > summary {
   font-weight: 600;
   color: var(--ink);
@@ -1018,6 +1025,44 @@ button:hover,
 }
 .button.quiet:hover {
   background: var(--act-wash);
+}
+/* A range strip or a set of toggles. `.panel-head` does not wrap, so at 320px a
+   five-item strip broke out of it; this is the row those controls belong in. */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-sm);
+  margin: 0 0 var(--gap);
+}
+/* Five range buttons in a row do not want to be 34px tall each. */
+.button.small,
+button.small {
+  min-height: 26px;
+  padding: 3px 10px;
+  font-size: var(--fs-small);
+}
+
+/* Available to a screen reader, invisible on screen. For a control whose
+   accessible name needs to be fuller than its visible label - "1Y" is enough to
+   look at and not enough to hear. Not `display: none`, which removes it from
+   the accessibility tree along with everything else. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* A chart's box before the library mounts. Without it the panel is empty and
+   then jumps to full height, moving everything under it. */
+.chart-frame {
+  min-height: 320px;
 }
 
 /* Inputs, for the valuation form. */

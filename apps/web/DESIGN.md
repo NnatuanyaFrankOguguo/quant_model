@@ -260,7 +260,8 @@ From `globals.css`, plus `<Disclose>` from `@/components/disclose`.
 `.shell` `.brand` `.topbar` `.rail` `.main` `.search` `.security-head` `.delta.up|down|flat`
 `.tabs` `.metrics` `.metric` `.metric-name` `.metric-value` `.absent` `.panel` `.panel-head`
 `.panel-body` `.grid` `.scroller` `table` `.wrap-cell` `.nowrap` `th.sticky` `.scroll-hint`
-`.disclose` `.sparkline` `.chart` `.mark` `.hint` `button.sort`
+`.disclose` `.sparkline` `.chart` `.chart-frame` `.mark` `.hint` `button.sort` `.controls`
+`.button.small` `.visually-hidden`
 `.pill.ok|attention|broken|neutral` `.notice` `.notice.bad` `.source` `.page-note` `.prose`
 `.muted` `.faint` `.num` `button` `.button.quiet`
 
