@@ -388,52 +388,59 @@ export default async function MacroSeriesPage({ params }: PageProps) {
             </div>
           </div>
 
-          <div className="panel" id="observations">
-            <div className="panel-head">
-              <h2>Every observation, newest period first</h2>
-            </div>
-            <div className="scroller">
-              <table>
-                <caption>
-                  <b>Period covered</b> is what each figure is about; <b>known as of</b>{" "}
-                  is the day it became public. Each period is shown at its newest version.
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Period covered</th>
-                    <th scope="col">Known as of</th>
-                    <th scope="col" className="num">
-                      Value
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {/* Reversed on a copy, so the newest period is at the top. Ordering,
-                      not arithmetic - the same operation the overview uses on filings. */}
-                  {[...points].reverse().map((point) => (
-                    <tr key={point.as_of_date}>
-                      <th scope="row" className="nowrap">
-                        {formatDay(point.as_of_date)}
+          {/* Folded, as the price chart's table is (`DESIGN.md` 4b): the other rendering of
+              the chart above, one summary line until it is asked for. Laid out open, a
+              monthly series from 1947 is 956 rows - a page roughly 35,000px tall on a
+              phone, with the notes below it out of reach. The anchor sits on a wrapper
+              rather than inside the `<details>`, so following it lands on the summary in
+              every browser instead of on an element some of them will not reveal. */}
+          <div id="observations">
+            <Disclose
+              brief={`Every observation, as a table — ${count(points.length)} periods, newest first.`}
+            >
+              <div className="scroller">
+                <table>
+                  <caption>
+                    <b>Period covered</b> is what each figure is about; <b>known as of</b>{" "}
+                    is the day it became public. Each period is shown at its newest version.
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">Period covered</th>
+                      <th scope="col">Known as of</th>
+                      <th scope="col" className="num">
+                        Value
                       </th>
-                      <td className="nowrap">{formatDay(point.known_as_of)}</td>
-                      {point.value === null ? (
-                        // The row was loaded and the publisher's own record for that
-                        // period carries no figure. That is the publisher's absence, not
-                        // ours, so it is `NOT_REPORTED` rather than `NOT_LOADED` - and it
-                        // is never a zero, which would claim a measurement of nought.
-                        <td className="num absent">{NOT_REPORTED}</td>
-                      ) : (
-                        <td className="num">{withUnit(point.value, page.unit)}</td>
-                      )}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p className="scroll-hint">
-              If this table is wider than your screen, it scrolls sideways rather than the
-              page.
-            </p>
+                  </thead>
+                  <tbody>
+                    {/* Reversed on a copy, so the newest period is at the top. Ordering,
+                        not arithmetic - the same operation the overview uses on filings. */}
+                    {[...points].reverse().map((point) => (
+                      <tr key={point.as_of_date}>
+                        <th scope="row" className="nowrap">
+                          {formatDay(point.as_of_date)}
+                        </th>
+                        <td className="nowrap">{formatDay(point.known_as_of)}</td>
+                        {point.value === null ? (
+                          // The row was loaded and the publisher's own record for that
+                          // period carries no figure. That is the publisher's absence, not
+                          // ours, so it is `NOT_REPORTED` rather than `NOT_LOADED` - and it
+                          // is never a zero, which would claim a measurement of nought.
+                          <td className="num absent">{NOT_REPORTED}</td>
+                        ) : (
+                          <td className="num">{withUnit(point.value, page.unit)}</td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="scroll-hint">
+                If this table is wider than your screen, it scrolls sideways rather than the
+                page.
+              </p>
+            </Disclose>
           </div>
         </>
       )}

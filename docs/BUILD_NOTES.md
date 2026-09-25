@@ -202,6 +202,15 @@ to notice, which is exactly how that drift survives for years.
 `overflow-x: auto` computes `overflow-y: auto` — so the header was sticking to a box that
 never scrolls vertically. The rule was present and did nothing.
 
+**The header search box was broken from the day it was built.** The redesign added
+`.search input`, with 30px of room on the left for the magnifier, and in the same commit a
+default `input[type="text"]` rule for the valuation form. The two weigh exactly the same,
+and the default came later in the file, so it won: 8px of padding, the magnifier drawn on
+the "S" of the placeholder, and the box's own background and border replaced — at every
+screen size, on every page, in the one control the header exists for. The default is now
+wrapped in `:where()`, which gives it no weight, so any rule that names a component beats
+it.
+
 **`scripts/run_scheduler.py` had been unrunnable since P5.1.** It formatted
 `f"{job.hour:02d}"`, and the three hourly RSS jobs have `hour="*"`. The script an operator
 would use to *run the scheduler* raised `ValueError` on import of its own job list.
@@ -273,12 +282,16 @@ silently wrong rather than obviously missing.
 clobbers the runtime and every chunk 500s — which reads as a broken page rather than a
 clobbered directory. `NEXT_DIST_DIR` now exists for that.
 
-**A shell string ate a backslash and left a carriage return in the docs.** Writing
+**A lost backslash, twice — and my first scan for it was wrong.** Writing
 `scripts\run_api.py` into `docs/02` through a shell heredoc, `\r` became a real carriage
 return — the file read `scripts`, CR, `un_api.py`, which most viewers display as if nothing
-were wrong. Repaired, then every one of the 86 files changed this stretch was scanned for
-control characters: none left. Write Windows paths with an editor, not through a shell
-string.
+were wrong. Repaired, and a scan I ran then reported no other damage. It was wrong. A later
+scan of all 303 tracked text files, for every control character, found the same collapse
+in `globals.css`: three sort-arrow escapes (`\2191` and its two siblings) had had `\21`
+read as an octal escape, so every sorted column in the screener printed `□91` instead of
+`↑`. Fixed, and the full scan is now clean. Write escapes and Windows paths with an editor,
+never through a shell string — and make the scan cover every file and every control
+character, not the one case already seen.
 
 ---
 
@@ -367,10 +380,11 @@ not here.
   `truncated`, no `end` parameter, and no cap on its size.
 - **An invalid `period_type` answers 200 with no periods.** `/statements?period_type=ZZ`
   should be a 422; an empty 200 reads as "this company reported nothing".
-- **A macro series has two counts and neither is labelled.** `/macro/series` gives
-  `observation_count` — every stored row, all vintages; the observations endpoint gives
-  `total_available` — one per period. `US_CPI_INDEX` is 3,362 and 956. Both are right; a
-  reader cannot tell they measure different things.
+- **A macro series has two counts, and the API does not say which is which.**
+  `/macro/series` gives `observation_count` — every stored row, all vintages; the
+  observations endpoint gives `total_available` — one per period. `US_CPI_INDEX` is 3,362
+  and 956. Both are right, and the series page labels them correctly ("Versions held",
+  "Periods held"); the field names and the schema do not, so any other caller has to guess.
 - **`/prices` has no relative range,** so the chart page turns "1Y" into a start date
   itself (`windowStart` in `chart/_view.ts`) — the one piece of date arithmetic in the
   client, documented where it happens. A `range=` parameter would remove it.
@@ -387,6 +401,12 @@ not here.
   rounded display with the exact value in the `.source` block. The owner's call.
 - **The chart's Max range weighs 1.56 MB** on the production build: every bar held, in one
   payload.
+- **On a phone, the company header fills most of the first screen.** Price, change and two
+  lines of provenance take roughly 60% of a 375×812 screen on every company tab, and on the
+  Chart tab the chart itself starts about 960px down, below the range and indicator
+  buttons. Nothing overflows; it is simply a long way to the thing the tab is named for.
+- **The Filings tab lists every filing ever held in one table** — about 8,200px on a phone
+  for Apple.
 - **Unverified: what a visitor without JavaScript sees on a streamed page.** A reviewer
   reported they would get the loading state instead of the table. On the dev server the
   table has no hidden ancestor; the production build was not checked.
