@@ -58,7 +58,15 @@ from packages.common.models import Indicator, PriceHistory
 from packages.indicators.compute import CODE_VERSION, IndicatorSpec, compute
 from packages.indicators.series import AdjustedBars
 
-__all__ = ["StoreResult", "backfill", "running_vintages", "store_for_security"]
+__all__ = [
+    "IndicatorPoint",
+    "StoreResult",
+    "available_series",
+    "backfill",
+    "read_series",
+    "running_vintages",
+    "store_for_security",
+]
 
 
 @dataclass(frozen=True)
@@ -215,3 +223,70 @@ def backfill(
         if on_progress is not None:
             on_progress(result)
     return results
+
+
+@dataclass(frozen=True)
+class IndicatorPoint:
+    date: dt.date
+    value: float
+    known_as_of: dt.date
+
+
+def read_series(
+    session: Session,
+    *,
+    security_id: int,
+    name: str,
+    decision_date: dt.date,
+    param_hash: str | None = None,
+    start: dt.date | None = None,
+) -> list[IndicatorPoint]:
+    """One indicator's series as knowable on `decision_date`, oldest first.
+
+    Point-in-time on the way out as well as on the way in: `known_as_of <= decision_date`
+    is the join `SPEC.md` §4.1 invariant 5 requires, and where a value has been recomputed
+    after a restatement this takes the newest vintage the decision date can see rather
+    than the newest that exists. `docs/03` P6.3: *"An indicator computed today from a
+    price series that was later revised is not what was knowable on the date."*
+
+    `param_hash` is optional only because most names are unambiguous today. Two parameter
+    sets writing the same column - two Bollinger widths both writing `bb_upper` - are
+    distinguished by the hash alone, so a caller charting those must pass one. Omitting it
+    where two exist would interleave two different features into one line.
+    """
+    if not isinstance(decision_date, dt.date):
+        raise TypeError("decision_date must be a date - there is no default of today")
+
+    query = (
+        select(Indicator.date, Indicator.value, Indicator.known_as_of)
+        .where(Indicator.security_id == security_id)
+        .where(Indicator.name == name)
+        .where(Indicator.known_as_of <= decision_date)
+        .where(Indicator.value.is_not(None))
+    )
+    if param_hash is not None:
+        query = query.where(Indicator.param_hash == param_hash)
+    if start is not None:
+        query = query.where(Indicator.date >= start)
+
+    rows = session.execute(query.order_by(Indicator.date, Indicator.known_as_of)).all()
+    # Ordered by vintage within each date, so the last write per date is the newest one
+    # knowable. dict preserves insertion order, which keeps the dates ascending.
+    newest: dict[dt.date, tuple] = {}
+    for row in rows:
+        newest[row[0]] = row
+    return [IndicatorPoint(d, float(v), k) for d, v, k in newest.values()]
+
+
+def available_series(
+    session: Session, *, security_id: int, decision_date: dt.date
+) -> list[tuple[str, str, int]]:
+    """Every (name, param_hash, count) this security has, so a caller need not guess."""
+    rows = session.execute(
+        select(Indicator.name, Indicator.param_hash, func.count())
+        .where(Indicator.security_id == security_id)
+        .where(Indicator.known_as_of <= decision_date)
+        .group_by(Indicator.name, Indicator.param_hash)
+        .order_by(Indicator.name)
+    ).all()
+    return [(name, param_hash, int(n)) for name, param_hash, n in rows]

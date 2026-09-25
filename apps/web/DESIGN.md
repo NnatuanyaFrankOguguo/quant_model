@@ -104,6 +104,35 @@ children — not pushed down by them.
 
 ---
 
+## 4b. Charts
+
+The library is **`lightweight-charts`** (TradingView's, 5.x, ESM). It is what the products
+this app is modelled on use, it is ~45KB, and its only dependency is `fancy-canvas`.
+
+**A chart draws `close`, never `close_raw`.** `/companies/{ticker}/prices` returns both:
+`close` is adjusted as of the decision date, `close_raw` is what the market printed. A
+chart of raw closes shows a 75% cliff on a 4-for-1 split — the same corruption that made
+RSI read Apple's 2020 split as the most violent sell-off in its history. `close_raw` is
+there so a tooltip can say what the screen actually showed that day; it is never the line.
+
+**A chart is a client component and therefore invisible to a screen reader.** Canvas has
+no DOM. So every chart ships with the same data reachable another way — a `<Disclose>`
+holding a table of the plotted points, or a link to the table that already shows them. A
+chart is an *additional* rendering of data, never the only one.
+
+**No chart may imply a recommendation.** No shaded "buy zone", no annotated crossover, no
+target line. §1 applies to pixels exactly as it applies to prose, and `SPEC.md` 2C is why
+indicators are features rather than signals.
+
+- Price is a line or a candlestick; volume is a histogram on its own scale.
+- Use `--up` / `--down` for direction and `--act` for a single-series line. Never invent a
+  colour: read the CSS custom properties off `document.documentElement` and pass them in.
+- The four states of §8 still apply. An empty series renders the empty state, not an empty
+  axis.
+- A chart must not be the reason a page fails. Render it in its own boundary.
+
+---
+
 ## 5. The palette
 
 Defined in `src/app/globals.css`. **Never write a hex value in a page or component.**

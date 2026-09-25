@@ -962,6 +962,94 @@ class CompanyScenario(BaseModel):
 
 
 @register_public_type
+class AdjustedBar(BaseModel):
+    """One daily bar, adjusted, with the raw close beside it.
+
+    Distinct from `PriceBar`, which is a bare as-traded close used by `PriceReaction`.
+    They are different objects and share no fields beyond the date: that one is what the
+    market printed, this one is what is safe to chart.
+
+    Both, because they answer different questions and only one is safe to chart. The
+    adjusted figures are comparable across a corporate action; `close_raw` is what the
+    market actually printed that day. A chart drawn on raw closes shows a 75% cliff on a
+    4-for-1 split - the same corruption that made RSI read Apple's 2020 split as the most
+    violent sell-off in its history.
+    """
+
+    # `dt.date`, not `date`: the field is named `date` and would shadow the type.
+    date: dt.date
+    open: Decimal | None = None
+    high: Decimal | None = None
+    low: Decimal | None = None
+    close: Decimal
+    volume: Decimal | None = None
+    close_raw: Decimal = Field(description="As traded that day. Never charted directly.")
+    factor: Decimal = Field(
+        description="What close_raw was multiplied by. 1 where no later action applies."
+    )
+    known_as_of: dt.date
+
+
+@register_public_type
+class CompanyPrices(BaseModel):
+    """A price history, adjusted as of the decision date. The series a chart draws."""
+
+    ticker: str
+    legal_name: str
+    currency: str
+    as_known_on: date = Field(
+        description=(
+            "The decision date the adjustment was computed for. Only corporate actions "
+            "knowable by this date are applied, so a chart read on a past date shows what "
+            "that date could see and not what is known now."
+        )
+    )
+    attribution: str
+    bars: list[AdjustedBar]
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the range held more bars than were returned. The response says so "
+            "rather than silently sending a shorter history that would chart as if the "
+            "security had not existed before it."
+        ),
+    )
+
+
+@register_public_type
+class IndicatorPoint(BaseModel):
+    date: dt.date
+    value: float
+    known_as_of: dt.date
+
+
+@register_public_type
+class IndicatorSeries(BaseModel):
+    name: str
+    param_hash: str
+    params: dict[str, object]
+    points: list[IndicatorPoint]
+
+
+@register_public_type
+class CompanyIndicators(BaseModel):
+    """Stored technical indicators. **Features, never signals.**
+
+    `SPEC.md` 4.2's acceptance for T9 is "computed + stored", never "traded", and
+    `SPEC.md` 2C's survey of 95 studies is why. Nothing here crosses a threshold, names a
+    condition or suggests an action; a caller that draws a line from these is drawing a
+    line, and the project's position is that an indicator is an input to a model P7 will
+    validate rather than a reason to do anything.
+    """
+
+    ticker: str
+    legal_name: str
+    as_known_on: date
+    price_series: str = Field(description="'adjusted' - what these were computed on.")
+    series: list[IndicatorSeries]
+
+
+@register_public_type
 class CompanyDcf(DcfNumbers):
     """A discounted-cash-flow result computed from the caller's own assumptions.
 

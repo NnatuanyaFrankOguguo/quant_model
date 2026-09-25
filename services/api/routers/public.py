@@ -16,6 +16,9 @@ from packages.common.db import get_session
 from packages.common.sec import filing_index_url
 from packages.common.timez import utcnow, utctoday
 from packages.compliance.mode import Mode
+from packages.indicators import store as indicator_store
+from packages.indicators.compute import CATALOGUE
+from packages.indicators.series import adjusted_bars
 from packages.ingestion import macro
 from packages.ingestion.edgar import CHART_VERSION
 from packages.ingestion.edgar import SOURCE_NAME as EDGAR_SOURCE
@@ -29,13 +32,16 @@ from services.api.errors import FieldedHTTPException
 from services.api.middleware.assert_response import PublicAPIRoute
 from services.api.routers import API_V1
 from services.api.schemas import (
+    AdjustedBar,
     Backdrop,
     BackdropReading,
     CompanyDcf,
     CompanyDividends,
     CompanyFilings,
+    CompanyIndicators,
     CompanyInfo,
     CompanyList,
+    CompanyPrices,
     CompanyRatioHistory,
     CompanyRatios,
     CompanyScenario,
@@ -48,6 +54,8 @@ from services.api.schemas import (
     Figure,
     FilingSeen,
     HoldingsSummary,
+    IndicatorPoint,
+    IndicatorSeries,
     JobHealth,
     MacroObservationPoint,
     MacroObservations,
@@ -343,6 +351,134 @@ async def company_statements(
             )
             for p in periods
         ],
+    )
+
+
+MAX_BARS = 6000
+
+
+@router.get("/companies/{ticker}/prices", response_model=CompanyPrices)
+async def company_prices(
+    ticker: str,
+    start: dt.date | None = Query(default=None, description="First bar. Defaults to all held."),
+    end: dt.date | None = Query(
+        default=None, description="Last bar. Defaults to the decision date."
+    ),
+    as_known_on: dt.date | None = Query(default=None, description="Point-in-time date"),
+) -> CompanyPrices:
+    """The adjusted price history, oldest first. What a chart draws.
+
+    Adjusted **as of the decision date**, applying only the corporate actions knowable by
+    then (TG2). A chart of a past date therefore shows what that date could see; asking
+    for today's chart and a 2020 chart gives two different series for the same bars, and
+    that is correct rather than a bug.
+
+    Raw closes are returned beside the adjusted ones but must not be charted: a 4-for-1
+    split leaves a 75% cliff in a raw series, which every downstream reading inherits.
+    """
+    decision_date = as_known_on or utctoday()
+    with get_session() as session:
+        ref = snapshot.find_security(session, ticker)
+        if ref is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        bars = adjusted_bars(
+            session,
+            security_id=ref.security_id,
+            decision_date=decision_date,
+            start=start,
+            end=end or decision_date,
+        )
+        attribution = snapshot.attribution_for(session, PRICE_SOURCE)
+
+    # Newest first when trimming: a chart missing its recent end is obviously wrong,
+    # where one missing its distant start merely looks like a younger security.
+    total = len(bars)
+    first = max(0, total - MAX_BARS)
+    return CompanyPrices(
+        ticker=ref.ticker,
+        legal_name=ref.legal_name,
+        currency=ref.currency,
+        as_known_on=decision_date,
+        attribution=attribution,
+        truncated=first > 0,
+        bars=[
+            AdjustedBar(
+                date=bars.dates[i],
+                open=bars.open[i],
+                high=bars.high[i],
+                low=bars.low[i],
+                close=bars.close[i],
+                volume=bars.volume[i],
+                close_raw=bars.close[i] / bars.factor[i],
+                factor=bars.factor[i],
+                known_as_of=bars.known_as_of[i],
+            )
+            for i in range(first, total)
+        ],
+    )
+
+
+@router.get("/companies/{ticker}/indicators", response_model=CompanyIndicators)
+async def company_indicators(
+    ticker: str,
+    names: str | None = Query(
+        default=None, description="Comma-separated indicator names. Omit for every one held."
+    ),
+    start: dt.date | None = Query(default=None, description="First date"),
+    as_known_on: dt.date | None = Query(default=None, description="Point-in-time date"),
+) -> CompanyIndicators:
+    """Stored indicators, point-in-time. Features for a model, never signals.
+
+    Only values knowable on the decision date are returned, and where one was recomputed
+    after a restatement the newest vintage *that date could see* wins - not the newest
+    that exists. `docs/03` P6.3 makes that the whole point of storing `known_as_of`.
+    """
+    decision_date = as_known_on or utctoday()
+    wanted = [part.strip() for part in names.split(",") if part.strip()] if names else None
+    with get_session() as session:
+        ref = snapshot.find_security(session, ticker)
+        if ref is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        available = indicator_store.available_series(
+            session, security_id=ref.security_id, decision_date=decision_date
+        )
+        chosen = [
+            (name, param_hash)
+            for name, param_hash, _count in available
+            if wanted is None or name in wanted
+        ]
+        series = []
+        for name, param_hash in chosen:
+            points = indicator_store.read_series(
+                session,
+                security_id=ref.security_id,
+                name=name,
+                decision_date=decision_date,
+                param_hash=param_hash,
+                start=start,
+            )
+            spec = next(
+                (s for s in CATALOGUE.values() if s.hash == param_hash and name in s.outputs),
+                None,
+            )
+            series.append(
+                IndicatorSeries(
+                    name=name,
+                    param_hash=param_hash,
+                    params=dict(spec.params) if spec else {},
+                    points=[
+                        IndicatorPoint(date=p.date, value=p.value, known_as_of=p.known_as_of)
+                        for p in points
+                    ],
+                )
+            )
+
+    return CompanyIndicators(
+        ticker=ref.ticker,
+        legal_name=ref.legal_name,
+        as_known_on=decision_date,
+        price_series="adjusted",
+        series=series,
     )
 
 

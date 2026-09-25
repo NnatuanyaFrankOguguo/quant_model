@@ -32,7 +32,9 @@ from services.api.schemas import (
     CompanyDcf,
     CompanyDividends,
     CompanyFilings,
+    CompanyIndicators,
     CompanyList,
+    CompanyPrices,
     CompanyRatioHistory,
     CompanyRatios,
     CompanyScenario,
@@ -91,6 +93,12 @@ MANIFEST: dict[str, RouteSpec] = {
     "GET /v1/public/summary": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, HoldingsSummary),
     "GET /v1/public/companies/{ticker}/statements": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyStatements
+    ),
+    "GET /v1/public/companies/{ticker}/prices": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyPrices
+    ),
+    "GET /v1/public/companies/{ticker}/indicators": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyIndicators
     ),
     "GET /v1/public/companies/{ticker}/ratios": RouteSpec(
         RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyRatios
