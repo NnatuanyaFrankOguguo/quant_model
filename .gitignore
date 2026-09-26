@@ -42,3 +42,16 @@ Thumbs.db
 # Claude Code local tooling (user-installed skills incl. 5.8MB of fonts; not project code)
 .claude/skills/
 .claude/settings.local.json
+
+# Operational logs (backup runs, etc.)
+logs/
+
+# Manual macro uploads: keep the template, ignore real uploads
+data/manual/*
+!data/manual/TEMPLATE.csv
+!data/manual/README.md
+
+# Next.js build output (apps/web)
+.next/
+next-env.d.ts
+*.tsbuildinfo

@@ -373,13 +373,46 @@ uv run python scripts/seed_dev.py       # a principal, entitlements, data_source
 
 ### 2.3 Running the stack
 
-Three terminals, or a `Makefile` / `justfile`:
+The processes, as built (corrected 2026-09-14 — an earlier draft named a `Home.py` and a
+`packages.scheduler.run` module that never existed; corrected again 2026-09-25 for the API
+launcher and the web app):
 
 ```powershell
-uv run uvicorn services.api.main:app --reload --port 8000
-uv run streamlit run apps/streamlit/Home.py --server.port 8501
-uv run python -m packages.scheduler.run --once     # from P1
+.venv\Scripts\python.exe scripts\run_api.py                                      # the API, :8000
+npm --prefix apps\web run dev                                                    # the web app, :3000
+.venv\Scripts\python.exe -m streamlit run apps\streamlit\company_page.py --server.port 8501
+.venv\Scripts\python.exe -m streamlit run apps\streamlit\macro_dashboard.py --server.port 8502
+.venv\Scripts\python.exe -m streamlit run apps\streamlit\operations_page.py --server.port 8503
+.venv\Scripts\python.exe scripts\run_scheduler.py                                # runs forever
 ```
+
+**Start the API with `scripts\run_api.py`, not `python -m uvicorn` directly.** On Windows the
+plain command runs on the Proactor event loop, and CPython's Proactor closes the *listening*
+socket the first time a client resets a connection mid-accept (`WinError 64`). The process
+stays up and never answers again. The web app resets connections by design - every fetch
+that outruns its budget is aborted - so under normal use the plain command dies within
+minutes. Reproduced 2026-09-25: the default loop stopped answering after one burst of 400
+reset connections; the launcher, which selects the Selector loop, answered after five. If
+you must run uvicorn by hand, pass `--loop asyncio:SelectorEventLoop`.
+
+`run_scheduler.py --once` runs every job now and exits (non-zero on any failure, so it is
+usable as a scheduled task whose exit code is the alert); `--once --job edgar:KO` runs one.
+The operations page at :8503 is where a job that never ran becomes visible.
+
+**The scheduler is a process, not a schedule.** Nothing fires at 03:00 unless
+`run_scheduler.py` is running at 03:00. On a laptop that means: as long as the lid is up.
+The durable form on Windows 11 is a Task Scheduler entry that starts it at logon and
+restarts it if it dies — one command, run once, as the user who owns `.env`:
+
+```powershell
+schtasks /Create /TN "quant_model scheduler" /SC ONLOGON /RL LIMITED `
+  /TR "C:\quant_model\.venv\Scripts\python.exe C:\quant_model\scripts\run_scheduler.py"
+```
+
+(and `schtasks /Run /TN "quant_model scheduler"` to start it without logging out;
+`schtasks /Delete /TN "quant_model scheduler"` to remove it). A machine that sleeps at
+03:00 still misses the run; the jobs are idempotent, so `--once` the next morning catches
+up, and the operations page says which ones were missed. A host that is always on is §5.
 
 Streamlit talks to `http://localhost:8000`, never to the database (ADR-0006). If you ever find
 yourself putting a connection string into `apps/streamlit/`, that is the defect.

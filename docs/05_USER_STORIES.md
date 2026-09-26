@@ -59,6 +59,7 @@ Read it in one of three ways:
 - [§8 — Traceability matrices](#8--traceability-matrices)
 - [§9 — Gaps that leave stories undeliverable](#9--gaps-that-leave-stories-undeliverable)
 - [§10 — What I left for other documents](#10--what-i-left-for-other-documents)
+- [§11 — The questions: a Kaizen ledger](#11--the-questions-a-kaizen-ledger)
 
 ---
 
@@ -1619,3 +1620,121 @@ written down, US-040 cannot pass or fail. **Set it before P4 starts.**
 | Full risk treatment and decision gates | [06_RISK_REGISTER.md](06_RISK_REGISTER.md) |
 | Why the system is shaped this way | [01_ARCHITECTURE.md](01_ARCHITECTURE.md) |
 | Any unfamiliar term | [09_GLOSSARY.md](09_GLOSSARY.md) |
+
+---
+
+## §11 — The questions: a Kaizen ledger
+
+The stories in §4 are written from the system's side — *a restatement keeps both versions*,
+*a DCF runs on my assumptions*. A person at the screen does not think in those terms. They
+have a company name in their head and a question, and the product is good exactly when the
+question gets an answer that carries its source and its date. This section lists the
+questions, as asked, and the honest state of each — so that improvement is a weekly habit
+with a one-minute test, not a roadmap.
+
+**The test.** Open the app, ask the question, and one of three things is true:
+
+- ✅ **Answered** — with the source and the as-of date on screen, from live data.
+- 🟡 **Held, not shown** — the data is in the database, or half of the answer is, and the
+  screen does not admit it. This is a defect of the day, not a phase: fix the smallest thing.
+- ⬜ **Not yet** — owed by a later phase. The story that owes it is named; if none does, the
+  row says **gap**, and the question waits in §11.2 until a phase adopts it.
+
+**The rule.** One question a week, end to end — route, test, screen, and the status here
+changed with the commit that changed it. A 🟡 that stays 🟡 for a month is the first thing to
+pick. Do not add a story number for a gap until a phase schedules it (§0.1: numbers are
+permanent, so they are not handed out on speculation).
+
+Status below is as of **2026-09-14**, with P2 built (US companies) and P3 not started
+(Nigerian companies). "US" in a status means the US half is live and the Nigerian half is
+owed by P3/P4.
+
+### 11.1 The ledger
+
+**"I've heard about a company"**
+
+| # | The question, as asked | Owed by | Status 2026-09-14 |
+|---|---|---|---|
+| Q1 | What does this company actually do, and who owns it? | US-020 · entity graph ([08](08_DATA_CONTRACTS.md) §2.14, P4 extraction) | 🟡 US: name, exchange, industry shown. Ownership and board: tables exist (migration 0014), empty until P4 |
+| Q2 | Is it making money, and is that getting better or worse? | US-020 · US-030 · US-040 | ✅ **2026-09-14**, US. Every figure carries the same figure a year earlier (as known on the same date) and the change as a fraction, computed by the server; the page shows it beside each number. The fraction is withheld when either side is unknown, the prior was a loss or zero, or the figure has turned into a loss — Intel's 2024 swing is two numbers, not "-1,210%". No chart yet. Nigeria: ⬜ P3 |
+| Q3 | Is it drowning in debt, and when is the debt due? | US-020 | 🟡 US: debt/equity and interest cover live. Maturity schedule: **gap** — not in chart v0.1, no story |
+| Q4 | Does it pay a dividend, and has it ever cut it? | US-031 (corporate actions, TG2) | ✅ **2026-09-14**, US. `/dividends`: every cash dividend per share held, by year in the decision date's share terms (the split factors known on it, so a 7-for-1 is not a cut), the complete years whose total fell named as cuts, the running year never compared. Apple: 92 dividends since 1987, one cut — 1996, when it stopped — and 0.27 latest. Nigeria: ⬜ P3 |
+| Q5 | Is it cheap — and compared with what? | US-020 | 🟡 Against itself: ✅ **2026-09-14** — `/ratios/history` gives every year's multiples on the day its report was first published, strictly point-in-time on figures, price and share count (Apple's P/E on 10-K day: 31× in 2009, 13× in 2012, 36× in 2025, beside 43× today). Against its peers: **gap** — no peer sets yet |
+| Q6 | What did the share price do when they last published results? | US-023 · US-020 | ✅ **2026-09-14.** Every point of `/ratios/history` carries the closes around its publication day and the move from the close before it to the first and fifth sessions after (a report filed after the bell moves the next session). As-traded closes, so a window holding a split-sized move is withheld rather than served as a crash — until P3's corporate actions exist. Nvidia's FY2024 10-K day: +13.1% |
+| Q7 | Who audits them, and did the auditor say anything unusual? | US-040 · `company_relationships` 'auditor' | ⬜ P4. `is_audited` is set on every US statement; the opinion is not read |
+| Q8 | Is anyone in this company's orbit someone I should worry about? | US-040 · `entity_roles`, `company_relationships` | ⬜ P4 |
+
+**"I own it — what changed?"**
+
+| # | The question, as asked | Owed by | Status 2026-09-14 |
+|---|---|---|---|
+| Q9 | Did anything new get filed this week? | US-050 · US-102 | 🟡 The looking half: ✅ **2026-09-14** — `/filings/recent` lists every filing across the companies held since a date (a week by default), as known on a date, each a door into EDGAR, and the page opens with it; `/companies/{t}/filings` is one company's, newest first. The telling half — a brief that arrives, an alert per holding — ⬜ P5, P10 |
+| Q10 | Did the numbers I decided on get restated since? | US-024 · US-045 | ✅ **2026-09-14.** Every restated figure in view carries the value it replaced and the date that value was public; the page marks the cell ↻ and lists them. Set "as known on" to your decision date and the originals return everywhere — Apple as known 2009-12-31 shows FY2009 revenue 36,537m; a month later 42,905m ↻ with 29 figures listed under the 2010-01-25 filing |
+| Q11 | What's in the news, and is it noise? | US-052 | ⬜ P5 |
+| Q12 | When is the next result due, and are they late? | US-013 (freshness) | ✅ **2026-09-14**, US. `/companies` carries the next report's form and the last day the SEC allows for it (the longest deadline, so a company is called overdue only when every filer category would be), and `filing_overdue` when that day has passed and the report is not held. First run flagged Coca-Cola: its Q2 10-Q is not in our copy. Nigeria: NGX deadlines, P3 |
+| Q13 | What is my position worth in naira today, after FX? | US-100 · `fx_rates` (TG2) | ⬜ P10, on P3's FX table |
+| Q14 | Did the CBN, NGX or SEC just do something that touches this? | US-010 · US-052 | 🟡 Macro is live and dated (US-010). Joined to a company: ⬜ P5 |
+
+**"Is now a good time?"**
+
+| # | The question, as asked | Owed by | Status 2026-09-14 |
+|---|---|---|---|
+| Q15 | What are inflation, the policy rate and the exchange rate doing, and since when? | US-010 · US-011 | ✅ 10 of 13 series live, each with its as-of date and when it was published |
+| Q16 | What is the real T-bill yield right now against this stock's dividend yield? | US-010 · US-020 | ✅ **2026-09-14.** `/ratios` carries a `backdrop`: the sovereign rate and year-on-year inflation for the company's currency, each as known on the decision date, and the real rate (nominal less inflation, named as the approximation it is), beside the dividend and earnings yields. US: 10-year Treasury and CPI (the index turned into a rate from exactly twelve months earlier, never stretched). Nigeria: the MPR stands in until a T-bill series is loaded, and the series name says so |
+| Q17 | Is the NGX as a whole expensive? | US-030 · US-040 | ⬜ P3/P4 universe first; a market aggregate is then a **gap** — no story |
+| Q18 | What did people who bought at this level get, historically — net of costs? | US-070 · US-071 · US-073 | ⬜ P7 |
+| Q19 | If the naira devalues 20%, who wins and who loses among my companies? | US-060 · US-044 | ⬜ P6, on P4's FX-loss line |
+
+**"Can I believe this?"**
+
+| # | The question, as asked | Owed by | Status 2026-09-14 |
+|---|---|---|---|
+| Q20 | Where did this number come from — show me the page. | US-005 · US-040 | ✅ US: filing, form, accession, `known_as_of` under every column, and since **2026-09-14** `filing_url` — the filing's folder on sec.gov, a link on the page (`page` is NULL for XBRL by design). ⬜ P4: the PDF page image itself |
+| Q21 | Is this the company's figure or your estimate? | US-021 · US-041 | ✅ **2026-09-14.** Never estimated, and every blank now says whose silence it is: `absent_because` is `not_in_filing` (the company's — Apple's interest expense) or `no_mapping` (ours — `fx_loss_net` under chart v0.1). The page prints the two differently. Nigeria: P4 adds the extractor's reasons |
+| Q22 | How stale is this? | US-010 · US-013 | ✅ **2026-09-14.** Macro: as-of and overdue flag. Companies: the page says up to date with the next report and its deadline, or overdue in red (Q12). Prices: age in days beside every multiple |
+| Q23 | What did you know on the day I decided? | US-024 | ✅ **2026-09-14.** The control on the page now says what it does: filings after the date, restatements included, are hidden — the figures a decision on that day actually had |
+| Q24 | Did a person check this, or did a model read it? | US-042 | 🟡 `extraction_method` is on every figure (`xbrl` for US). Reviewer and confidence: ⬜ P4 |
+
+**"Tell me what to do"** — personal mode only, until the SEC licence (§5)
+
+| # | The question, as asked | Owed by | Status 2026-09-14 |
+|---|---|---|---|
+| Q25 | Buy, hold or sell — and why? | US-082 · US-090 · US-081 | ⬜ P8/P9, and only behind a passing backtest |
+| Q26 | How much should I put in? | US-100 | ⬜ P10 — sized against *my* equity and limits, per principal (US-004) |
+| Q27 | What would have to be true for this to be a mistake? | US-090 | ⬜ P9 — the "what to verify" list every memo ends with |
+| Q28 | Tell me when my thesis breaks. | US-102 | ⬜ P10 — on the specific figure, not only the price |
+
+**"I'm not an analyst"**
+
+| # | The question, as asked | Owed by | Status 2026-09-14 |
+|---|---|---|---|
+| Q29 | Can I just get a one-page brief each morning? | US-050 · US-053 | ⬜ P5 |
+| Q30 | Can I ask in plain words and get an answer with sources? | US-090 · US-091 | ⬜ P9, grounded only in stored figures |
+| Q31 | Can I get this into Excel, or send it to my brother? | TG22 · [ADR-0010](adr/0010-bulk-export-via-exportview.md) | 🟡 Sending: ✅ **2026-09-14** — the page's address carries the ticker, the as-known-on date and the period type, so a copied link reproduces exactly what you saw, as of when you saw it (a bad link falls back to the defaults, never an error). Excel: ⬜ the versioned `ExportView`, P12 |
+| Q32 | Does it work on my phone, on bad data? | US-050 · US-091 | ⬜ Telegram (P5) is the answer until the web app (P9) |
+
+### 11.2 Gaps this ledger surfaced
+
+Questions no story owns. They are candidates, not stories: each gets a US-number only when a
+phase schedules it, and until then it is tracked here.
+
+| Question | The smallest answer | Natural home |
+|---|---|---|
+| Q3 debt maturities | A `debt_maturity` schedule in the chart (v1 freeze, P3) | P3 (TG7 freeze) |
+| Q5 cheap against its peers | A peer set per industry (SIC is stored); the same history route across a set | P6 (indicators) |
+| Q17 is the market expensive | Universe-level P/E and breadth once P4 fills the NGX | P6 (indicators) |
+
+### 11.3 The first five to pick
+
+Each is a 🟡 that is under a day, and each closes a distance between what the database knows
+and what the screen admits: ~~**Q21** (say *which* kind of blank)~~, ~~**Q20** (make the accession a
+link to the filing on EDGAR)~~, ~~**Q23** (one sentence beside the point-in-time control)~~,
+~~**Q22/Q12** (an overdue flag on companies, as macro already has)~~,
+~~**Q10** (show a cell's previous vintage when one exists)~~ — all five done 2026-09-14. The
+next five, by the same rule: ~~**Q2** (year-on-year change, server-side)~~, ~~**Q5** (ratios at
+every past filing date)~~, ~~**Q16** (real T-bill yield beside dividend yield)~~,
+~~**Q6** (return from the filing date)~~, ~~**Q31** (a dated shareable view)~~ done 2026-09-14.
+Ten questions answered in one day by this rule. What remains 🟡 waits on a phase: **Q1**, **Q8**,
+**Q24** on P4's extraction; **Q3** on the chart's v1 freeze in P3; **Q4** on corporate actions
+(TG2, P3); **Q9** and **Q14** on P5's feed. The next Kaizen pick is therefore a P3 entry item,
+not a screen change - which is the ledger doing its job.

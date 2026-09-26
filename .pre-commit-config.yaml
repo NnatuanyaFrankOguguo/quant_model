@@ -1,0 +1,51 @@
+# Install once per clone:  .venv\Scripts\pre-commit.exe install
+#
+# The secret scan is the one hook here with a failure mode you cannot undo. Once a
+# credential reaches a remote it must be treated as compromised and rotated, whether or not
+# you force-push it away (docs/03_ROADMAP_PART1_PHASES_0-6.md, P0.7). `.env` holds a live
+# Neon database password, so this is not hypothetical.
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.28.0
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        # Source PDFs go to object storage, never git. A 400-page annual report is not code
+        # and would bloat the repository permanently (docs/03, P0.1).
+        args: [--maxkb=2048]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+        # `tests/fixtures/` holds bytes captured off the wire, and their whole value is
+        # being exactly what the server sent. A fixture the repository has tidied is one
+        # that no longer proves the parser handles what arrives.
+        exclude: ^tests/fixtures/
+      - id: trailing-whitespace
+        # Two trailing spaces are a hard line break in Markdown. Without this flag the
+        # hook silently reflows the planning documents, which are the project's source of
+        # truth — and a diff full of invisible whitespace churn is one nobody reads.
+        args: [--markdown-linebreak-ext=md]
+        # And the same carve-out as above, for a stronger reason: this one edits *inside*
+        # the document. Trailing space in an RSS `<description>` is content, and stripping
+        # it silently changes what the parser is being tested against.
+        exclude: ^tests/fixtures/
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        # `main` is protected by required status checks; work reaches it through a PR.
+        # Required *approvals* stay off while the project is solo — GitHub does not let you
+        # approve your own PR, which is why docs/03's exit criterion as written is
+        # unsatisfiable (docs/10 §6.4). Turn approvals on at the first collaborator.
+        args: [--branch, main]
