@@ -64,9 +64,12 @@ USER_SCOPED_TABLES: set[str] = {
     "principal_tokens",
     "watchlists",
     "llm_spend",
+    # --- P6, migration 0028 ---
+    "scenarios",  # a named assumption set belongs to the person who typed it
+    # --- P5.4, migration 0029 ---
+    "alert_deliveries",  # unique on (principal_id, idempotency_hash): one send per person
     # --- added by later phases; listed here the day the migration lands ---
-    # "portfolios", "positions", "transactions", "alerts", "alert_deliveries",
-    # "risk_limits", "scenarios", "tax_lots"
+    # "portfolios", "positions", "transactions", "alerts", "risk_limits", "tax_lots"
 }
 
 #: Tables where `principal_id` may be NULL, each with the reason it must be.
@@ -83,12 +86,19 @@ USER_SCOPED_VIA_PARENT: dict[str, str] = {
 }
 
 #: Tables holding an observed or extracted figure. MUST carry `source_document_id NOT
-#: NULL` and a business `as_of_date`. `CLAUDE.md`: provenance on every figure.
+#: NULL` and a business date (`as_of_date` for an observation, `period_end` for a statement
+#: figure - `docs/08` §2.3). `CLAUDE.md`: provenance on every figure.
 FIGURE_TABLES: set[str] = {
     "macro_observations",
+    "statement_line_items",  # P2, migration 0011
+    "price_history",  # P2, migration 0012 - business date is `date`
+    "shares_outstanding",  # P2, migration 0013
+    "shareholdings",  # P2, migration 0014 - units and pct_held are figures off a page
+    "corporate_actions",  # TG2, migration 0015 - a ratio or a cash amount off a document
+    "adjustment_factors",  # TG12, migration 0015 - carries the action's document too
+    "fx_rates",  # TG2, migration 0017 - a rate is a figure with a source document
     # --- later phases ---
-    # "statement_line_items", "price_history", "corporate_actions", "fx_rates",
-    # "adjustment_factors", "shares_outstanding"
+    # "fx_rates"
 }
 
 #: The subset of FIGURE_TABLES that must also carry `page`.
@@ -98,8 +108,8 @@ FIGURE_TABLES: set[str] = {
 #: a FRED series value has no page. `statement_line_items` (P2) is where `page` becomes
 #: mandatory, enforced there by `page_required_unless_structured`.
 PAGE_REQUIRED_TABLES: set[str] = {
-    # --- later phases ---
-    # "statement_line_items"
+    "statement_line_items",  # P2; `page_required_unless_structured` makes it NOT NULL for PDFs
+    "shareholdings",  # P2 schema, P4 extraction target: read off the shareholders schedule
 }
 
 #: Tables a model, feature or backtest will read. MUST carry `known_as_of` AND a business
@@ -108,15 +118,79 @@ PAGE_REQUIRED_TABLES: set[str] = {
 #: never raises — it just makes you rich on paper.
 MODEL_READABLE_TABLES: set[str] = {
     "macro_observations",
+    "statement_line_items",  # P2
+    "statements",  # P2
+    "filings",  # P2 - a filing date is an event a model may read; known_as_of + period_end
+    "price_history",  # P2
+    "shares_outstanding",  # P2
+    # --- the entity graph, P2 migration 0014, populated from P3/P4 ---
+    "entity_roles",
+    "shareholdings",
+    "company_relationships",
+    "index_membership",
+    # --- the point-in-time adjustment, TG2/TG12 migration 0015 ---
+    "corporate_actions",  # a backtest reads splits and dividends; known_as_of + ex_date
+    "adjustment_factors",  # P7 check 19: only factors known by the decision date apply
+    "fx_rates",  # a naira figure is converted at the rate known on the decision date
+    # --- P5 news, migration 0025 ---
+    # An article is knowable from the moment it is published, and P5.3's sentiment score
+    # joins straight back to it. `published_at` is the business timestamp; `known_as_of`
+    # is the Lagos date of it, generated from it so the two cannot drift.
+    "news_items",
+    # --- P6 indicators, migration 0028 ---
+    # P7 reads these as features and joins on `known_as_of <= decision_date`. The vintage
+    # is a running maximum over every bar that fed the value, which for the recursive
+    # indicators is the whole history - so it is genuinely this row's own date and not the
+    # price bar's. Business date is `date`.
+    "indicators",
     # --- later phases ---
-    # "statement_line_items", "statements", "price_history", "indicators",
-    # "ml_features", "news_sentiment"
+    # "ml_features"
+}
+
+#: Tables a model reads whose **vintage** is inherited from a parent row rather than
+#: repeated. Exempt from the `known_as_of` rule, but only by name and only with a reason -
+#: the same escape hatch as `USER_SCOPED_VIA_PARENT` and used just as sparingly. The bar
+#: is that the parent's `known_as_of` is the *only* correct vintage for the child, so a
+#: copy could only ever drift from it.
+MODEL_READABLE_VIA_PARENT: dict[str, str] = {
+    "news_tags": (
+        "P5.2, migration 0027. A tag is read by P5.4's brief and by P7's features, always "
+        "through `news_items`, and the date it becomes knowable is the article's - a "
+        "reader who has the article knows which company it is about. `tagged_at` is our "
+        "processing time and `docs/08` §1.3 keeps that out of a feature join. Copying "
+        "`news_items.known_as_of` here would create a second place for one date to live."
+    ),
+    "news_sentiment": (
+        "P5.3, migrations 0029 and 0030. The same argument as `news_tags`, and the "
+        "anticipatory comment in MODEL_READABLE_TABLES guessed wrong: this table has no "
+        "`known_as_of` and must not grow one. A score is knowable exactly when the "
+        "article is - reading the headline is the whole input - so the article's vintage "
+        "is the only correct one. `scored_at` is when our process ran, and `docs/08` "
+        "§1.3 keeps processing time out of a feature join; a model that joined on it "
+        "would be reading the scheduler's cron entry as if it were the market."
+    ),
 }
 
 #: The business-date column names a model-readable table may use. A table needs at least
 #: one of these alongside `known_as_of`.
 BUSINESS_DATE_COLUMNS: frozenset[str] = frozenset(
-    {"as_of_date", "date", "period_end", "ts", "trade_date", "effective_from", "action_date"}
+    {
+        "as_of_date",
+        "date",
+        "period_end",
+        "ts",
+        "trade_date",
+        "effective_from",
+        "action_date",
+        # `docs/08` uses valid_from for dated validity: identifiers, roles, index membership.
+        "valid_from",
+        # Corporate actions and their factors are dated by the ex-date, the day that matters.
+        "ex_date",
+        # An article is *about* the moment it went out, which is the same instant it became
+        # knowable. The two columns are not redundant: one is a timestamp and the other the
+        # Lagos calendar date a point-in-time filter compares against (P5, migration 0025).
+        "published_at",
+    }
 )
 
 #: Tables that are none of the above: reference data, config, identity, operational logs.
@@ -143,6 +217,41 @@ STRUCTURAL_ONLY: dict[str, str] = {
     "industries": "reference data",
     "companies": "reference data (entity identity)",
     "securities": "reference data (instrument identity)",
+    # --- P2, migration 0011 ---
+    "security_identifiers": (
+        "dated identifier history (ticker, ISIN); reference data whose own valid_from/"
+        "valid_to window is its time dimension (TG2)"
+    ),
+    "extraction_jobs": "operational record of how a document was processed; holds no figure",
+    # --- TG2, migration 0023 ---
+    "trading_calendar": (
+        "market structure: which days an exchange traded. No user data and no figure - "
+        "`is_open` is a fact about the venue, not a measurement of anything. It does not sit "
+        "comfortably in any of the four sets, and the honest reason is worth stating. A "
+        "backtest WILL read it, so 'nothing a model reads' is not quite true; but it is read "
+        "for date arithmetic (`settlement_date`, `add_trading_days`) rather than joined on "
+        "`known_as_of <= decision_date`, and `docs/08` §2.1 keys it `(exchange_id, date)`, "
+        "which leaves no room for a vintage. **The open question:** a holiday announced days "
+        "in advance was not knowable earlier, so a backtest deciding before the announcement "
+        "should arguably not see it. That is a real look-ahead, though a small one - knowing "
+        "a market holiday early is not much of an edge - and settling it means either a "
+        "`known_as_of` column (a `docs/08` change) or a stated decision that calendars are "
+        "exempt. Raise it before P7 check 19, not after."
+    ),
+    "persons": "identity of a director or officer; the dated facts about them are in entity_roles",
+    "chart_of_accounts": "the canonical vocabulary, versioned; reference data (TG7)",
+    "account_mappings": "source label -> canonical key, versioned; reference data (TG7)",
+    # --- P5.2, migration 0027 ---
+    "security_aliases": (
+        "name -> security_id; reference data, like `security_identifiers` beside it, and "
+        "deliberately **undated** where that one is dated. `docs/08` §1.3 lists "
+        "valid_from/valid_to for 'tickers and name aliases' and §2.6's DDL has neither; "
+        "0027 resolves it by arguing that a ticker is reassignable and a name is not, so "
+        "the dated case stays in `security_identifiers` behind "
+        "`identity.resolve_security`. No figure, no user data, and nothing a model joins "
+        "on a date - `news_tags` is what a model reads, and it takes its vintage from the "
+        "article."
+    ),
 }
 
 
@@ -212,6 +321,7 @@ def test_every_table_is_classified(db_connection: Connection) -> None:
         | set(USER_SCOPED_VIA_PARENT)
         | FIGURE_TABLES
         | MODEL_READABLE_TABLES
+        | set(MODEL_READABLE_VIA_PARENT)
         | set(STRUCTURAL_ONLY)
     )
     unclassified = sorted(_tables(db_connection) - known)
@@ -220,8 +330,9 @@ def test_every_table_is_classified(db_connection: Connection) -> None:
         + ", ".join(unclassified)
         + ". Add each to the right set at the top of tests/unit/test_schema_conventions.py "
         "— USER_SCOPED_TABLES, USER_SCOPED_VIA_PARENT, FIGURE_TABLES, "
-        "MODEL_READABLE_TABLES, or STRUCTURAL_ONLY with a stated reason. Defaulting a "
-        "table into 'unconstrained' is the failure this test exists to prevent."
+        "MODEL_READABLE_TABLES, MODEL_READABLE_VIA_PARENT, or STRUCTURAL_ONLY with a "
+        "stated reason. Defaulting a table into 'unconstrained' is the failure this test "
+        "exists to prevent."
     )
 
 
@@ -258,7 +369,12 @@ def test_figure_tables_carry_provenance(
             f"{table}.source_document_id is nullable. Optional provenance is no provenance: "
             "the rows without it are exactly the ones nobody can check."
         )
-        assert "as_of_date" in columns, f"{table} holds figures but has no as_of_date"
+        business = sorted(set(columns) & BUSINESS_DATE_COLUMNS - {"known_as_of"})
+        assert business, (
+            f"{table} holds figures but has no business date column "
+            f"(one of {sorted(BUSINESS_DATE_COLUMNS)}). `docs/08` §2.3 names period_end as "
+            "the as-of date of a statement figure; §2.5 names as_of_date for an observation."
+        )
         if table in PAGE_REQUIRED_TABLES:
             assert "page" in columns, f"{table} is page-provenanced but has no page column"
 
@@ -283,6 +399,27 @@ def test_model_readable_tables_are_point_in_time(
         assert business, (
             f"{table} has known_as_of but no business date column "
             f"(one of {sorted(BUSINESS_DATE_COLUMNS)}). One date is never enough."
+        )
+
+
+def test_a_table_exempted_via_its_parent_actually_has_one(
+    schema: dict[str, dict[str, dict[str, str]]],
+) -> None:
+    """`MODEL_READABLE_VIA_PARENT` is an escape hatch, so it may not be vacuous.
+
+    The exemption is that the vintage lives on a parent row. A child with no NOT NULL
+    foreign key to reach that parent through has no vintage at all, which is the
+    look-ahead hole the rule exists to close, wearing the exemption as a disguise.
+    """
+    parents = {"news_tags": "news_id", "news_sentiment": "news_id"}
+    for table in sorted(MODEL_READABLE_VIA_PARENT):
+        if table not in schema:
+            continue
+        column = parents[table]
+        assert column in schema[table], f"{table} is exempted via a parent it cannot reach"
+        assert schema[table][column]["is_nullable"] == "NO", (
+            f"{table}.{column} is nullable, so a row can exist with no parent and "
+            "therefore no vintage."
         )
 
 
@@ -421,3 +558,27 @@ class TestTimezoneDiscipline:
         """Guessing a naive datetime's zone is how a one-hour error enters the data."""
         with pytest.raises(ValueError, match="Naive datetime"):
             session_date_for(datetime(2026, 9, 1, 13, 30))
+
+
+@pytest.mark.invariant
+def test_every_alembic_revision_id_fits_the_version_column() -> None:
+    """`alembic_version.version_num` is varchar(32). A longer id half-applies a migration.
+
+    Found the hard way: a 34-character revision ran its changes, then failed stamping the
+    version, leaving the database holding the change while reporting the previous revision.
+    Nothing raised at write time and the next `upgrade` would have tried to run it again.
+    """
+    import re
+    from pathlib import Path
+
+    versions = Path(__file__).resolve().parents[2] / "db" / "migrations" / "versions"
+    ids: list[str] = []
+    for path in sorted(versions.glob("*.py")):
+        match = re.search(r'^revision: str = "([^"]+)"', path.read_text(encoding="utf-8"), re.M)
+        assert match, f"{path.name} declares no revision id"
+        ids.append(match.group(1))
+
+    assert ids, "no migrations found"
+    too_long = [r for r in ids if len(r) > 32]
+    assert not too_long, f"revision ids longer than varchar(32): {too_long}"
+    assert len(set(ids)) == len(ids), "duplicate revision ids"

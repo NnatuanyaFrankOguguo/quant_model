@@ -213,26 +213,38 @@ retrofitted.
 > **Update this table at every phase transition.** It is the only place in the document set
 > that claims what is done. Keeping it honest is what stops you from building on sand.
 
-**Current phase: P0 — Foundation & Rails. Status: 🧪 BUILT (spine), 16 of 17 checks passed.**
+**Current phases: P3, P4 and P5 are all part-built, and what remains in each is the
+operator's rather than the code's.** P3's gate waits on the golden set and the NGX
+universe; P4's on an Anthropic API key and that same golden set; P5.1 is closed and
+fetching hourly. P2 is ✅ COMPLETE, 15 of 15, verified by the operator on 2026-09-15
+against the SEC's own documents rather than against this system's word for them. P1 closed
+the same day. **P0 alone remains 🧪, for the reason it always has: CI has never run.**
 
-The spine from [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §6.1 is built and
+**The single thing blocking most of the rest is data, not code.** No Nigerian company is in
+the database, so the NGX price connector caches raw responses and writes zero bars -
+loudly, by design - and the extraction pipeline has no Nigerian filing to read.
+
+The P0 spine from [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §6.1 is built and
 verified on 2026-09-02: 17 tables migrated on Neon PostgreSQL 18.6, the mode gate enforced and
-adversarially tested, 159 tests passing with zero skips, a backup dumped and actually restored.
-**It is 🧪 and not ✅ for one reason: check 13 (CI green on a PR) cannot run — there is no
-GitHub remote yet.** The workflow is written and waiting. See "what is left" below.
+adversarially tested, a backup dumped and actually restored. **It is 🧪 and not ✅ for one
+reason: check 13 (CI green on a PR) has not been confirmed.** The workflow is written,
+and `main` has since been pushed — `git ls-remote origin` on 2026-09-17 shows it at
+`89a83b0` beside a `ci/first-run` branch. What is missing is evidence that a run passed:
+nothing in the repo records one, and it takes someone opening the Actions tab to say.
+That one is the operator's; see "the immediate next actions" below. **P1 and P2 are closed**, both verified by eye on 2026-09-15.
 
 | Phase | Status | Started | Completed | Gate passed? | Notes |
 |---|---|---|---|---|---|
-| P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: no remote |
-| P1 Macro Backdrop | ⬜ Not started | — | — | — | |
-| P2 US Company Data | ⬜ Not started | — | — | — | |
-| P3 NG Manual Analyzer | ⬜ Not started | — | — | — | |
-| P4 NG Automated Ingestion | ⬜ Not started | — | — | — | Hardest phase in the first half |
-| P5 News & Daily Brief | ⬜ Not started | — | — | — | |
-| P6 Scenarios & Indicators | ⬜ Not started | — | — | — | Blocked by gap G1 until scheduled |
+| P0 Foundation & Rails | 🧪 Built | 2026-09-01 | — | 16/17 | Check 13 blocked: remote exists, `main` never pushed, CI never run |
+| P1 Macro Backdrop | ✅ Complete | 2026-09-03 | 2026-09-15 | 13/13 | Check 11 confirmed 2026-09-15 · 10 of 13 series live · 28,053 rows · staleness thresholds verified (0016) |
+| P2 US Company Data | ✅ Complete | 2026-09-13 | 2026-09-15 | 15/15 | 24 companies · 1,662 filings · 7,917 statement versions · 53,710 line items · 269,216 price bars · 3,270 corporate actions |
+| P3 NG Manual Analyzer | 🔨 In progress | 2026-09-16 | — | — | **Code complete; the gate now waits on data, not code.** P3.1 ✅ the document store (0022, `ingestion/documents.py`) — a PDF is verified by content, page-counted from the file and stored once by hash. P3.2 ✅ entry rules, write endpoint and form (`normalize/manual.py`, `/v1/personal/statements`, `entry_page.py`). P3.3 ✅ **all six** TG2 paths: identity (0018, 0019), units, corporate actions, FX, fiscal alignment, and the trading calendar (0023, 32,072 days). P3.5 ✅ the manual override (TG10). TG7 ✅ chart v1 (0020, 65 keys) — **now exercised**: JPMorgan and Caterpillar are typed through it, 295 statements and 4,495 line items, which is what the freeze was waiting for. Checks 4, 5, 8 and 16 closed this phase. **Open:** P3.4 the golden set and ≥10 typed company-years (TEAM_BRIEF B, C, D), the NGX universe (no Nigerian company is in the database yet), and `index_membership` |
+| P4 NG Automated Ingestion | 🔨 In progress | 2026-09-24 | — | 8/20 | **Every part that needs neither a key nor a golden set is built.** P4.1 ✅ the deterministic half (`extract/pdf.py`) - native/scanned/mixed classification, text and Markdown tables; the OCR branch is not built and no scanned fixture exists yet. P4.2 ✅ the contract, **grounding** (a figure must be on the page it cites) and the reconciler - everything but `messages.create`, which needs `ANTHROPIC_API_KEY`. P4.3 ✅ validation, `validate_candidate` (checking before the store, which P4.1's flowchart requires and `validate_period` could not do) and confidence routing. P4.4 ✅ queue, `/v1/personal/review/*`, `review_page.py`; corrections go through P3.2's form rather than a second write path to the same table. P4.5 ✅ the devaluation annotation; `fx_loss_net` is in chart v1. P4.6 ✅ bank and industrial shapes verified apart. P4.7 ✅ **the NGX cache is running** - `AFX Kwayisi` registered, both listing pages stored permanently, bars correctly refused until the securities exist. P4.8 ✅ closed: retries, per-host buckets, conditional requests (FRED 304s, 1.6MB a series), health rows. **Checks closed: 8, 9, 12, 13, 14, 15, 16, 18.** **Open:** 1, 2, 3, 7, 11, 17, 19, 20 - each needs the API key, the golden set, or both. The `llm_hybrid` write path is not built: `enter_statement` cannot serve as it, because it labels a figure hand-typed and demands a reviewer's name |
+| P5 News & Daily Brief | 🔨 In progress | 2026-09-24 | — | — | P5.1 ✅ RSS ingestion (0025, `ingestion/rss.py`) - Nairametrics, BusinessDay and Punch, hourly and staggered, 44 real articles ingested. Three of the five feeds `docs/03` names cannot be ingested at all: Proshare serves its 404 page with **HTTP 200**, Reuters Africa is `Disallow: /`, and TheCable answers 403 to our agent. P5.2 🔨 ticker tagging - built, and tagging nothing: `news_tags` is empty because no Nigerian security exists to tag against. P5.3 ✅ **sentiment tiering** (0029, 0030, `normalize/sentiment.py`) - VADER in bulk, the LLM tier built and gated on the absent key. A band around zero turned out to be a band around *silence*: |compound| < 0.05 needs a summed valence under 0.194, a tenth of one ordinary word, so it catches every neutral and misses almost every conflict. Reading a zero for its cause escalates 11 of 44 articles where the naive band escalates 20, overlapping on 5. **The hand-check says VADER is mostly no signal on this corpus**: its finance coverage is accidental - `fallen` is in the lexicon and `fall`/`falls`/`fell` are not, `deficit` is in and `surplus` is not, a regulatory `fine` reads as "that's fine" - so the tier, not the score, is what the phase delivers, and 0030 stores it. P5.4 ✅ **the daily brief** (`packages/brief/`, `brief:daily` at 06:00 UTC = 07:00 WAT) - per principal, every figure carrying its as-of date, and a content hash that **excludes the decision date** so it can actually suppress a repeat rather than never colliding. Delivery refuses before the network without a token and records `suppressed`, the only retryable status. Composition is real today for a US watchlist; a Nigeria-news brief cannot be, and the brief says which of the two it is. **Open:** a Telegram bot token for delivery, and the NGX universe for everything Nigerian |
+| P6 Scenarios & Indicators | 🧪 Built | 2026-09-24 | — | 13/13 | **All thirteen checks pass, on the universe that exists.** TG1 is half-closed and that is what let this start: 269,298 US bars, 3,272 corporate actions and a 32,072-day calendar are in; **no Nigerian security is, so the NG half of the phase is untouched and its entry criterion "price_history populated for both markets" was never met.** P6.1 ✅ the scenario engine (0028, `valuation/scenarios.py`) and `POST /v1/public/companies/{ticker}/scenario` - check 13 measured: naira 1,535→2,000 for an importer takes value per share -59.6%, an exporter +166.9%. P6.2 ✅ six indicators, seven specs, twelve columns, **842,088 rows across all 24 securities** (`indicators/`, 0028). Every library convention measured against an independent implementation rather than assumed - pandas-ta-classic is Wilder to ten decimal places, and the published StockCharts table that says otherwise is the thing that is wrong. P6.3 ✅ `known_as_of` is a running maximum over the inputs, in the primary key, `no_update` enforced. **Why 🧪 and not ✅:** the backfill runs from 2015, not 1970 - a full-history run adds ~1 GB to an 80 MB database, and only 11 of the 24 securities exist before 2010, so the deep history has a changing-composition problem SPEC 2A warns against. Extending is one parameter: 2010 +387 MB, 2000 +596 MB, 1970 +1.04 GB |
 | P7 Backtesting (THE GATE) | ⬜ Not started | — | — | — | Most important phase |
 | P8 ML Signals | ⬜ Not started | — | — | — | |
-| P9 Memos & Web App | ⬜ Not started | — | — | — | |
+| P9 Memos & Web App | 🔨 In progress | 2026-09-24 | — | — | P9.5 ✅ **the web app** (`apps/web`, Next.js 15) - six routes against a written design contract (`apps/web/DESIGN.md`), verified on a production build at 320/768/1280 with no page-level horizontal overflow. Every figure carries its period, its `known_as_of` and the API's attribution verbatim; a build that cannot reach the API now fails rather than prerendering its own error state. P9.1-P9.4 ⬜ the memo agents - each needs `ANTHROPIC_API_KEY` |
 | P10 Portfolio & Alerts | ⬜ Not started | — | — | — | |
 | P11 Paper Trading | ⬜ Not started | — | — | — | |
 | P12 Public Beta | ⬜ Not started | — | — | — | Only phase with real legal exposure |
@@ -243,6 +255,249 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 
 **A phase is only ✅ when its test checkpoint passes**, not when the code is written.
 "Built but not verified" is 🧪, and 🧪 is not permission to start the next phase.
+
+**P1, stated precisely.** Built and tested: P1.0 the document store, P1.1 the connector
+contract, P1.2 FRED, P1.3 CBN and NBS-via-portal, P1.4 the API, P1.5 the scheduler and
+health check, P1.6 the dashboard, P1.7 the manual CSV path. **Ten of thirteen series hold
+real data — 28,053 observations, an honest count (see FRED below) — which meets the exit criterion's "ten series populated".**
+Checks 1–10 and 12 of the P1 checkpoint pass.
+
+**P1.3 CBN is built and four series carry real data.** 6,052 NFEM USD/NGN observations back
+to 2001-12-10, 18 months of the Monetary Policy Rate, and 18 months of headline and core CPI,
+ingested from CBN's own endpoints and rendering with as-of dates and freshness. The
+point-in-time view is proven on real history: USD/NGN as known on 2015-06-30 returns
+₦196.4500, against ₦1,320.7160 today.
+
+**NBS is reachable after all, through the Nigeria Data Portal.** `docs/03` P1.3 says NBS has
+no REST API, and `nigerianstat.gov.ng` still does not — but NBS also publishes through the
+AfDB's Nigeria Data Portal, which has a documented JSON API. Two NBS-attributed series are now
+filled from it: `NG_CPI_YOY` with 296 monthly observations back to April 2001, and
+`NG_GDP_GROWTH_YOY` with 39 quarters from 2015Q1. Compiler and transport are kept apart: the
+*series* is credited to NBS, who compile the figures; the *document* points at the portal's
+own `data_sources` row, which is where the bytes came from and whose terms govern our copy.
+
+**The GDP series is labelled with the base it is actually on.** The portal's dataset is at
+2010 constant basic prices and stops at 2024Q3; NBS rebased to 2019 in mid-2025 and the
+portal does not carry those figures. Migration 0008 changed `base_period` from "GDP 2019
+rebasing" to "GDP 2010=100 constant basic prices", because a definition that names a base
+the data is not on is a definition that lies. The series is flagged stale (712 days), which
+is correct and should stay visible. Three real-growth indicators exist on the portal; the
+one loaded is the one whose values match NBS's own headline text (Q3 2024 = 3.46%, Q2 2024 =
+3.19%, Q3 2023 = 2.54%), and a test pins that reconciliation. Market-price growth (3.12% for
+the same quarter), nominal growth, sector rows and annual rows are each refused by name.
+
+**Check 12 found something, which is what check 12 is for.** Reconciling the NBS CPI against
+its release exposed that `NG_CPI_YOY` (via the portal) and `NG_CPI_YOY_CBN` disagree by
+about three points on every one of the ten months they share — 23.18% against 26.27% for
+February 2025, 14.45% against 17.33% for November. **Both are NBS figures. They are different
+vintages.** In its December 2025 CPI report, published mid-January 2026, NBS moved the
+year-on-year reference from a single month to the 2024 twelve-month average and revised every
+2025 print upward. CBN's endpoint carries only the revised series; the portal froze on the
+originals. Three consequences, each acted on:
+
+1. **The CBN mirror's 2025 rows had stored lookahead.** They were bounded at the end of the
+   following month, which is right for a first print and wrong for a revision published a
+   year later: the table said 26.27% was knowable on 2025-03-31 when the market had 23.18%
+   until January 2026. Migration 0009 re-dates those twenty rows (headline and core,
+   February–November 2025) to `known_as_of = 2026-01-31, revision = 2`, and the connector now
+   emits them that way. Proven on the point-in-time query: February 2025 CPI as known on
+   2025-04-30 is 23.18% from NBS and *not yet knowable* from CBN; as known on 2026-02-28, both.
+2. **The NBS primary now holds the superseded vintage** and the mirror holds the current
+   one. That is correct point-in-time data, not a defect — but the revised NBS series can only
+   enter an NBS-attributed series from an NBS publication. The route is P1.7's manual CSV,
+   fed from the December 2025 CPI report itself: one Collector task, ~30 minutes, and the
+   first real use of the path P1.7 exists for.
+3. **CBN's June 2025 row is a copy of May's** — 26.06% where NBS's revised June is 25.29%,
+   every field identical. It is stored as CBN published it, because the mirror records what
+   CBN says, and the connector now logs a month identical to its predecessor rather than
+   silently accepting it. This is the concrete case behind `docs/03` P1.3's warning about
+   second-hand Nigerian sources, and why the mirrors are labelled.
+
+**The two monthly CBN series need opposite `known_as_of` treatment**, and the dashboard now
+shows both: CPI for period 2026-07-31 published 2026-08-31, beside the MPR with both dates
+equal. The MPC announces immediately, so a month's policy rate was public within that month;
+a month's CPI is computed after it ends. CBN publishes no release date, so `known_as_of` is
+**bounded** at the last day of the following month — never earlier than the real release —
+and the portal's NBS series use the same rule, one period later for quarterly GDP. [NEEDS
+VERIFICATION] against NBS's release calendar, which would replace the bounds with real dates.
+
+**R-02 had already happened before we wrote a line.** The `.asp` URLs the source documents
+name are 404 — CBN rebuilt the site and the tables now render client-side. The data is
+reachable as JSON, which is better than scraping HTML but is an undocumented endpoint with no
+contract, so P1.7's manual CSV path stays wired rather than being retired. The portal
+returned 403 on a second request issued immediately after the first, which is how it was
+discovered that `politeness_delay_sec` was declared on every connector and enforced nowhere;
+`run_job` now spaces consecutive runs by it.
+
+**FRED is loaded — and the first count of it was wrong by a factor of three.** The key was
+set on 2026-09-09 and all four FRED series came in: 3,362 US CPI, 920 fed funds, 440 rows of
+the World Bank Nigeria CPI mirror, and what this tracker recorded as "60,835 US 10-year
+Treasury observations". 43,952 of those were an artefact of our own loading. ALFRED clips
+`realtime_start` to the start of the real-time window asked for, so each of the four backfill
+windows returned every observation already known before it dated *at* the window's first
+day, and each was stored as a new vintage — 1990-01-02's yield of 7.94 four times over.
+Point-in-time queries returned the right value throughout, because the duplicates carried
+the value the query would have found anyway; the vintage count did not. Migration 0010
+removed them (round-tripped: 60,835 → 16,883 → 60,835 → 16,883), and `Connector.write()`
+now refuses a record whose value equals the latest earlier vintage of the same period — a
+figure republished unchanged is the same vintage continuing, for every source.
+
+**DGS10's scheduled job had never succeeded.** It asked FRED for every vintage, FRED refuses
+more than 2,000 in one response, and the series had not refreshed since the one-off load.
+The job now asks for a three-year look-back window, which is safe only because of the rule
+above: live, it parsed 16,878 records, skipped 16,095 as unchanged, and inserted the two
+trading days published since the load. The failure had been invisible for two reasons that
+are both fixed: the console gave no per-step account of a run, and all four FRED jobs
+recorded their runs as `fred`, so three healthy series hid the fourth. Runs are now
+recorded per job — `fred:DGS10` — and the health check derives its expectations from the
+job list it shares with the scheduler.
+
+**The console now shows every step of every flow**, colour-coded by meaning (blue
+information, green success, yellow warning, red error) and numbered by nesting (`2.1` is the
+first step inside the second job), with every printed string redacted and tracebacks kept
+free of local variables. `packages/common/console.py`; `LOG_FORMAT=json` for a log
+aggregator. The first run under it is what surfaced both defects above.
+
+**What is still missing is data, not code.** Three series remain empty: NBS core CPI (the
+portal carries core as an index, not a published year-on-year rate, and deriving one would
+be publishing our own statistic under NBS's name), and DMO's public debt and bond stop rates
+(PDF; `docs/03` P1.3 defers them to P4 where the PDF toolchain exists). The route today is
+[data/manual/README.md](../data/manual/README.md), which needs no key. Note that two of the
+ten populated series are `_CBN` mirrors and one is a World Bank mirror, so the count of
+*distinct* macro facts from primary sources is seven.
+
+> 🔴 **Rotate the FRED API key.** It was exposed on 2026-09-09: a failed request put it into
+> `connector_runs.error` and into terminal output. The stored row was scrubbed and the code
+> now redacts credentials from every error before storing (`redact_secrets`), but a key that
+> has appeared in output must be treated as compromised regardless of clean-up. Free to
+> replace at `fredaccount.stlouisfed.org/apikeys`.
+
+No macro figures were invented to close any gap. A fabricated CPI print carrying a
+provenance chain that claims NBS published it is precisely what this system exists to
+prevent, and a dev database is exactly where such a number quietly becomes "the number we
+have".
+
+**Checkpoint status: 12 of 13, and the thirteenth is half done.** Checks 1–10 pass. Check 12
+is done, with the finding above. Check 13 (unplug the internet and reload) is done in code
+rather than with a cable, because ADR-0008 changed its meaning: the database is Neon, so
+"the internet is down" takes the data with it, not just the sources. What survives that —
+and is proven in `tests/compliance/test_degraded_database.py` — is that nothing crashes and
+nothing leaks: `/health` answers 503, the series endpoint answers a JSON error with no
+traceback and no connection string, and the dashboard renders its banner saying what is
+wrong and how to start the API. **The one thing left is by eye: check 11** — open the
+dashboard beside CBN's MPR page and confirm the number *and the date*. Value and date come
+from the same JSON record and a test pins the mapping; the visual cross-check is the
+operator's, and it is the last item between P1 and ✅.
+
+**Known limitations, recorded rather than smoothed over.** CBN republishes corrected rates
+without saying when it corrected them — six USD dates carry two rows and four disagree, one
+by 3.4%. The later record is kept and the superseded vintage is not, so a backtest deciding
+on 2024-02-22 would have acted on a rate this table no longer holds. The portal has the same
+shape of problem for GDP: it carries NBS's latest revision of each quarter, not the first
+print, so a revised quarter sits under a `known_as_of` bounded at its first release. Both
+are the size of the publisher's revisions, both need a source that publishes vintages or our
+own daily snapshots — P3/P7 work — and both belong in P7's pre-registration.
+
+**P2, stated precisely.** Started 2026-09-13 on branch `p2-us-company-data`, with P1 at 🧪
+and P0 at 🧪 for reasons that are the operator's, not code's. **P2.1 is built and live:**
+migration 0011 (seven statement tables, chart of accounts v0.1, exchanges), the EDGAR
+submissions and companyfacts connectors, `packages/normalize` (periods, chart, the versioned
+statement writer), and `packages/common/pit.py` with the mandatory decision date. Apple is
+ingested end to end — 72 filings, 333 statement versions, 2,369 line items — and FY2025
+revenue reads 416,161m, known 2025-10-31, as the roadmap's own example expects.
+
+**Point-in-time is proven on a real restatement.** Apple's retrospective adoption of the new
+revenue-recognition standards in January 2010 lifted FY2009 revenue from 36,537m to
+42,905m. Both vintages are held; as known on 2009-12-31 the accessor returns the first, from
+2010-01-25 the second. That is P2 check 15 on live data.
+
+**What the first live run taught.** Six of the chart's alternate XBRL tags could
+legitimately differ from their primaries (restricted-cash-inclusive cash, `ProfitLoss`
+beside `NetIncomeLoss`, `LongTermDebt` beside the non-current one …). A later 10-Q that
+carried only the alternate then resolved the same period to a different number, and the
+writer recorded six restatements of cash that never happened. Those alternates are out,
+and `docs/08` §2.3 now states the rule: an alternate must name the *same* measure. The 45
+restatements that remain were each read; all are the filer's — the 2010 one above, Apple
+re-tagging its cash-flow D&A in the FY2018 10-K, explicit zeros in later comparatives —
+or v0.1 coverage gaps that resolve as NULL and then a value, which is honest.
+
+**P2 is built, 2026-09-14.** The whole of it: P2.3 (`price_history`, migration 0012, the
+Yahoo chart connector storing as-traded closes with the provider's splits multiplied back
+out, verified at Apple's 1987, 2000, 2005, 2014 and 2020 split boundaries), P2.4
+(`packages/valuation` — 26 ratios and a DCF with hand-computed worksheets in
+`tests/known_answer`), `shares_outstanding` (0013), the entity graph created empty (0014),
+the four public company routes and `apps/streamlit/company_page.py` for the by-eye checks,
+and the universe: **24 of 24 US companies loaded end to end**, every price series current
+to 2026-09-11, `pit_sanity` violations zero, orphan line items zero.
+
+**P2 checkpoint: 15 of 15, closed 2026-09-15.** Checks 1–12 and 15 in code; 13 and 14 by
+eye, and the operator did not take the page's word for it — they pulled Apple's 10-K and the
+SEC's structured feed independently and compared both against what the API and the page
+hold. **Check 13: all three figures match** (revenue 416,161m, total assets 359,241m, and an
+`interest_expense` that is correctly blank — no such line and no such XBRL fact in the
+FY2024 or FY2025 10-K; the last one was FY2023's 3,933m, which the page still shows). They
+went past the three: **all 19 FY2025 values we hold match the filing tag for tag**, zero
+mismatches, and the internal identities hold (revenue − cost of revenue = gross profit;
+liabilities + equity = total assets). **Check 14: value per share fell 12.93%** between a 9%
+and a 10% discount rate (105.89 → 92.19), inside the 12–13% the plan predicts, recomputed by
+hand from the echoed inputs and agreeing to the cent. Check 9 reads as
+[08](08_DATA_CONTRACTS.md) §2.4 corrected it: `close_raw` as traded, no stored adjusted
+column.
+
+**P1 check 11 closed the same day.** The three US series agree with FRED's own feed on every
+shared date, zero disagreements across the full history; the naira rate was current. The
+staleness flags were the finding: 8 series flagged, of which 3 were genuine and 5 were the
+flag's own arithmetic — fixed in migration 0016, below.
+
+**What the operator's verification and the first unattended night taught** (2026-09-15/16),
+each now fixed with a test:
+
+* **Two jobs storing one document collided.** Every EDGAR job fetches the shared SEC ticker
+  file first. A night of missed jobs fired together when the laptop woke, and two died —
+  one on Windows' *"the process cannot access the file because it is being used by another
+  process"* (both writers used one `.partial` name), one on
+  `duplicate key value violates unique constraint "source_documents_sha256_key"` (both
+  missed the select, both inserted). The store now writes under a per-writer temp name and
+  treats losing the race as success — the name *is* the hash, so the winner wrote the same
+  bytes — and `store_raw` inserts inside a savepoint and takes the winner's row. The
+  scheduler now runs one job at a time, which is also what the EDGAR connector's
+  process-wide 10 req/s throttle has always assumed.
+* **The staleness flag was crying wolf** (migration 0016). `_staleness` measures the age of
+  the newest *period held*, so a threshold must cover a whole period **plus** the publisher's
+  lag; seeded at the lag alone, every healthy monthly series flagged from day 21 of its
+  cycle. Thresholds are now measured from our own vintages, and a test holds the rule for
+  every series — which immediately found two more that no dashboard had flagged, because
+  they hold no data yet. Flags went from 8 to 3, and all 3 are genuine: NBS CPI stopped at
+  November 2025, GDP at Q3 2024, and the US 10-year is behind because runs were missed while
+  the laptop slept.
+
+**What the universe load taught** — three defects, each a filer's data meeting a constraint
+that did its job, each now a rule in [08](08_DATA_CONTRACTS.md) §2.3 with a regression test:
+an alternate XBRL tag must name the same measure (Apple: six false restatements of cash); a
+fact whose period ends after its own filing date is dropped, never re-dated (Walmart: three
+in 21,874, one of which aborted the company); a period a filing reports under two context
+start dates is one statement (Cisco: gross profit under a slipped start date). And a re-run
+of the loader after a restatement now judges each old filing against the version in force
+on its date, so the stale warning means what it says.
+
+**Recorded limitations.** XBRL begins in mid-2009, so a pre-2009 period's `known_as_of` is
+its first XBRL appearance — later than the truth, never earlier. Multi-class companies
+(Alphabet, Meta) carry no cover-page share count in companyfacts, which drops every
+dimensioned fact; since 2026-09-14 `EdgarInstanceSharesConnector` reads the count per class
+from each 10-K and 10-Q's XBRL instance instead, `shares_outstanding` holds one row per class
+(`share_class` = the axis member), and a multiple sums the classes counted at one date —
+Alphabet's A + B + C, 12.23bn as of 2026-07-15. EDGAR maps `XOM` to ExxonMobil's 2026 holding
+company and `DIS` to the 2019 one, with the history under the old CIKs; since 2026-09-14 the
+successor map in `packages/ingestion/edgar.py` (each entry's evidence is the successor's own
+8-K12B) records the old CIK as a time-bounded identifier of the security and writes its
+filings under the continuing company — Exxon now reads 71 filings from 2006, Disney 74 —
+and the nightly refresh covers both registrants. Coca-Cola's companyfacts carried
+nothing filed after 2026-04-30 at load time. Every exchange-listed instrument EDGAR names for
+a company (notes, preferreds) is an identifier of its one security; the primary is the lowest
+id. Statements refresh nightly since 2026-09-14 — one `edgar:<ticker>` job per name at 03:00
+UTC, six minutes apart, before the CBN jobs — beside the price jobs; the first live run, on
+Coca-Cola, found EDGAR's companyfacts byte-identical to the load, so the overdue flag there
+describes the source's lag, not ours.
 
 ### What exists right now
 
@@ -258,13 +513,14 @@ GitHub remote yet.** The workflow is written and waiting. See "what is left" bel
 | Docker | ✅ 29.6.1 (Desktop must be *running* for backup/restore) |
 | Node (needed at P9) | ✅ v24.14.0 |
 | Monorepo scaffold | ✅ 4 packages (`common`, `compliance`, `ingestion`, `scheduler`), the rest reserved — `packages/README.md` |
-| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 17 spine tables + `alembic_version` ([ADR-0008](adr/0008-neon-managed-postgres.md)). The other ~35 tables are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
-| FastAPI service | ✅ `/health`, `/v1/public/ping`, `/v1/personal/ping` — mode gate, bearer auth, audit row per request |
+| Database / DDL applied | ✅ **Neon PostgreSQL 18.6**, 35 tables + `alembic_version`, at migration 0023 ([ADR-0008](adr/0008-neon-managed-postgres.md)), verified against the live database on 2026-09-17. The rest are deferred per [10](10_PRE_BUILD_CORRECTIONS.md) §6.1 |
+| FastAPI service | ✅ `/health`, ping, the macro series routes, `/v1/public/companies{,/{t}/statements,/ratios,/ratios/history,/dividends,/filings,/dcf}`, `/v1/public/filings/recent` and `/v1/public/operations/connectors` — mode gate, bearer auth, audit row per request, every response type registered |
+| Screens | ✅ Four thin Streamlit clients: the company page, the macro dashboard, the operations page, and the statement entry form (P3.2) (every job judged ok / warning / error / never ran, every data set's as-of) — `python -m streamlit run apps/streamlit/<page>.py` |
 | Any application code | ✅ The spine. No financial logic, by design |
-| CI pipeline | 🧪 `.github/workflows/ci.yml` written; **never executed — no remote** |
-| Test suite | ✅ 159 passing, 0 skipped (`tests/unit`, `tests/compliance`) |
+| CI pipeline | 🧪 `.github/workflows/ci.yml` written. **`main` has been pushed** — `git ls-remote origin` on 2026-09-17 shows `main` at `89a83b0`, plus `ci/first-run`, `p0-spine` and `p2-us-company-data`. Whether a run has ever gone green is still unconfirmed: nothing in the repo records one, so check 13 stays open until someone reads the Actions tab |
+| Test suite | ✅ 509 passing in `tests/unit` + `tests/known_answer` and 199 in `tests/compliance`, 0 skipped; live-network tests are opt-in. Run with `-p no:randomly`: `test_edgar.py` has real isolation leakage under random ordering, which is a known defect of that file rather than of the code it tests |
 | Backup | ✅ Dumped, verified, copied, **and restored** 2026-09-02 — [REVIEW_CADENCE](REVIEW_CADENCE.md) row 2. Off-site: still zero |
-| ADR log | ✅ [0001–0008](adr/README.md) |
+| ADR log | ✅ [0001–0010](adr/README.md) |
 
 ### The immediate next actions
 
@@ -281,6 +537,41 @@ Ordered. The first four are the difference between P0.4 running and not running.
       §6.4 — GitHub will not let you approve your own PR)
 - [x] ~~Install the pre-commit hooks~~ — installed 2026-09-03 and run over all files:
       gitleaks, ruff, ruff-format, yaml/toml, large files, private keys, `no-commit-to-branch`
+- [x] ~~**P2 checks 13 and 14, and P1 check 11, by eye**~~ — done 2026-09-15, independently
+      of the page: the 10-K and the SEC feed pulled directly, all 19 FY2025 values matched,
+      the DCF recomputed by hand, FRED compared across its full history
+- [ ] **Stop the laptop sleeping through the schedule, or move the schedule.** The 03:00 run
+      of 2026-09-16 fired at 03:15 on wake, and that morning's 06:15 FRED jobs were skipped
+      entirely (asleep 06:10–08:59). The `schtasks` entry in [02](02_INFRASTRUCTURE.md) §2.3
+      survives a logout but not sleep; the choices are a sleep setting, a wake timer, or a
+      host that stays on (§5 there)
+- [ ] **P3.3's last TG2 path: §1.2 the trading calendar.** Identity (0018) and units
+      (`packages/common/units.py`) landed 2026-09-16. `OPERATIONS.md`'s priority order defers
+      the calendar to "before v0.7 indicators", so it is due in P6 and not before — and
+      `docs/08` §2.1 already carries its DDL
+- [ ] **The magnitude check `OPERATIONS.md` §1.6 asks for, in P4 beside the other validators.**
+      Not built with `units.py` on purpose: `docs/06` R-22 weighs it as approach (2), "catches
+      gross errors, misses a plausible one", against the conversion function as (1), and
+      `docs/` outranks `OPERATIONS`. It is also unretrofittable — `needs_review` is set at
+      insert and `forbid_update_except_supersession` allows no later UPDATE — so it belongs
+      where its siblings live: P4.2's arithmetic validation, beside the cross-year identity
+      tie R-22 names as the real backstop
+- [x] ~~**Migrate `companies.cik` into the identity table**~~ — **done 2026-09-16,
+      migration 0019.** The half of [10](10_PRE_BUILD_CORRECTIONS.md) §2.11 that 0018 left.
+      The column carried no unique constraint and no index, so nothing but the connector's
+      own `WHERE cik = ?` stopped two companies claiming one CIK; `no_overlapping_ids` now
+      refuses it at the row. All 24 CIKs preserved, `valid_from` derived from filing dates
+      and predecessor bounds rather than invented, and both successions came out gap-free
+- [ ] **Dated *ticker* resolution is unavailable until identifier intervals are real.**
+      `resolve_security` takes a date and is tested on real intervals, but every live ticker
+      row holds `valid_from = 2026-09-13`, the day EDGAR was first observed — a lower bound,
+      not a claim. So `find_security` resolves as of today on purpose; passing the decision
+      date would 404 every historical read, and inventing a start date would breach
+      `SPEC.md` §4.1. Unblocked by [TEAM_BRIEF](../TEAM_BRIEF.md) §2.2-F, the ticker alias
+      table with real dates — operator work, ~half a day
+- [ ] **One question a week from the Kaizen ledger** ([05](05_USER_STORIES.md) §11) — the
+      questions a person actually asks, each with its honest status; the first five to pick are
+      named in §11.3. Each is one PR: route, test, screen, and the status flipped in the ledger
 - [ ] **Create a Backblaze B2 account before P3 collects documents at scale**
       ([ADR-0009](adr/0009-object-storage-and-immutability.md)). ~$0.10/month at this volume.
       It needs a payment method, so the build cannot do it for itself, and P3.1 assumes the
@@ -292,8 +583,18 @@ Ordered. The first four are the difference between P0.4 running and not running.
       purchase: one paid month, fetcher built first. Family tier: own + family capital, no
       fee, capped at 6. Extraction: 95% headline / 90% all / 85% abandon. Universe:
       [UNIVERSE.md](UNIVERSE.md)
-- [ ] **Verify every ticker and delisting date in [UNIVERSE.md](UNIVERSE.md)** against NGX's
-      listing directory — half a day, and it gates PDF collection
+- [~] **Verify every ticker and delisting date in [UNIVERSE.md](UNIVERSE.md)** — **researched
+      2026-09-16, awaiting the operator's confirmation.** 22 of 25 ticker strings were right;
+      three were not, and each would have failed silently. `WAPCO` became **`HBMNG`** in July
+      2026 when Holcim sold Lafarge Africa to Huaxin. `11PLC` was never a ticker — the symbol
+      stayed `MOBIL` through the 2017 rename to delisting. And **`FLOURMILL` has been delisted
+      since 30 Dec 2024**, so the split is 21 live and 4 delisted. Also found: two non-December
+      year ends the draft never flagged (GUINNESS closes June, AIRTELAFRI March), and a 1-for-4
+      TRANSCORP consolidation on 28 Oct 2024 that the corporate-actions backfill needs.
+      `UNIVERSE.md` §4 now holds the dated rename rows for the alias table and §5 what is still
+      a question. **What is left is the operator opening the exchange's own directory once**:
+      its company pages are a JavaScript application and could not be read, so the rows resting
+      on secondary sources are marked `CONSISTENT` rather than `CONFIRMED`
 - [ ] Decide the remaining open questions in `PROJECT_CONTEXT.md` §8
 - [ ] Begin P0 per [03_ROADMAP_PART1](03_ROADMAP_PART1_PHASES_0-6.md), **split per
       [10](10_PRE_BUILD_CORRECTIONS.md) §6.1** — the spine in a week, not the whole of P0 in
@@ -383,7 +684,7 @@ the stories each one blocks are in [05_USER_STORIES](05_USER_STORIES.md) §9.
 | ID | Gap | Why it bites | Lands in |
 |---|---|---|---|
 | **TG1** | **Price-history ingestion has no task.** T9 (indicators) computes on `price_history` and T11 (backtest) needs OHLCV bars — nothing fills either. | Hard blocker for P6 and P7, and invisible until the morning you start P6. | P2 (US), P4 (NGX) |
-| **TG2** | **All six `OPERATIONS.md` Part 1 correctness tables are unscheduled** — corporate actions (§1.1, "the highest-priority gap"), trading calendar, FX, ticker history, fiscal alignment, unit conversion. | Un-adjusted prices silently corrupt every indicator and backtest downstream. | P0 schema, P3 data |
+| **TG2** | **All six `OPERATIONS.md` Part 1 correctness tables are unscheduled** — corporate actions (§1.1, "the highest-priority gap"), trading calendar, FX, ticker history, fiscal alignment, unit conversion. | Un-adjusted prices silently corrupt every indicator and backtest downstream. | **Five of six done**: corporate actions ✅ 0015, fiscal alignment ✅ P2, FX ✅ 0017 (6,059 rates to 2001), ticker history ✅ 0018 (`docs/10` §2.11's three defects; `resolve_security` is the one resolution point), unit conversion ✅ `packages/common/units.py` (`docs/06` R-22's recommended mechanism; the magnitude check it ranks second belongs with P4's deterministic validators). Remaining: **trading calendar** (§1.2, which `OPERATIONS`' priority order defers to "before v0.7 indicators") |
 | **TG3** | **Auth/identity has no task.** "auth" is one word inside T16 (P9). | Multi-user is mandated from day one and mode derives from the principal in P0. | P0 |
 | **TG4** | **Backup and disaster recovery is unscheduled** (`OPERATIONS.md` §2.1). | The dataset is the moat. Losing it is the only unrecoverable failure. | P0 |
 | **TG5** | **The data-licensing gate has no enforcing task.** | `PROJECT_CONTEXT.md` §9.3 calls it "the one that kills deals". | P0, enforced every phase |
@@ -391,9 +692,9 @@ the stories each one blocks are in [05_USER_STORIES](05_USER_STORIES.md) §9.
 | **TG7** | **The canonical chart of accounts has no owning task and no versioning story.** | Changing it after extraction has run means re-extracting everything. Banks force the change. | P2 draft → P3 freeze |
 | **TG8** | **Nothing owns the scheduler / job runner.** `SPEC.md` §3.1's monorepo dropped it. | A connector that never runs fails silently. | P1 → P4 |
 | **TG9** | **The storage-engine decision is contradictory and unscheduled** — `DATA_FOUNDATION.md` says DuckDB, `SPEC.md`'s DDL is Postgres-flavoured. | Rework risk; the DDL is written in one dialect or the other. | P0 (ADR-0001) |
-| **TG10** | **The manual override has no task.** T4's review queue covers new extractions, not correcting a figure already on screen. | Trust erosion; violates the no-silent-overwrite rule. | P3 |
+| **TG10** | **The manual override has no task.** T4's review queue covers new extractions, not correcting a figure already on screen. | Trust erosion; violates the no-silent-overwrite rule. | **✅ done 2026-09-16** — `packages/normalize/corrections.py` + `scripts/correct_figure.py`. A correction versions the statement, keeps the superseded figure forever, and records who and why. `docs/10` §2.10's date rule is implemented and now stated in `08` §10: our own error keeps the *original* `known_as_of`, so a point-in-time read from before the fix returns the corrected figure rather than the typo |
 | **TG11** | **There is no `watchlists` table**, though T7's brief is specified to pull "watchlist moves". | Cheap now, annoying later. | P0 schema, P5 use |
-| **TG12** | **`adjustment_factors` has no point-in-time dimension.** A corporate action can be announced after its ex-date. | A subtle leak in P7's adjusted-price handling. | P3 |
+| **TG12** | **`adjustment_factors` has no point-in-time dimension.** A corporate action can be announced after its ex-date. | A subtle leak in P7's adjusted-price handling. | ✅ migration 0015, 2026-09-14 |
 | **TG13** | **Two different thresholds are both written as "85%", and the pass bar is missing.** `TEAM_BRIEF.md` Part 4 sets **≥85% on 10 filings** as v0.4's *stage gate*; `TEAM_BRIEF.md` Part 3 uses the same 85% as the *abandon / buy-EODHD* trigger. A pass bar and an abandon bar cannot be the same number. A third unrelated 0.85 (per-extraction review routing, P4.3) is adjacent enough to be conflated with both. | **The P4 gate is unfalsifiable while the pass bar equals the abandon floor** — clearing "abandon" reads as passing. | **Resolved — see [10_PRE_BUILD_CORRECTIONS](10_PRE_BUILD_CORRECTIONS.md) §3, task P4.0.** Numbers now set: 95% headline / 90% all-items pass bar, 85% abandon floor. |
 | **TG14** | **Nothing specifies who double-checks the golden set.** And the premise is **mis-cited**: no root document requires a second person — `TEAM_BRIEF.md` §2.3 asks only that the golden set be built by someone *accountable* for it. The requirement is this document set's own good idea, presented as inherited. | The set encodes one person's assumptions — and the project is explicitly solo, so the realistic answer is "no second person exists". That must be *recorded*, not left open behind a 🔴 gate. | P3 — **force the decision**: name the second person and the date, or record that none was available and raise production sampling to weekly for P4's first two months |
 | **TG15** | **No test asserts the paper trader and backtester share a cost-model *instance*.** | Two implementations drift, discovered with real money. | P11 |
@@ -429,6 +730,14 @@ knowledge), TG20 (stale thresholds). None of them raise an error.
 > dropped two of its columns. **TG13 was mis-stated**: the number is not missing, it is
 > *doubled* — the pass bar and the abandon floor are both "85%", so clearing "abandon" reads as
 > passing.
+>
+> **Build note, 2026-09-14.** **TG12 is closed and TG2's first table is in**: migration 0015
+> creates `corporate_actions` and `adjustment_factors` with `known_as_of` in both keys, the
+> Yahoo connector writes every split and dividend the chart response carries (as traded; a
+> first sight is dated its ex-date), and `packages/common/adjust.py` computes the adjusted
+> close on read from the factors known on the decision date — 499.23 on 2020-08-28 reads
+> 124.81 from 2020-08-31 and 499.23 before it. Five of TG2's six code paths remain P3's:
+> trading calendar, FX, ticker history, unit conversion (fiscal alignment landed in P2).
 >
 > **TG15 is specified as the wrong test** — the gap requires a shared cost-model *instance*;
 > the acceptance criteria test that the two modules import the same *class*, which two

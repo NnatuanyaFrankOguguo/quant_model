@@ -97,7 +97,7 @@ and lies. There are six distinct date concepts here and they are **not** interch
 | `known_as_of` | *From what date could a person outside the company have KNOWN this?* This is the point-in-time guard. MTN's FY2024 revenue was not knowable on 31 Dec 2024 — it became knowable when the audited statement was published. | If the annual financial statement published on 2025-03-14, then `known_as_of = 2025-03-14`. |
 | `release_date` / `vintage` | The macro equivalent of `known_as_of`. NBS publishes January CPI in mid-February, so the January figure has `ts = 2025-01-31` and `release_date ≈ 2025-02-18`. A **vintage** is a snapshot of what a series looked like at a given release — revisions create a new vintage and never overwrite the old one ([DATA_FOUNDATION.md §4.2](../DATA_FOUNDATION.md); this is what FRED's ALFRED does). | `ts=2025-01-31`, `release_date=2025-02-18` |
 | `retrieved_at` | *When did WE fetch this?* Provenance and cache invalidation only. Never used in a feature join. | `2026-08-14T22:04:11Z` |
-| `valid_from` / `valid_to` | *Over what window was this attribute true?* Used for time-bounded attributes such as tickers and name aliases ([OPERATIONS.md §1.4](../OPERATIONS.md)). `valid_to IS NULL` means "still current". | GTBank became GTCO in 2021: ticker `GTB` valid until the changeover, ticker `GTCO` valid from it. **[NEEDS VERIFICATION]** — take the exact changeover date from the NGX announcement, never from memory. |
+| `valid_from` / `valid_to` | *Over what window was this attribute true?* Used for time-bounded attributes such as tickers and name aliases ([OPERATIONS.md §1.4](../OPERATIONS.md)). `valid_to IS NULL` means "still current". | GTBank became GTCO in 2021: ticker `GUARANTY` valid until 2021-06-23, ticker `GTCO` valid from 2021-06-24 (§2.1 and [UNIVERSE.md](UNIVERSE.md) §4). This row said `GTB` until 2026-09-17; the symbol was `GUARANTY`, and the date came from the exchange event rather than from memory. |
 
 **The one rule that follows from this table, and the only one you must never break:**
 
@@ -128,11 +128,19 @@ Concretely, in `statement_line_items`:
 
 | Situation | `value` | `as_printed` | Why |
 |---|---|---|---|
-| The statement prints "Revenue 3,360,000" (in thousands) | `3360000000000` | `"3,360,000"` | Present, scaled exactly once (§9). |
+| The statement prints "Revenue 3,360,000" (in **millions**) | `3360000000000` | `"3,360,000"` | Present, scaled exactly once (§9). |
 | The statement prints "Revenue —" or a dash | `NULL` | `"—"` | The company reported nothing there. We record nothing. |
 | The line item does not appear at all | no row at all, or a row with `value = NULL` and `as_printed = NULL` | | Either is acceptable; be consistent per statement template. |
 | The extractor could not read the number | `NULL`, `needs_review = TRUE`, low `confidence` | the raw OCR string if any | Absence of *knowledge*, not absence of *fact* — flagged for a human. |
 | The statement prints "0" | `0` | `"0"` | Zero is a value. It is not the same as missing. |
+
+> **Corrected 2026-09-16, while implementing §1.5 in `packages/common/units.py`.** The first
+> row read "(in thousands)" against a value of `3360000000000`. Those disagree by exactly
+> 1,000×: 3,360,000 thousands is ₦3.36 **billion**, and `3360000000000` is ₦3.36 **trillion**,
+> which is the millions reading. [10](10_PRE_BUILD_CORRECTIONS.md) §2.8 frames the same
+> figure as telling "a correct ₦3.36tn from a misread ₦3.36bn", so the value was right and
+> the label was wrong. The worked example illustrating the 1,000× error contained one — which
+> is the section's own argument for why the multiplication needs a single home and a test.
 
 The distinction between `NULL` (unknown or absent) and `0` (reported as zero) has to survive
 every layer. A ratio engine that treats `NULL` as `0` will publish a debt-to-equity of 0.0 for a
@@ -223,9 +231,9 @@ given) and their DDL here is this document's proposal, written in the same style
 |---|---|---|---|---|
 | 1 | `companies` | The legal entity | P2 | Doc A |
 | 2 | `securities` | A tradeable instrument; **retains delisted rows** | P2 | Doc A |
-| 3 | `security_identifiers` | Ticker history, time-bounded | P3 | **[proposed]** TG2 |
+| 3 | `security_identifiers` | Ticker history, time-bounded | P2 (0011) / P3 (0018) | **[built]** TG2 · §2.1 |
 | 4 | `exchanges` | NGX, NASDAQ, NYSE | P2 | Doc A |
-| 5 | `trading_calendar` | Which days each exchange was open | P3 | **[proposed]** TG2 |
+| 5 | `trading_calendar` | Which days each exchange was open | P3 | `[built]` migration `0023` TG2 |
 | 6 | `industries` | Sector classification; drives the statement template | P2 | Doc A |
 | 7 | `data_sources` | Licensing register — the redistribution gate | P0 | **[proposed]** TG5 |
 | 8 | `source_documents` | Every raw file ever fetched, immutable | P1 | Doc A |
@@ -320,7 +328,8 @@ CREATE TABLE companies (
                                                -- reserves — neither a bank nor a normal
                                                -- company. See §4.
   fiscal_year_end SMALLINT NOT NULL,           -- month, 1-12. NOT every company is December.
-  cik             TEXT,                        -- US only, zero-padded to 10
+  -- cik: DROPPED by migration 0019 (docs/10 §2.11). It is a dated identifier and now lives
+  -- in security_identifiers; read it through identity.current_identifiers('cik').
   rc_number       TEXT,                        -- Nigerian CAC registration
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -341,41 +350,153 @@ CREATE TABLE securities (
 > unavoidable and silently inflates every historical result.
 
 ```sql
--- [proposed] TG2 — OPERATIONS §1.4
+-- [built] TG2 — OPERATIONS §1.4. Created by 0011, corrected by 0018 per docs/10 §2.11.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 CREATE TABLE security_identifiers (
   id           SERIAL PRIMARY KEY,
   security_id  INT NOT NULL REFERENCES securities(id),
-  id_type      TEXT NOT NULL,                  -- 'ticker' | 'isin' | 'cusip' | 'sedol'
+  id_type      TEXT NOT NULL,                  -- see identifier_type_is_known below
   id_value     TEXT NOT NULL,
   valid_from   DATE NOT NULL,
-  valid_to     DATE,                           -- NULL = still current
-  UNIQUE (id_type, id_value, valid_from)
+  valid_to     DATE,                           -- NULL = current; otherwise INCLUSIVE
+  exchange_id  INT REFERENCES exchanges(id),   -- NULL for the global types
+  is_primary   BOOLEAN NOT NULL DEFAULT false, -- which current ticker is the common stock
+  source       TEXT,                           -- who says this identifier was theirs
+  CONSTRAINT identifier_type_is_known CHECK (
+    id_type IN ('ticker','isin','cusip','sedol','cik','lei','figi')),
+  CONSTRAINT identifier_has_exchange CHECK (
+    id_type <> 'ticker' OR exchange_id IS NOT NULL),
+  CONSTRAINT identifier_interval_is_ordered CHECK (
+    valid_to IS NULL OR valid_to >= valid_from),
+  CONSTRAINT no_overlapping_ids EXCLUDE USING gist (
+    id_type WITH =, id_value WITH =, (COALESCE(exchange_id, 0)) WITH =,
+    daterange(valid_from, COALESCE(valid_to + 1, 'infinity'::date), '[)') WITH &&)
 );
 CREATE INDEX ON security_identifiers (id_type, id_value, valid_from, valid_to);
+CREATE UNIQUE INDEX one_primary_ticker_per_security ON security_identifiers (security_id)
+  WHERE is_primary AND id_type = 'ticker' AND valid_to IS NULL;
+CREATE UNIQUE INDEX one_current_cik_per_security ON security_identifiers (security_id)
+  WHERE id_type = 'cik' AND valid_to IS NULL;                      -- migration 0019
 ```
+
+> **The `UNIQUE (id_type, id_value, valid_from)` this block used to carry was the defect,
+> not the constraint** ([10](10_PRE_BUILD_CORRECTIONS.md) §2.11). It permits two securities
+> to hold one ticker over overlapping windows as long as `valid_from` differs by a day,
+> which is the NGX ticker-reuse merge §1.4 exists to stop; and it is not exchange-scoped, so
+> it also *rejects* a real dual listing. 0018 dropped it for `no_overlapping_ids`.
+>
+> Two details of that constraint differ from §2.11's literal SQL, because the literal form
+> does not deliver the single-valuedness the same paragraph promises.
+> **`COALESCE(exchange_id, 0)`**: `exchange_id` is NULL for the global types and `NULL = NULL`
+> is NULL inside an exclusion constraint, so every ISIN would escape the check — the one type
+> that is globally unique by definition. **`valid_to + 1`**: `valid_to` is inclusive here, and
+> a one-day interval (`valid_from = valid_to`, which `_record_predecessor` writes) is an
+> *empty* range under a half-open bound on the raw value, and an empty range overlaps nothing.
+>
+> **The current CIK lives here too, since migration 0019** — the second half of §2.11,
+> which 0018 left. `companies.cik` is dropped. It was the shape §1.4 exists to remove, and
+> the live column turned out to carry **no unique constraint and no index**, so nothing but
+> the connector's own `WHERE cik = ?` stopped two companies claiming one CIK;
+> `no_overlapping_ids` now refuses that at the row. A CIK names a registrant rather than a
+> listing, so it hangs off the registrant's *primary* security with `exchange_id` NULL —
+> the compromise 0011 already made for predecessor CIKs. `one_current_cik_per_security` is
+> what keeps "this company's CIK" single-valued, because the exclusion constraint keys on
+> the value and would allow one security two different current CIKs.
+>
+> 0019's backfill **derives `valid_from` and never invents it**: the later of the earliest
+> filing held for the company and the day after any predecessor CIK's last valid day. The
+> second term is what makes it correct — Exxon's filings run to 2009 under the predecessor
+> registrant, so the filing date alone would claim the 2026 CIK identified it in 2009. The
+> two successions came out gap-free and non-overlapping: 2019-12-18→2026-07-01 then
+> 2026-07-02→current, and 2012-02-13→2019-03-20 then 2019-03-21→current.
+>
+> **Read it through one function.** `packages/common/identity.py::resolve_security(value,
+> as_of, id_type, exchange)` is the only code that queries this table, per `OPERATIONS.md`
+> §1.4's "no `WHERE ticker = ?` anywhere else in the codebase"; a test walks the repository's
+> AST to enforce it. Given no `exchange`, a value live on two exchanges raises rather than
+> choosing. `current_identifiers('cik')` is the subquery a caller joins for the column the
+> API prints, and `company_for_identifier` is the CIK-to-company hop.
+
+> **`id_type = 'cik'`** (added 2026-09-14). A predecessor registrant's CIK, attached to the
+> continuing company's primary security, `valid_to` the successor's 8-K12B date and
+> `valid_from` the earliest filing the payload showed — an interval the data can vouch for.
+> EDGAR's ticker list points at the new registrant after a holding-company reorganisation and
+> the history stays under the old number; `PREDECESSORS` in `packages/ingestion/edgar.py` is
+> the curated map, each entry with its 8-K12B accession, and the old registrant's filings are
+> written under the continuing company so a period has one version across both numbers.
 
 Sample — a rename, correctly modelled:
 
 | id | security_id | id_type | id_value | valid_from | valid_to |
 |---|---|---|---|---|---|
-| 1 | 44 | ticker | GUARANTY | 1996-01-01 | 2021-07-31 |
-| 2 | 44 | ticker | GTCO | 2021-08-01 | NULL |
+| 1 | 44 | ticker | GUARANTY | 1996-01-01 | 2021-06-23 |
+| 2 | 44 | ticker | GTCO | 2021-06-24 | NULL |
 
 Both rows point at `security_id` 44. The price history never splits.
 
+**Corrected 2026-09-17, from [UNIVERSE.md](UNIVERSE.md) §4.** This example ran to 2021-07-31
+and started on 2021-08-01, and no source supports either date. Four 2021 dates are
+defensible and 1 August is not among them: the exchange suspended `GUARANTY` on **18 June**,
+delisted its 29,431,179,224 shares and listed the holdco's identical count on **24 June**,
+GTCO's own history page calls **1 July** the day it became the parent, and the closing-gong
+ceremony was **13 July**. A ticker interval is an exchange event, so 24 June is the one that
+belongs here.
+
+The `1996-01-01` start is still illustrative and is left alone deliberately — §1.8 already
+says the sample rows carry real tickers *"because abstract placeholders make contracts harder
+to read, not because the attached numbers are real"*, and inventing a listing date to replace
+an invented one would be no improvement.
+
+Note that the two rows remain gap-free **only** under the inclusive reading of `valid_to`:
+23 June belongs to `GUARANTY` and 24 June to `GTCO`. That is the same argument the old dates
+carried, which is why re-dating the example costs nothing but the dates.
+
 ```sql
--- [proposed] TG2 — OPERATIONS §1.2
+-- [built] migration 0023 — TG2, OPERATIONS §1.2
 CREATE TABLE trading_calendar (
   exchange_id INT NOT NULL REFERENCES exchanges(id),
   date        DATE NOT NULL,
   is_open     BOOLEAN NOT NULL,
   session_note TEXT,                           -- 'public holiday: Eid al-Fitr'
+  source      TEXT NOT NULL,                   -- how the day was established; see below
   PRIMARY KEY (exchange_id, date)
 );
 ```
 
 Without this, a missing price row is ambiguous — closed market or failed scraper? You cannot
 alert on one without false-alarming on the other.
+
+**`source` is added to the DDL above.** Days arrive three ways and they are not equally
+strong, so each row says which it is. A reader deciding whether to trust a settlement date
+needs to know what it rests on:
+
+| `source` | Strength | How the day was established |
+|---|---|---|
+| `weekend` | definitional | no exchange here trades on a Saturday or a Sunday |
+| `observed_bars` | inferred | `price_history` holds a bar for that day |
+| `statute_fixed` | statute | a Public Holidays Act fixed date, **not** an NGX notice |
+| `announced` | primary | an exchange notice or gazette, entered by a person |
+
+**A date with no row is unknown, not closed.** `packages/common/calendars.py` raises
+`UnknownTradingDayError` rather than answer for it, and that refusal is the point of the
+table. Defaulting to open would settle trades on days the exchange was shut; defaulting to
+closed is quieter and worse, because it reads as a legitimate non-trading day and lets a
+volatility estimate absorb a zero return that never happened.
+
+**What is seeded, as of 2026-09-17** (`scripts/seed_trading_calendar.py`, re-runnable and
+idempotent): 32,072 days. Weekends for all three exchanges across 2015–2027; 14,298 NYSE and
+13,626 NASDAQ open days inferred from real price bars back to 1970; and Nigeria's eight
+fixed-date statutory closures a year, Good Friday and Easter Monday included since Western
+Easter is computable exactly.
+
+**What is deliberately absent.** Nigeria's moving holidays — Eid al-Fitr, Eid al-Adha and
+Maulid — are *"announced only days in advance by the Federal Government"*
+([OPERATIONS.md §1.2](../OPERATIONS.md)), so they cannot be computed and are not guessed;
+[docs/03](03_ROADMAP_PART1_PHASES_0-6.md) line 1540 makes them the operator's work. US
+weekday holidays are absent too: inferring a closure from the *absence* of a bar is the
+ambiguity this table exists to end, so `pandas-market-calendars` (already in the `data`
+extra) is the way in. Until then arithmetic across a US holiday refuses, which is correct
+rather than convenient.
 
 ### 2.2 Source and extraction tables
 
@@ -584,8 +705,12 @@ CREATE TABLE account_mappings (
   source_label  TEXT NOT NULL,
   canonical_key TEXT NOT NULL,
   template      TEXT NOT NULL,
+  priority      SMALLINT NOT NULL DEFAULT 100, -- added P2.1: resolution order among
+                                               -- alternate labels for one key; lowest wins
   confidence    NUMERIC NOT NULL DEFAULT 1.0,
   added_by      TEXT NOT NULL,
+  FOREIGN KEY (canonical_key, chart_version)
+    REFERENCES chart_of_accounts (canonical_key, chart_version),
   UNIQUE (chart_version, source_system, source_label, template)
 );
 ```
@@ -594,6 +719,38 @@ CREATE TABLE account_mappings (
 > gives versioning, an audit trail, and the ability to see what changed — for free. TG7's real
 > danger is that changing the chart after the extractor has run over 200 company-years means
 > **re-extracting all of them**. `chart_version` turns that catastrophe into a migration.
+
+> **An alternate label must name the *same* measure** (added 2026-09-13, from P2.1). XBRL offers
+> several tags for one concept and a filer uses one, so `revenue` maps from `Revenues`,
+> `RevenueFromContractWithCustomerExcludingAssessedTax` and `SalesRevenueNet` in `priority`
+> order. What must **not** be admitted is an alternate whose value can legitimately differ from
+> the primary's — `CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents` beside
+> `CashAndCashEquivalentsAtCarryingValue`, `ProfitLoss` beside `NetIncomeLoss`, `LongTermDebt`
+> beside `LongTermDebtNoncurrent`. A later filing that carries only the alternate then resolves
+> the same period to a different number, and the writer records a restatement that never
+> happened. Apple's 10-Q comparatives produced six false restatements of cash before a single
+> real one. A company that reports only the excluded tag gets a NULL, which is honest.
+
+> **A fact a filing could not have known is dropped, never re-dated** (added 2026-09-13, from
+> the first universe load). Walmart's FY2012 10-K, filed 2012-03-27, carries a cash balance
+> "at 2012-12-31", and its FY2011 and FY2012 10-Ks each carry a rent-expense fact for the year
+> *after* the one reported — three filer context errors in 21,874 facts. `pit_sanity`
+> (`known_as_of >= period_end`) refuses such a row, as it should, and one refused row aborted
+> the whole company. The EDGAR connector now sets aside every fact whose `end` is after its
+> `filed` before anything is written, logs the tag, dates and accession as a warning, and
+> loads the rest. The right date is not knowable from the filing, so it is not guessed; the
+> raw document keeps the fact as filed.
+
+> **One statement per named period, however many contexts the filing spread it over** (added
+> 2026-09-13, same load). Cisco's Q3 FY2011 10-Q reports the quarter to 2011-04-30 under two
+> context start dates: 2011-01-30 for 36 facts and 2011-02-01 — a slip — for four, gross
+> profit among them. The period vocabulary names both `Q3`, and `statements` allows one
+> version 1 per (company, statement, period type, period end), so the writer refused the
+> second and the company was lost. The connector now merges a filing's contexts per named
+> period: the context carrying the most facts *is* the statement, the others contribute only
+> the tags it lacks, and the merge is logged with every tag it added. A tag both carry with
+> different values is a conflict — the statement's own value stands, the other is logged, and
+> nothing is averaged or guessed.
 
 ### 2.4 Market data tables
 
@@ -686,6 +843,19 @@ every holder exactly as wealthy, but raw prices show ₦100 → ₦50 — a 50% 
 oversold, volatility doubles, and a backtest books a catastrophic loss that never happened.
 **Nothing raises an error.** See [01_ARCHITECTURE.md](01_ARCHITECTURE.md) §7.1.
 
+> **Built 2026-09-14, migration 0015.** Both tables exist, with three deliberate readings of the
+> DDL above. `corporate_actions` carries `known_as_of` in its unique key
+> (`security_id, ex_date, action_type, known_as_of`), so a corrected ratio is a second row —
+> the rule every other figure table here follows; the `no_update` trigger holds it. `factor`
+> is **each action's own multiplier, never cumulative**: a stored cumulative product is one
+> global vintage that every new action rewrites, which is the adjusted-column sin one level
+> down; `packages/common/adjust.py` multiplies the factors whose ex-date is after the bar
+> and whose `known_as_of` is on or before the decision date. And `adjustment_factors` carries
+> `source_document_id` too (§2.13: provenance on every figure). First source: the split and
+> dividend events in every stored Yahoo chart response; a first sight is dated its ex-date,
+> the day it was public at the latest. A dividend's factor is not written — adjusting a price
+> series for cash dividends is a total-return choice for P6/P7 to make explicitly.
+
 ```sql
 -- [proposed] TG2 — OPERATIONS §1.3
 CREATE TABLE fx_rates (
@@ -709,6 +879,20 @@ CREATE TABLE fx_rates (
 Converting a 2023 Naira figure at the 2024 rate is not a rounding error — it is wrong by a large
 multiple. **Every conversion takes a date.** A conversion function without a date parameter is a
 defect ([OPERATIONS.md §1.3](../OPERATIONS.md)).
+
+> **Built 2026-09-16, migration 0017**, with the two deviations this schema takes everywhere:
+> `known_as_of` joins the primary key (a corrected rate is a second row, not an UPDATE the
+> `no_update` trigger would refuse), and `source_document_id` is NOT NULL beside
+> `data_source_id` (§2.13: provenance on every figure). `packages/common/fx.py` converts, and
+> takes **two** dates without defaults: `on`, the date the money is measured at, and
+> `decision_date`, so a rate published later is invisible — a `TypeError` if either is
+> missing. A rate is carried at most seven days to cover a weekend or a holiday, and beyond
+> that the answer is None rather than a silently stale number; the inverse direction is served
+> by inverting the stored pair, to twelve places so that the rate shown reproduces the figure
+> shown, and `inverted` says that is what happened. Filled from the fetch that already
+> happens: `CbnExchangeRateConnector` writes the NFEM central rate as a macro observation
+> *and* as an `fx_rates` row from the same response and document — one source, two shapes.
+> **6,059 daily rates, 2001-12-10 to date.** The other rate types have no source yet.
 
 ### 2.5 Macro tables
 
@@ -1302,6 +1486,18 @@ CREATE TABLE shares_outstanding (
 | `basic_or_diluted` | TEXT | NOT NULL | — | Both are published; a P/E must say which it used |
 | `known_as_of` | DATE | NOT NULL | — | Point-in-time guard, in the PK — a restated count inserts, never updates |
 
+> **Multi-class companies** (added 2026-09-14). A company that counts each class on its cover
+> page — Alphabet's A, B and C; Meta's A and B — tags the count once per class member on the
+> `StatementClassOfStockAxis`, and EDGAR's companyfacts feed drops every dimensioned fact, so
+> nothing reaches `dei:EntityCommonStockSharesOutstanding` there. `EdgarInstanceSharesConnector`
+> reads the filing's XBRL instance instead and writes one row per class, `share_class` the
+> member's local name (`CommonClassA`, `CapitalClassC`), `known_as_of` the filing date read
+> from `filings`. A multiple takes the newest as-of date known and **sums every class counted
+> at that date**; classes counted on different dates are never mixed, and the classes summed
+> travel with the count (`SharesUsed.share_classes`). `CLASS_COUNTED_CIKS` in
+> `packages/ingestion/edgar.py` names the companies; the nightly refresh reads their newest
+> report, and `scripts/ingest_edgar.py` backfills every 10-K and 10-Q.
+
 #### 50–54. The entity graph
 
 ```sql
@@ -1453,32 +1649,141 @@ ways. One internal key ties them together:
 > manufacturer's revenue. [TEAM_BRIEF.md Part 3](../TEAM_BRIEF.md) item 2 warns: *"GTCO's income
 > statement has no 'revenue' line… A schema built on MTN will not survive a bank."* Mapping them
 > together produces a number that looks comparable and is not — a silent error no test catches.
+>
+> **Reading GTCO's actual filing made this stronger still.** Its income statement does not print
+> "Gross earnings" either: the statement opens with two interest-income lines, and "Gross
+> Earnings" appears in the **Directors' Report** as a computed KPI. So `gross_earnings` is
+> `[built]` but **not required** — marking it required forced every bank into either an
+> off-statement derivation or a false `not_in_filing`.
 
-Hence **two templates** ([DATA_FOUNDATION.md §3.4](../DATA_FOUNDATION.md)): `non_financial` and
-`financial`, with the bank chart covering gross earnings, net interest income, impairments and
-deposits.
+### 4.1 Templates — three, not two
 
-Mappings from [DATA_FOUNDATION.md §3.4](../DATA_FOUNDATION.md):
+[DATA_FOUNDATION.md §3.4](../DATA_FOUNDATION.md) specifies `non_financial` and `financial`.
+[docs/10 §2.7](10_PRE_BUILD_CORRECTIONS.md) widened the enum for insurers, and migration `0020`
+seeded it. A key marked `both` belongs to every template.
 
-| Canonical key | US GAAP XBRL | Nigerian IFRS labels |
+| Template | Keys in v1 | Shape |
 |---|---|---|
-| `revenue` | `Revenues`, `RevenueFromContractWithCustomerExcludingAssessedTax` | "Revenue", "Turnover" |
-| `operating_profit` | `OperatingIncomeLoss` | "Results from operating activities" |
-| `profit_after_tax` | `NetIncomeLoss` | "Profit/(loss) for the year" |
-| `total_assets` | `Assets` | "Total assets" |
-| `total_equity` | `StockholdersEquity` | "Total equity" |
-| `cash_from_ops` | `NetCashProvidedByUsedInOperatingActivities` | "Net cash from operating activities" |
-| `gross_earnings` | — | "Gross earnings" (banks only) |
-| `net_interest_income` | — | "Net interest income" (banks only) |
-| `fx_loss_net` | — | "Net foreign exchange loss" |
+| `both` | 11 | what all three print: `profit_before_tax` through `dividends_paid` |
+| `non_financial` | 14 | revenue, cost of sales, operating profit, finance income and costs |
+| `financial` | 21 | interest income, the earning-asset base, impairments, deposits |
+| `insurance` | 19 | **both IFRS 17 eras** — see §4.3 |
+
+**Known gap: the `insurance` template is IFRS 17 shaped, and a US insurer does not fit it.**
+`companies.statement_template` uses a sector vocabulary (`bank`, `insurance`, `non_financial`,
+`both`) which `_chart_template` in `packages/ingestion/edgar.py` translates into the chart's.
+It currently sends `insurance` to `financial`, i.e. the bank chart — a placeholder its own
+docstring flagged as lasting *"until the chart grows a third shape"*.
+
+The third shape now exists, but **routing US insurers into it would not help**, because every
+`insurance` mapping is `ng_ifrs_label`: the template was built from AIICO's IFRS 17 and
+pre-IFRS 17 statements, and IFRS 17 "Insurance revenue" is a specific construct (release of the
+contractual service margin plus expected claims), not a US health insurer's total revenues.
+Mapping them to one key would repeat the `gross_earnings` → `revenue` error exactly.
+
+The live consequence is visible today. **UnitedHealth Group is stored with no `revenue` row at
+all** — its 308 statements carry `gross_earnings` and `net_interest_income`, 117 rows each,
+every one NULL, because those are bank keys a health insurer will never report. Meanwhile
+UnitedHealth does file `Revenues` ($447,567m FY2025), `OperatingIncomeLoss` ($18,964m),
+`IncomeTaxExpenseBenefit`, `NetIncomeLoss`, `Assets` and `InterestExpense` — all of them
+already mapped under `non_financial` and `both`, and none of them reachable from the template it
+was given.
+
+So `insurance` → `non_financial` is right for the XBRL path: it fits UnitedHealth *as a profit
+and loss account*, which is accurate as far as it goes, and it is strictly better than two
+permanently-empty bank keys. It does not capture medical costs or a loss ratio; a US GAAP
+insurance template would, and is not in scope for v1. Changing the routing only affects what
+future runs write — **repopulating UnitedHealth's stored statements needs a re-run, which is a
+data operation, not a code change.**
+
+### 4.2 Mappings — v1, as read off the filings
+
+Migration `0020` seeded **65 keys and 135 mappings** as chart version `v1`. v0.1 is untouched and
+keeps its 23 keys, so line items already stored resolve exactly as before — that is what
+`chart_version` in the primary key buys.
+
+The Nigerian labels below are transcribed from audited filings (GTCO FY2025 and Q3 2025, AIICO
+FY2025/FY2024/FY2022, Nestlé Nigeria FY2025, MTN Nigeria FY2025, Dangote Cement FY2025), and
+the XBRL tags from JPMorgan's and Bank of America's `companyfacts`. Where several labels are
+listed they are alternates in priority order, and the first present one wins.
+
+| Canonical key | US GAAP XBRL | Nigerian IFRS labels, as printed |
+|---|---|---|
+| `revenue` | `Revenues`, `RevenueFromContractWithCustomerExcludingAssessedTax`, `SalesRevenueNet` | "Revenue" (all three industrials); "Turnover" is legacy and no 2025 filing read used it |
+| `operating_profit` | `OperatingIncomeLoss` | **three wordings, none standard**: "Operating profit" (MTN), "Results from operating activities" (Nestlé), "Profit from operating activities" (Dangote) |
+| `profit_before_tax` | `IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest` | "Profit before income tax expense" (GTCO), "Profit/(loss) before taxation" (MTN), and four more |
+| `profit_after_tax` | `NetIncomeLoss` | "Profit for the year", "Profit/(loss) for the year" |
+| `finance_costs` | — | "Finance costs" — **not** mapped to `interest_expense`; see below |
+| `finance_income` | — | "Finance income" |
+| `net_monetary_gain` | — | "Gain on net monetary position" (Dangote, IAS 29) |
+| `interest_income` | `InterestIncomeOperating` (JPM), `InterestAndDividendIncomeOperating` (BAC) | "Interest income calculated using the effective interest rate" |
+| `net_interest_income` | `InterestIncomeExpenseNet` | "Net interest income" |
+| `loan_impairment_charges` | `FinancingReceivableExcludingAccruedInterestCreditLossExpenseReversal` | "Loan impairment charges" (GTCO's exact wording) |
+| `credit_loss_provision` | `ProvisionForLoanLeaseAndOtherLosses` | — |
+| `gross_earnings` | — | "Gross earnings" — a Directors' Report KPI, not a face line |
+| `fx_loss_net` | — | "Net foreign exchange gain/(loss)" and three sign variants |
+
+**Three mapping decisions that are not obvious, and cost real money if reversed:**
+
+1. **"Finance costs" is not `interest_expense`.** All three industrials print "Finance costs"
+   paired with "Finance income"; none prints "Interest expense". Finance costs include lease
+   interest and discount unwinding, so mapping them together yields a number that looks like
+   interest and is not — the same failure mode as `gross_earnings` → `revenue`.
+2. **The total provision and the loans component are two keys.** JPMorgan files
+   `ProvisionForLoanLeaseAndOtherLosses` at $14,212m *and*
+   `FinancingReceivableExcludingAccruedInterestCreditLossExpenseReversal` at $11,264m for the
+   same year; Bank of America stopped filing the first in 2019. Ranked as alternates on one key,
+   JPMorgan would report the total and Bank of America the component, and a screen would rank
+   them against each other. §2.3 permits alternates only where they name the same measure.
+3. **MTN prints no cost of sales at all** — it presents expenses by nature — so
+   `cost_of_revenue` and `gross_profit` are optional and resolve to `not_in_filing` for a
+   telecom. Requiring them would manufacture two missing figures for a correctly filed statement.
 
 `fx_loss_net` is its own key deliberately: [DATA_FOUNDATION.md §3.3](../DATA_FOUNDATION.md)
 requires FX loss captured as a **distinct line**, because post-float Nigerian year-on-year
 comparisons are distorted by devaluation and must be annotated as such.
 
-**Building this is a manual, accounting-knowledge task** — [TEAM_BRIEF.md §2.2-G](../TEAM_BRIEF.md)
-budgets ~2 days. Draft it in P2 against XBRL; **freeze v1 in P3** once Nigerian statements have
-shown what it is missing.
+`manual` and `llm_hybrid` extractions both resolve through source system `ng_ifrs_label`; only
+`xbrl` reads `us_gaap_xbrl`. Without that mapping the 98 Nigerian rows are unreachable, and a
+hand-typed statement resolves every key to `None`.
+
+### 4.3 The IFRS 17 discontinuity — one company, two statement shapes
+
+**AIICO adopted IFRS 17 with FY2023 as the changeover year, and the face of its income statement
+changed completely.** Through FY2022 it opens with "Gross premium written" and runs through
+claims and underwriting expenses. From FY2023 it opens with "Insurance Revenue" and "Insurance
+service result". Deferred acquisition costs stop existing, folded into the contract balances.
+
+Both shapes sit **inside the extraction window**, so a FY2022 read from the FY2022 report differs
+in shape from the same year restated as a comparative inside the FY2023 report. Anyone comparing
+an insurer across 2022 and 2023 is comparing two presentations, not two years of trading.
+
+The `insurance` template therefore carries **both vocabularies at once**, and each filing fills
+whichever it prints while the other era stays honestly absent. One key set with dated mappings
+would have made the changeover invisible in the data, which is the opposite of what this schema
+is for.
+
+One mapping matches an issuer's typo on purpose: AIICO prints "Fair value through other
+**comprehesive** income" [sic], identically in FY2024 and FY2025. Both spellings are mapped. This
+is the clearest argument for mappings being rows in a table rather than logic in code — nobody
+would type that string into a parser, and a reviewer can add it in seconds without a deploy.
+
+### 4.4 Freeze status
+
+**Building this is a manual, accounting-knowledge task** —
+[TEAM_BRIEF.md §2.2-G](../TEAM_BRIEF.md) budgets ~2 days. Drafted in P2 against XBRL as v0.1;
+v1 was seeded in P3 once Nigerian statements had shown what it was missing.
+
+[docs/03](03_EXECUTION_PLAN.md) check 16 gates the freeze: *"confirm it can express 'interest
+income', 'net interest margin', and 'loan loss provision'. If it cannot, freezing now guarantees
+re-extraction later."* **v0.1 failed all three.** v1 passes all three, proven in
+`tests/integration/test_chart_v1.py`.
+
+**v1 is created, not yet frozen.** The other half of a freeze is that something has been
+extracted *through* it, and nothing has been yet. Typing a company-year against v1
+([TEAM_BRIEF.md task D](../TEAM_BRIEF.md)) is what turns "drafted from real labels" into
+"proven". Until then no row is keyed to v1, so amending it costs nothing; after the extractor
+runs, changing it means re-extracting everything.
 
 ---
 
@@ -1690,11 +1995,35 @@ disagree, and the disagreement will be silent.
 |---|---|
 | **Add a nullable column** | Alembic migration. Safe. |
 | **Add a NOT NULL column** | Three steps: add nullable → backfill → set NOT NULL. |
-| **Change a financial value** | **Never `UPDATE`.** Insert a new version, set `superseded_by`, record `corrected_by` and `correction_reason` ([CLAUDE.md](../CLAUDE.md)). |
+| **Change a financial value** | **Never `UPDATE`.** Insert a new version, set `superseded_by`, record `corrected_by` and `correction_reason` ([CLAUDE.md](../CLAUDE.md)). **Which `known_as_of` the new row gets depends on whose mistake it was — see below.** |
 | **Change the chart of accounts** | New `chart_version`. Old mappings stay valid for old rows. This is what stops a vocabulary change from forcing a re-extraction (TG7). |
 | **Change an API response shape** | Additive only within a version. Removing or retyping a field requires a new path version. |
 | **Change a cost-model parameter** | New `cost_model_params` on the run. Historical `backtest_runs` are never retro-fitted — they record what was believed at the time. |
 | **Change a regulatory threshold** | Dated configuration in `system_config`, never a constant. The NGX movement rule and Nigerian CGT both moved during planning ([TEAM_BRIEF.md Part 3](../TEAM_BRIEF.md)). |
+
+> **The `known_as_of` of a corrected figure** ([10](10_PRE_BUILD_CORRECTIONS.md) §2.10 asked
+> for this rule to be stated here; implemented in `packages/normalize/corrections.py`, TG10).
+> The two cases are opposite and getting them the wrong way round is silent:
+>
+> | `correction_type` | Whose mistake | `known_as_of` of the new version |
+> |---|---|---|
+> | `restatement` | The company republished | **The new publication date.** Both figures were true in their day, and a reader before that date must still get the earlier one |
+> | `transcription`, `extraction` | Ours — we misread or mistyped | **The original date, unchanged.** The market always had the right number |
+>
+> The second is the one that bites. If a correction of ours took a new date, every
+> point-in-time query with a decision date before the day somebody noticed would return the
+> error **forever**, baked into every backtest over that period. So the corrected row carries
+> the date the company first published, and `packages/common/pit.py` picks it because it
+> orders by `known_as_of DESC, version DESC` — the later version at the same date wins.
+>
+> **A correction versions the statement, not the line item alone.** `one_current_version` is
+> unique per `(statement_id, canonical_key)` among un-superseded rows, so two current
+> versions of one figure cannot share a statement. The corrected figure therefore lands on a
+> new statement version with every sibling carried across unchanged — the same shape
+> `StatementWriter` uses for a restatement, and what §2.3's "as known after this filing is
+> the whole statement" already implies. `restatement_flag` stays false for our own
+> corrections: it drives the page's "restated" marker, and a typo of ours is not the company
+> changing its mind.
 
 **The rule underneath all of them:** a contract change that silently alters the meaning of stored
 data is the most expensive kind of change in this project, because every derived value must be

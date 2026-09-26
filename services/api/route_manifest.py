@@ -28,7 +28,30 @@ from dataclasses import dataclass
 from enum import Enum
 
 from packages.compliance.mode import Mode
-from services.api.schemas import Health, PersonalPing, PublicPing
+from services.api.schemas import (
+    CompanyDcf,
+    CompanyDividends,
+    CompanyFilings,
+    CompanyIndicators,
+    CompanyList,
+    CompanyPrices,
+    CompanyRatioHistory,
+    CompanyRatios,
+    CompanyScenario,
+    CompanyStatements,
+    ConnectorHealthReport,
+    CorrectionRateReport,
+    DocumentStored,
+    Health,
+    HoldingsSummary,
+    MacroObservations,
+    MacroSeriesList,
+    ManualEntryAccepted,
+    PersonalPing,
+    PublicPing,
+    RecentFilings,
+    ReviewQueue,
+)
 
 __all__ = ["MANIFEST", "RouteClass", "RouteSpec", "registered_routes"]
 
@@ -59,7 +82,63 @@ class RouteSpec:
 MANIFEST: dict[str, RouteSpec] = {
     "GET /health": RouteSpec(RouteClass.INFRA, None, Health),
     "GET /v1/public/ping": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, PublicPing),
+    "GET /v1/public/macro/series": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, MacroSeriesList),
+    "GET /v1/public/macro/series/{code}/observations": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, MacroObservations
+    ),
+    "GET /v1/public/operations/connectors": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, ConnectorHealthReport
+    ),
+    "GET /v1/public/companies": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyList),
+    "GET /v1/public/summary": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, HoldingsSummary),
+    "GET /v1/public/companies/{ticker}/statements": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyStatements
+    ),
+    "GET /v1/public/companies/{ticker}/prices": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyPrices
+    ),
+    "GET /v1/public/companies/{ticker}/indicators": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyIndicators
+    ),
+    "GET /v1/public/companies/{ticker}/ratios": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyRatios
+    ),
+    "GET /v1/public/companies/{ticker}/ratios/history": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyRatioHistory
+    ),
+    "GET /v1/public/companies/{ticker}/dividends": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyDividends
+    ),
+    "GET /v1/public/companies/{ticker}/filings": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyFilings
+    ),
+    "GET /v1/public/filings/recent": RouteSpec(RouteClass.PUBLIC_DATA, Mode.PUBLIC, RecentFilings),
+    "POST /v1/public/companies/{ticker}/scenario": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyScenario
+    ),
+    "GET /v1/public/companies/{ticker}/dcf": RouteSpec(
+        RouteClass.PUBLIC_DATA, Mode.PUBLIC, CompanyDcf
+    ),
     "GET /v1/personal/ping": RouteSpec(RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, PersonalPing),
+    # P3.1 and P3.2's write surfaces. Personal-tier because they change the record:
+    # an anonymous caller must not be able to add a figure, and the name on a typed
+    # figure is the authenticated principal's.
+    "POST /v1/personal/documents": RouteSpec(
+        RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, DocumentStored
+    ),
+    # P4.4's review surface. Personal-tier not merely because it is write-adjacent: it
+    # names companies beside figures this system believes are wrong, which is an internal
+    # judgement rather than a fact about the company, and serving it anonymously would be
+    # publishing an accusation.
+    "GET /v1/personal/review/queue": RouteSpec(
+        RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, ReviewQueue
+    ),
+    "GET /v1/personal/review/correction-rate": RouteSpec(
+        RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, CorrectionRateReport
+    ),
+    "POST /v1/personal/statements": RouteSpec(
+        RouteClass.PERSONAL_ADVICE, Mode.PERSONAL, ManualEntryAccepted
+    ),
 }
 
 

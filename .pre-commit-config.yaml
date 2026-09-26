@@ -29,11 +29,19 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: end-of-file-fixer
+        # `tests/fixtures/` holds bytes captured off the wire, and their whole value is
+        # being exactly what the server sent. A fixture the repository has tidied is one
+        # that no longer proves the parser handles what arrives.
+        exclude: ^tests/fixtures/
       - id: trailing-whitespace
         # Two trailing spaces are a hard line break in Markdown. Without this flag the
         # hook silently reflows the planning documents, which are the project's source of
         # truth — and a diff full of invisible whitespace churn is one nobody reads.
         args: [--markdown-linebreak-ext=md]
+        # And the same carve-out as above, for a stronger reason: this one edits *inside*
+        # the document. Trailing space in an RSS `<description>` is content, and stripping
+        # it silently changes what the parser is being tested against.
+        exclude: ^tests/fixtures/
       - id: detect-private-key
       - id: no-commit-to-branch
         # `main` is protected by required status checks; work reaches it through a PR.

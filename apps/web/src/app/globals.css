@@ -1,0 +1,1557 @@
+/* ===========================================================================
+   The design system.
+
+   WHAT THIS LOOKS LIKE, AND WHY
+   The idiom is the one a reader already knows from a stock research site - a
+   fixed header with a ticker search, a persistent left rail, and pages that
+   are mostly dense, scannable tables. That familiarity is the point: somebody
+   who has ever looked up a share price should not have to learn where things
+   are here.
+
+   The second pass (Sep 2026) kept every class and changed the finish: a dark
+   navigation rail, white cards on a faintly tinted canvas so a panel reads as
+   an object rather than a ruled box, one typeface family (Geist Sans for
+   words, Geist Mono for tickers and codes), and a tighter type scale. The
+   *page* is still light; only the chrome is dark.
+
+   THE PALETTE
+   - No dark theme. No gold, amber or orange anywhere.
+   - **Blue means "you can act on this"** - links, buttons, focus, the active
+     nav item. It is never a status colour, so blue never reads two ways.
+   - Status is green / violet / red, always beside a word. Colour is never the
+     only signal (WCAG 1.4.1).
+
+   MARKET DIRECTION
+   `--up` and `--down` are green and red, because that convention is older
+   than any of us and fighting it would cost a reader more than it bought.
+   They are *always* rendered with an arrow (`.delta` below), so a
+   red-green-blind reader gets the direction from the glyph. They are separate
+   tokens from `--ok` and `--broken` on purpose: a price falling is not a
+   failure, and a connector failing is not a price.
+   =========================================================================== */
+
+:root {
+  /* Surfaces. `--paper` is a card and what a chart canvas paints; `--canvas`
+     is the page behind the cards. */
+  --canvas: #f4f6f9;
+  --paper: #ffffff;
+  --paper-sunk: #f7f9fb;
+  --paper-raised: #ffffff;
+
+  /* Ink. `--ink-faint` is held at 4.6:1 on white so small print still passes
+     WCAG AA - it is used for 11px labels, where a lighter grey would not. */
+  --ink: #0f1728;
+  --ink-soft: #475467;
+  --ink-faint: #667085;
+
+  --line: #e6e9ef;
+  --line-strong: #d0d6df;
+  --line-hover: #b8c1ce;
+
+  /* Interaction. One blue, three weights. */
+  --act: #2257e6;
+  --act-deep: #1a44b8;
+  --act-wash: #eef3ff;
+  --act-ring: rgb(34 87 230 / 18%);
+  --act-on-chrome: #8fb0ff; /* the blue, lifted to pass contrast on the dark rail */
+  --row-hover: #f5f8ff;
+
+  /* Status: the system's own health. Never blue, always beside a word. */
+  --ok: #0f6e45;
+  --ok-wash: #e8f6ee;
+  --attention: #5a44c0;
+  --attention-wash: #f0edfc;
+  --broken: #b42336;
+  --broken-wash: #fdeef0;
+
+  /* Market direction. Always paired with an arrow - see `.delta`. */
+  --up: #0e7a4b;
+  --down: #c8322b;
+
+  /* The chrome: brand block and rail. */
+  --chrome: #0b1324;
+  --chrome-raised: #131d33;
+  --chrome-line: rgb(255 255 255 / 7%);
+  --chrome-ink: #a3adbf;
+  --chrome-ink-strong: #f5f7fb;
+  --chrome-ink-faint: #6f7a90;
+  --brand-mark-ink: #ffffff;
+
+  /* Spacing on a 4px rhythm, named for intent. */
+  --gap-xs: 4px;
+  --gap-sm: 8px;
+  --gap: 16px;
+  --gap-lg: 24px;
+  --gap-xl: 40px;
+
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-lg: 12px;
+
+  /* Layout. The rail is fixed; the main column breathes. */
+  --rail: 224px;
+  --header: 60px;
+  --measure: 1440px;
+  --prose: 74ch;
+
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 4%), 0 1px 3px rgb(16 24 40 / 5%);
+  --shadow-pop: 0 12px 32px -4px rgb(16 24 40 / 16%), 0 4px 8px -2px rgb(16 24 40 / 6%);
+
+  /* Type. Smaller than prose defaults: this is a data product. */
+  --font-sans:
+    var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    var(--font-geist-mono), ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
+    monospace;
+  --fs-micro: 0.6875rem; /* 11px - table headers, tags */
+  --fs-small: 0.8125rem; /* 13px - table body, notes */
+  --fs-base: 0.875rem; /* 14px - the working size */
+  --fs-body: 0.9375rem; /* 15px - explanatory prose only */
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Light only, and stated rather than left to chance: a reader whose OS is
+     in dark mode still gets this page, because a half-themed financial table
+     is worse than an unthemed one. */
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* Every figure in this app is tabular. Lining, fixed-width digits so a column
+   of numbers forms a column rather than a ragged edge. */
+.num,
+td.num,
+th.num,
+.metric-value,
+.delta,
+table {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+a {
+  color: var(--act);
+  text-decoration: none;
+  text-underline-offset: 3px;
+  transition: color 120ms var(--ease);
+}
+a:hover {
+  color: var(--act-deep);
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: 2px solid var(--act);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+::selection {
+  background: var(--act-wash);
+  color: var(--ink);
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--gap);
+  top: -48px;
+  z-index: 100;
+  background: var(--paper);
+  color: var(--act-deep);
+  padding: var(--gap-sm) var(--gap);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+.skip-link:focus {
+  top: var(--gap-sm);
+}
+
+/* ---------------------------------------------------------------------------
+   THE SHELL
+   Header across the top, rail down the left, content in the rest. A grid
+   rather than fixed positioning, so the content column can never slide under
+   the rail at an awkward width.
+
+   The rail's dark column is painted by the shell's own background rather than
+   by the rail, because the rail is sticky and exactly one screen tall - on a
+   long page it would stop and leave the canvas showing beneath it.
+   --------------------------------------------------------------------------- */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail) minmax(0, 1fr);
+  grid-template-rows: var(--header) minmax(0, 1fr) auto;
+  grid-template-areas:
+    "brand header"
+    "rail  main"
+    "rail  footer";
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: linear-gradient(
+    to right,
+    var(--chrome) var(--rail),
+    var(--canvas) var(--rail)
+  );
+}
+
+.brand {
+  grid-area: brand;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--gap);
+  background: var(--chrome);
+  border-bottom: 1px solid var(--chrome-line);
+}
+.brand a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--chrome-ink-strong);
+  border-radius: var(--radius-sm);
+}
+.brand a:hover {
+  text-decoration: none;
+  color: var(--chrome-ink-strong);
+}
+.brand-mark {
+  flex: 0 0 auto;
+  color: var(--act);
+}
+.brand-name {
+  display: flex;
+  flex-direction: column;
+  font-weight: 650;
+  font-size: 0.9375rem;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+.brand-sep {
+  color: var(--chrome-ink-faint);
+}
+.brand-sub {
+  font-size: 0.625rem;
+  font-weight: 550;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--chrome-ink-faint);
+  margin-top: 3px;
+}
+
+.topbar {
+  grid-area: header;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 0 32px;
+  border-bottom: 1px solid var(--line);
+  background: rgb(255 255 255 / 86%);
+  backdrop-filter: saturate(180%) blur(10px);
+  -webkit-backdrop-filter: saturate(180%) blur(10px);
+}
+.topbar-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--fs-micro);
+  font-weight: 550;
+  color: var(--ink-soft);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-wash);
+}
+
+.rail {
+  grid-area: rail;
+  position: sticky;
+  top: var(--header);
+  align-self: start;
+  max-height: calc(100vh - var(--header));
+  overflow-y: auto;
+  padding: 20px 12px;
+  background: var(--chrome);
+}
+
+.main {
+  grid-area: main;
+  min-width: 0; /* lets a wide table scroll instead of stretching the grid */
+  padding: 28px 32px 40px;
+  width: 100%;
+  max-width: var(--measure);
+}
+
+/* The rail's links. The active one carries a blue marker as well as a
+   brighter label, so the current section is legible without relying on
+   colour alone. */
+.rail-group {
+  margin-bottom: 22px;
+}
+.rail-label {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--chrome-ink-faint);
+  padding: 0 10px;
+  margin-bottom: 6px;
+}
+.rail a {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-sm);
+  color: var(--chrome-ink);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  transition:
+    background-color 120ms var(--ease),
+    color 120ms var(--ease);
+}
+.rail-icon {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+.rail a:hover {
+  background: rgb(255 255 255 / 5%);
+  color: var(--chrome-ink-strong);
+  text-decoration: none;
+}
+.rail a[aria-current="page"] {
+  background: var(--chrome-raised);
+  color: var(--chrome-ink-strong);
+  font-weight: 600;
+}
+.rail a[aria-current="page"] .rail-icon {
+  color: var(--act-on-chrome);
+  opacity: 1;
+}
+.rail a[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--act);
+}
+.rail a:focus-visible {
+  outline-color: var(--act-on-chrome);
+}
+
+/* ---------------------------------------------------------------------------
+   SEARCH
+   The header's main job. A ticker box that looks like a ticker box.
+   --------------------------------------------------------------------------- */
+
+.search {
+  position: relative;
+  flex: 1 1 auto;
+  max-width: 460px;
+}
+.search input {
+  width: 100%;
+  height: 38px;
+  padding: 0 36px 0 36px;
+  font: inherit;
+  font-size: var(--fs-base);
+  color: var(--ink);
+  background: var(--paper-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  transition:
+    border-color 120ms var(--ease),
+    box-shadow 120ms var(--ease),
+    background-color 120ms var(--ease);
+}
+.search input:hover {
+  border-color: var(--line-strong);
+}
+.search input::placeholder {
+  color: var(--ink-faint);
+}
+.search input:focus {
+  background: var(--paper);
+  border-color: var(--act);
+  outline: none;
+  box-shadow: 0 0 0 4px var(--act-ring);
+}
+.search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-faint);
+  pointer-events: none;
+  line-height: 0;
+}
+.search-kbd {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  pointer-events: none;
+}
+.search input:focus ~ .search-kbd {
+  display: none;
+}
+/* The results list, when the box has matches. */
+.search-results {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 6px;
+  margin: 0;
+  list-style: none;
+}
+.search-results a {
+  display: flex;
+  align-items: center;
+  gap: var(--gap);
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+}
+.search-results a:hover,
+.search-results a:focus-visible,
+.search-results a[aria-selected="true"] {
+  background: var(--act-wash);
+  text-decoration: none;
+}
+.search-results .ticker {
+  flex: 0 0 64px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--act-deep);
+}
+.search-results .name {
+  color: var(--ink-soft);
+  font-size: var(--fs-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-empty {
+  padding: 10px;
+  font-size: var(--fs-small);
+  color: var(--ink-faint);
+}
+
+/* ---------------------------------------------------------------------------
+   PAGE HEADINGS AND THE SECURITY HEADER
+   --------------------------------------------------------------------------- */
+
+h1 {
+  font-size: 1.625rem;
+  line-height: 1.2;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  margin: 0 0 6px;
+}
+h2 {
+  font-size: 1.0625rem;
+  font-weight: 620;
+  letter-spacing: -0.012em;
+  margin: 36px 0 14px;
+}
+h2:first-child {
+  margin-top: 0;
+}
+h3 {
+  font-size: var(--fs-base);
+  font-weight: 620;
+  letter-spacing: -0.005em;
+  margin: var(--gap-lg) 0 var(--gap-sm);
+}
+.page-note {
+  color: var(--ink-soft);
+  font-size: var(--fs-base);
+  margin: 0 0 var(--gap-lg);
+  max-width: var(--prose);
+}
+
+/* A breadcrumb above a company. */
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  font-size: var(--fs-small);
+  color: var(--ink-faint);
+  margin: 0 0 14px;
+}
+.crumbs a {
+  color: var(--ink-soft);
+}
+.crumbs a:hover {
+  color: var(--act-deep);
+}
+.crumbs [aria-current="page"] {
+  font-family: var(--font-mono);
+  color: var(--ink);
+  font-weight: 550;
+}
+
+/* The block at the top of a company page: symbol, name, price, change. */
+.security-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--gap-sm) 14px;
+  padding: 20px 24px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 20px;
+}
+.ticker-badge {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: linear-gradient(145deg, var(--chrome-raised), var(--chrome));
+  color: var(--chrome-ink-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+.security-head .symbol {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  /* The symbol is the page's `<h1>` - the semantically right element - so the
+     global heading margin has to be cleared here or it sits 4px low against
+     the name beside it. */
+  margin: 0;
+  line-height: 1.1;
+}
+.security-head .legal-name {
+  font-size: var(--fs-body);
+  color: var(--ink-soft);
+}
+.security-head .exchange {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  background: var(--paper-sunk);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+}
+.security-head .price {
+  margin-left: auto;
+  font-size: 1.75rem;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+.security-head .delta {
+  font-size: var(--fs-small);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+}
+.security-head .delta.up {
+  background: var(--ok-wash);
+}
+.security-head .delta.down {
+  background: var(--broken-wash);
+}
+.security-head .asof {
+  flex-basis: 100%;
+  font-size: var(--fs-small);
+  color: var(--ink-faint);
+}
+/* The first of the two provenance lines opens a ruled footer under the
+   figures, so the heading reads as one unit and its sources as another. */
+.security-head .asof:first-of-type {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 8px;
+}
+
+/* A price move. The arrow is not decoration - it is what carries the
+   direction for a reader who cannot separate the two colours. */
+.delta {
+  font-weight: 600;
+}
+.delta.up {
+  color: var(--up);
+}
+.delta.down {
+  color: var(--down);
+}
+.delta.flat {
+  color: var(--ink-faint);
+}
+.delta.up::before {
+  content: "\25B2\00A0";
+  font-size: 0.8em;
+}
+.delta.down::before {
+  content: "\25BC\00A0";
+  font-size: 0.8em;
+}
+.delta.flat::before {
+  content: "\2014\00A0";
+}
+
+/* ---------------------------------------------------------------------------
+   TABS
+   --------------------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--gap-lg);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+.tabs a {
+  padding: 10px 14px 12px;
+  color: var(--ink-soft);
+  font-size: var(--fs-base);
+  font-weight: 550;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition:
+    color 120ms var(--ease),
+    border-color 120ms var(--ease);
+}
+.tabs a:hover {
+  color: var(--ink);
+  text-decoration: none;
+  border-bottom-color: var(--line-strong);
+}
+.tabs a[aria-current="page"] {
+  color: var(--act-deep);
+  font-weight: 650;
+  border-bottom-color: var(--act);
+}
+
+/* ---------------------------------------------------------------------------
+   METRIC GRID
+   Label above figure, tight. The unit a scanner reads first.
+   --------------------------------------------------------------------------- */
+
+/* Borders on the cells, not a 1px gap over a coloured background. The gap
+   trick is tidier to write and wrong here: `auto-fit` only collapses a track
+   that is empty in *every* row, so ten figures in six columns leaves two
+   phantom cells showing the background through - grey blocks that read as
+   missing data. Drawing the lines per cell and clipping the overflow gives
+   the same grid with nothing behind it. */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  margin-bottom: var(--gap-lg);
+}
+.metric {
+  background: var(--paper);
+  padding: 14px 16px 16px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  margin: 0 -1px -1px 0;
+}
+.metric-name {
+  font-size: var(--fs-micro);
+  font-weight: 550;
+  text-transform: uppercase;
+  letter-spacing: 0.035em;
+  color: var(--ink-faint);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* For a label too long to cut. "Free cash flow per share" needs 158px and gets
+   135 at 1280, and a silently truncated label is worse than a two-line one -
+   the reader cannot tell which figure they are looking at. */
+/* Two fixed lines, not a minimum. With `min-height` a one-line label and a
+   two-line one produce different tile heights, so the figures below them stop
+   sharing a baseline across the row - which is the whole reason the row is a
+   grid. Two lines is the cap; a label needing three should be shortened. */
+.metric-name.wrap {
+  white-space: normal;
+  overflow: hidden;
+  height: 2.4em;
+  line-height: 1.2;
+}
+.metric-value {
+  font-size: 1.3125rem;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+/* An absent figure is never a zero and never an empty cell. It is smaller and
+   quieter than a real number so a column of them does not read as data. */
+.absent,
+.metric-value.absent,
+td.absent {
+  font-size: var(--fs-small);
+  font-weight: 400;
+  letter-spacing: normal;
+  color: var(--ink-faint);
+  /* An absence phrase is a short fixed string and must never wrap. Measured on
+     /macro: "not loaded yet" breaking across two lines in a 104px column took
+     rows from 54px to 74px, and a wrapped phrase reads like a wrapped value -
+     which is the one thing an absence must not look like. */
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   PANELS
+   --------------------------------------------------------------------------- */
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--paper-raised);
+  box-shadow: var(--shadow-card);
+  margin-bottom: var(--gap-lg);
+  overflow: hidden;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+}
+.panel-head h2,
+.panel-head h3 {
+  margin: 0;
+  font-size: var(--fs-body);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+.panel-head a {
+  font-size: var(--fs-small);
+  font-weight: 550;
+}
+.panel-body {
+  padding: 18px;
+}
+.panel-body > :last-child {
+  margin-bottom: 0;
+}
+/* A panel whose body is a table needs the caption and the first header cell
+   to line up with the panel title, not float 16px in from it. */
+.panel > .scroller caption,
+.panel > p {
+  padding-left: 18px;
+  padding-right: 18px;
+}
+.grid {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+}
+
+/* ---------------------------------------------------------------------------
+   TABLES
+   The core of the product. Dense, aligned, and horizontally scrollable inside
+   their own box rather than by widening the page.
+   --------------------------------------------------------------------------- */
+
+.scroller {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  /* A containment context so a `<caption>` can be sized against the *scroller*
+     rather than the table or the viewport - see the caption rule below. */
+  container-type: inline-size;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-small);
+}
+/* A `<caption>` is as wide as its *table*, so on a 1279px table it laid out
+   across 1279px and only the leftmost slice was readable without scrolling
+   sideways. Stuck to the scroller's left edge it stays in view, and `100cqw` -
+   the scroller's own inline size - is what bounds it.
+
+   An earlier attempt used `100vw`. That was wrong in the same direction it was
+   meant to fix: the scroller is about 271px inside a 320px viewport once the
+   page padding is taken off, so a 320px cap still clipped the caption on every
+   table in the app by roughly 49px. */
+caption {
+  text-align: left;
+  font-size: var(--fs-small);
+  color: var(--ink-soft);
+  padding: 12px var(--gap) 10px;
+  position: sticky;
+  left: 0;
+  max-width: 100cqw;
+}
+/* Not sticky, deliberately. `position: sticky` on a header only works against
+   an ancestor that scrolls in that axis, and every table here sits in
+   `.scroller` - where `overflow-x: auto` computes `overflow-y: auto`, making
+   the scroller the scroll container for a box that never scrolls vertically.
+   The rule was present and did nothing. A sticky header would need the
+   scroller to own a max-height and scroll the rows itself, which is a
+   different table than this one. */
+thead th {
+  background: var(--paper-sunk);
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  padding: 9px 14px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+tbody td,
+tbody th {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: baseline;
+  color: var(--ink);
+}
+/* A row label is a label, not a column heading: not uppercase, not sticky. */
+tbody th[scope="row"] {
+  font-weight: 550;
+  color: var(--ink);
+  background: transparent;
+  position: static;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: var(--fs-small);
+  white-space: nowrap;
+}
+/* A ticker labelling a row is a code, and reads as one. */
+tbody th[scope="row"] > a:only-child {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+td.num,
+th.num {
+  text-align: right;
+  /* A figure never wraps. `1,766` broken across two lines is not a number any
+     more, and once one cell wraps the whole row's height doubles. */
+  white-space: nowrap;
+}
+/* Opt-in for a body cell that must hold one line - a date, a ticker, a pill.
+   Without this, the moment a table exceeds its `.scroller` every column
+   collapses to min-content and `31 Aug 2026` becomes three lines: a 29px row
+   turns into 73px and the density this design exists for is gone. */
+td.nowrap,
+th.nowrap {
+  white-space: nowrap;
+}
+/* Long prose in a cell. Not scoped to `td`: a row header is the cell most
+   likely to hold it. Its 18rem floor buys even columns in a table that was
+   going to scroll anyway, and forces scrolling on a narrow one that would
+   otherwise fit - so it is applied deliberately, not by default. */
+.wrap-cell {
+  white-space: normal;
+  min-width: 18rem;
+}
+/* An opt-in sticky row label. `th[scope="row"]` is deliberately `static` above,
+   which is right for a table you can read across - but a statements table is
+   line items down and twenty fiscal periods across, and by the tenth column
+   the line's name has scrolled away and the figures mean nothing. It needs an
+   opaque background of its own, because the row-hover rule paints one and a
+   transparent sticky cell would let the scrolled columns show through it. */
+.scroller th[scope="row"].sticky {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--paper-raised);
+  box-shadow: inset -1px 0 0 var(--line);
+}
+tbody tr {
+  transition: background-color 80ms var(--ease);
+}
+tbody tr:hover td,
+tbody tr:hover th[scope="row"] {
+  background: var(--row-hover);
+}
+/* After the hover rule, so a hovered sticky label still tints with its row. */
+.scroller tbody tr:hover th[scope="row"].sticky {
+  background: var(--row-hover);
+}
+tbody tr:last-child td,
+tbody tr:last-child th {
+  border-bottom: none;
+}
+
+/* A sortable column header.
+   The global `button` rule is a filled blue control 34px tall, which is wrong
+   inside a `<th>` and leaks: its `min-height` alone took the header row from
+   33px to 50px and widened the table by ~16px a column. This resets it to the
+   header's own type, and the arrow is drawn from `aria-sort` - so the state a
+   screen reader announces is the state that draws, and the two cannot diverge. */
+thead th > button.sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-xs);
+  min-height: 0;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+thead th > button.sort:hover {
+  color: var(--act-deep);
+  background: none;
+}
+/* Unsorted columns show a faint two-way arrow only on hover, so ten headers do
+   not read as ten pieces of state. The sorted one always shows its direction. */
+thead th > button.sort::after {
+  content: "\2195";
+  color: var(--ink-faint);
+  opacity: 0;
+  font-size: 0.9em;
+}
+thead th > button.sort:hover::after,
+thead th > button.sort:focus-visible::after {
+  opacity: 1;
+}
+thead th[aria-sort="ascending"] > button.sort::after {
+  content: "\2191";
+  color: var(--act);
+  opacity: 1;
+}
+thead th[aria-sort="descending"] > button.sort::after {
+  content: "\2193";
+  color: var(--act);
+  opacity: 1;
+}
+thead th[aria-sort="ascending"] > button.sort,
+thead th[aria-sort="descending"] > button.sort {
+  color: var(--act-deep);
+}
+
+/* An `<svg>` is `display: inline` by default, so it sits on the text baseline
+   with descender space beneath it and rides high in a table cell. */
+.sparkline {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* A chart that fills its panel. Without this, sizing one meant geometry
+   attributes only - `preserveAspectRatio="none"` plus `vector-effect` on every
+   stroke - which works but forbids `<text>` inside the SVG, because non-uniform
+   scaling would distort the glyphs. */
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.scroll-hint {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  /* Bottom padding too: inside a `.panel` this is the last element, and with
+     `0` it sat flush on the panel's border. */
+  padding: 10px 18px;
+  margin: 0;
+  border-top: 1px solid var(--line);
+  background: var(--paper-sunk);
+}
+/* No media query. Whether a table scrolls is a fact about the *table* and its
+   container, not about the viewport - the screener is 1279px inside a ~1007px
+   column at 1280, so hiding the hint above 900px hid it from exactly the
+   readers who needed it. The wording is conditional ("if this table is wider
+   than your screen") and therefore true at every width, so showing it always
+   is honest; one line of 11px faint text costs less than a reader not knowing
+   a column exists. Showing it only where a table really overflows would mean
+   measuring in the browser, which is not worth a client component. */
+
+/* ---------------------------------------------------------------------------
+   THE DISCLOSURE
+   A one-line summary with a small chevron; on opening, the summary is
+   *replaced* by the full detail rather than the detail appearing beneath it.
+
+   Native `<details>`, so it is keyboard-operable and works with no
+   JavaScript; the swap is one CSS rule rather than a client component.
+   --------------------------------------------------------------------------- */
+
+.disclose {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  padding: 0;
+  margin-bottom: var(--gap-lg);
+  font-size: var(--fs-small);
+  color: var(--ink-soft);
+  transition: border-color 120ms var(--ease);
+}
+.disclose:hover {
+  border-color: var(--line-strong);
+}
+.disclose > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  list-style: none;
+  color: var(--ink-soft);
+  border-radius: var(--radius);
+}
+.disclose > summary::-webkit-details-marker {
+  display: none;
+}
+/* The "i" mark: says "an explanation lives here" before the text is read. */
+.disclose > summary::before {
+  content: "i";
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--act-wash);
+  color: var(--act-deep);
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1;
+}
+/* The chevron. Small, quiet, and it rotates so the control's state is visible
+   without reading the text beside it. */
+.disclose > summary::after {
+  content: "";
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  margin-right: 2px;
+  border-right: 1.5px solid var(--ink-faint);
+  border-bottom: 1.5px solid var(--ink-faint);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 160ms var(--ease);
+}
+.disclose[open] > summary::after {
+  transform: translateY(2px) rotate(-135deg);
+}
+.disclose > summary:hover {
+  color: var(--ink);
+}
+.disclose > summary:hover::after {
+  border-color: var(--act);
+}
+/* The swap itself: the summary text goes, the detail arrives. */
+.disclose[open] .brief {
+  display: none;
+}
+.disclose .full {
+  display: none;
+}
+.disclose[open] .full {
+  display: block;
+  max-width: var(--prose);
+  color: var(--ink-soft);
+  font-size: var(--fs-small);
+  line-height: 1.65;
+  padding: 0 14px 14px 42px;
+}
+.disclose .full > :first-child {
+  margin-top: 0;
+}
+.disclose .full > :last-child {
+  margin-bottom: 0;
+}
+.disclose .full p {
+  margin: 0 0 var(--gap-sm);
+}
+/* The `--prose` cap is for reading and wrong for a table. A thirteen-column
+   table inside a disclosure was being squeezed to 74ch and forced to scroll on
+   a 1440px screen - the cap protecting the prose was hiding the data. */
+.disclose .full > .scroller,
+.disclose .full > table {
+  max-width: none;
+}
+.disclose[open] {
+  background: var(--paper);
+}
+.disclose[open] > summary {
+  font-weight: 600;
+  color: var(--ink);
+}
+.disclose[open] > summary::before {
+  content: "i";
+}
+
+/* ---------------------------------------------------------------------------
+   STATUS, NOTICES, MISC
+   --------------------------------------------------------------------------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-micro);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 2px 8px 2px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pill.ok {
+  background: var(--ok-wash);
+  color: var(--ok);
+  border-color: rgb(15 110 69 / 16%);
+}
+.pill.attention {
+  background: var(--attention-wash);
+  color: var(--attention);
+  border-color: rgb(90 68 192 / 16%);
+}
+.pill.broken {
+  background: var(--broken-wash);
+  color: var(--broken);
+  border-color: rgb(180 35 54 / 16%);
+}
+/* "Never ran" is an absence of information, not a failure. Grey, not red. */
+.pill.neutral,
+.pill.never_ran {
+  background: var(--paper-sunk);
+  color: var(--ink-soft);
+  border-color: var(--line);
+}
+
+.notice {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--act);
+  border-radius: var(--radius);
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+  padding: 14px 18px;
+  margin-bottom: var(--gap-lg);
+  font-size: var(--fs-small);
+}
+.notice.bad {
+  border-left-color: var(--broken);
+  background: var(--broken-wash);
+}
+/* Both, because a notice is often the first thing after the page's `<h1>` -
+   and §9 forbids skipping a level, so that title has to be able to be an `h2`
+   without inheriting the section spacing of one. */
+.notice h2,
+.notice h3 {
+  margin: 0 0 var(--gap-xs);
+  font-size: var(--fs-base);
+  font-weight: 650;
+}
+.notice p {
+  margin: 0 0 var(--gap-sm);
+  max-width: var(--prose);
+}
+.notice p:last-child {
+  margin-bottom: 0;
+}
+
+/* Where a figure came from. Small, quiet, and never paraphrased. */
+.source {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  border-top: 1px dashed var(--line-strong);
+  padding-top: 10px;
+  margin-top: var(--gap);
+}
+.source dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs) var(--gap);
+  margin: 0;
+}
+.source dt {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.source dd {
+  margin: 0 var(--gap) 0 0;
+}
+
+/* A field hint or an aside: the smallest, quietest text there is. Existed
+   only inside `.metric-name`, `.source` and `.scroll-hint`, so a form field
+   had nothing to reach for. */
+.hint {
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* A marker attached to a figure - a restatement flag, a footnote letter. Small
+   and raised, and distinct from `.hint`, which is an aside *beside* a field
+   rather than a mark *on* a value. Carries no colour of its own: a marker that
+   was red would be making a claim about the figure it marks. */
+.mark {
+  font-size: var(--fs-micro);
+  font-weight: 650;
+  color: var(--ink-faint);
+  vertical-align: super;
+  line-height: 1;
+  margin-left: 2px;
+  cursor: help;
+}
+
+.muted {
+  color: var(--ink-soft);
+}
+.faint {
+  color: var(--ink-faint);
+}
+.prose {
+  max-width: var(--prose);
+  font-size: var(--fs-body);
+  line-height: 1.7;
+}
+.prose p {
+  margin: 0 0 var(--gap);
+}
+code,
+kbd,
+samp {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+button,
+.button {
+  /* `inline-flex` so the class works on an `<a>`: a plain inline anchor
+     ignores `min-height` and vertical padding, so a link styled as a button
+     came out the wrong height and off-centre. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font: inherit;
+  font-size: var(--fs-base);
+  font-weight: 550;
+  color: #fff;
+  background: var(--act);
+  border: 1px solid var(--act);
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  min-height: 36px;
+  cursor: pointer;
+  box-shadow:
+    0 1px 2px rgb(16 24 40 / 10%),
+    inset 0 1px 0 rgb(255 255 255 / 12%);
+  transition:
+    background-color 120ms var(--ease),
+    border-color 120ms var(--ease),
+    color 120ms var(--ease);
+}
+button:hover,
+.button:hover {
+  background: var(--act-deep);
+  border-color: var(--act-deep);
+  color: #fff;
+  text-decoration: none;
+}
+button:active,
+.button:active {
+  transform: translateY(0.5px);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.button.quiet {
+  background: var(--paper);
+  color: var(--ink-soft);
+  border-color: var(--line-strong);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 5%);
+}
+.button.quiet:hover {
+  background: var(--paper-sunk);
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+/* A range strip or a set of toggles. `.panel-head` does not wrap, so at 320px a
+   five-item strip broke out of it; this is the row those controls belong in. */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 var(--gap);
+}
+/* A row of range or overlay toggles is a toolbar, not a set of calls to
+   action: shorter and quieter than a standalone button. */
+.controls .button {
+  min-height: 32px;
+  padding: 5px 12px;
+  font-size: var(--fs-small);
+}
+
+/* Five range buttons in a row do not want to be 36px tall each. */
+.button.small,
+button.small {
+  min-height: 28px;
+  padding: 3px 11px;
+  font-size: var(--fs-small);
+}
+
+/* Available to a screen reader, invisible on screen. For a control whose
+   accessible name needs to be fuller than its visible label - "1Y" is enough to
+   look at and not enough to hear. Not `display: none`, which removes it from
+   the accessibility tree along with everything else. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* A chart's box before the library mounts. Without it the panel is empty and
+   then jumps to full height, moving everything under it. */
+.chart-frame {
+  min-height: 320px;
+}
+
+/* Inputs - the valuation form, the screener filter, the financials controls. */
+label {
+  display: block;
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+/* `:where()` gives this default no specificity. Written as a bare selector it
+   weighed the same as `.search input` and, coming later, beat it - taking the
+   header search's padding from 30px to 8px so the magnifier sat on the first
+   letter, and replacing its sunk background and border. A default must lose to
+   every rule that names a component. */
+:where(input[type="text"], input[type="number"], input[type="date"], select) {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: var(--fs-base);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%);
+  transition:
+    border-color 120ms var(--ease),
+    box-shadow 120ms var(--ease);
+}
+:where(input, select):hover {
+  border-color: var(--line-hover);
+}
+input:focus,
+select:focus {
+  border-color: var(--act);
+  outline: none;
+  box-shadow: 0 0 0 4px var(--act-ring);
+}
+
+/* The disclaimer. In the shell, so no page can forget it. */
+.disclaimer {
+  grid-area: footer;
+  font-size: var(--fs-micro);
+  line-height: 1.6;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--line);
+  padding: 18px 32px 24px;
+  max-width: var(--measure);
+}
+.disclaimer b {
+  color: var(--ink-soft);
+}
+
+/* ---------------------------------------------------------------------------
+   NARROW SCREENS
+   The rail becomes a horizontal strip under the header. Nothing is hidden and
+   nothing needs a menu button: there are five destinations.
+   --------------------------------------------------------------------------- */
+
+@media (max-width: 860px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--header) var(--header) auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "brand"
+      "header"
+      "rail"
+      "main"
+      "footer";
+    background: var(--canvas);
+  }
+  .brand {
+    position: static;
+    height: var(--header);
+  }
+  .topbar {
+    padding: 0 var(--gap);
+  }
+  .topbar-meta {
+    display: none;
+  }
+  .search {
+    max-width: none;
+  }
+  .rail {
+    position: static;
+    max-height: none;
+    padding: var(--gap-sm) var(--gap);
+    display: flex;
+    gap: var(--gap-xs);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .rail::-webkit-scrollbar {
+    display: none;
+  }
+  .rail-group {
+    display: contents;
+  }
+  .rail-label {
+    display: none;
+  }
+  .rail a {
+    white-space: nowrap;
+    padding: 6px 10px;
+    margin-bottom: 0;
+  }
+  .rail a[aria-current="page"]::before {
+    left: 10px;
+    right: 10px;
+    top: auto;
+    bottom: -8px;
+    width: auto;
+    height: 3px;
+    border-radius: 3px 3px 0 0;
+  }
+  .main {
+    padding: 20px var(--gap) 32px;
+  }
+  .disclaimer {
+    padding: var(--gap);
+  }
+  .security-head {
+    padding: var(--gap);
+  }
+  .security-head .price {
+    margin-left: 0;
+    flex-basis: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

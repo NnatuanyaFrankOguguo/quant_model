@@ -1326,7 +1326,7 @@ GET /public/companies/AAPL/ratios?period=2025-FY
 | 6 | DCF known-answer | `pytest tests/known_answer/test_dcf.py` | Matches a hand-built spreadsheet |
 | 7 | Null propagates | Ratio with a null input | Returns `null`, not 0 or ∞ |
 | 8 | `known_as_of` = filing date | `SELECT known_as_of, period_end FROM ...` | `known_as_of` is the `filed` date and is later |
-| 9 | Raw prices preserved | `SELECT close_raw, close_adj FROM price_history` | Both columns populated and distinct |
+| 9 | Raw prices preserved | `SELECT close_raw FROM price_history` at a split boundary | As-traded, never adjusted — there is **no `close_adj` column** ([08](08_DATA_CONTRACTS.md) §2.4, corrected 2026-08-30): adjusted prices are derived at read time up to the decision date, from `corporate_actions` |
 | 10 | Chart of accounts versioned | Check the mapping table | Every row carries `chart_version` |
 | 11 | Provenance on every figure | `SELECT count(*) ... WHERE filing_id IS NULL` | `0` |
 | 12 | Compliance still green | `pytest tests/compliance` | All pass |
@@ -1351,7 +1351,7 @@ GET /public/companies/AAPL/ratios?period=2025-FY
 - [ ] Checks 1–15 pass
 - [ ] ≥20 US companies ingested end to end
 - [ ] Ratios and DCF run from user assumptions, returning inputs alongside outputs
-- [ ] `price_history` populated with raw and adjusted columns (TG1-US closed)
+- [ ] `price_history` populated with as-traded prices, splits held apart (TG1-US closed; no stored adjusted column, [08](08_DATA_CONTRACTS.md) §2.4)
 - [ ] Chart of accounts drafted and versioned (TG7 drafted, freeze deferred to P3)
 - [ ] Tracker updated
 

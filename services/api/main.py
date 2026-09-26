@@ -129,7 +129,10 @@ def create_app() -> FastAPI:
                 status_code=exc.status_code,
                 exception_type=type(exc).__name__,
             )
-        return _error_response(request, exc.status_code)
+        # `FieldedHTTPException` may name the fields at fault. Names only - the vocabulary
+        # above still decides the `detail`, so nothing a route wrote reaches the body.
+        fields = getattr(exc, "fields", None)
+        return _error_response(request, exc.status_code, fields=fields)
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(

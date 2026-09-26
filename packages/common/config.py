@@ -11,6 +11,7 @@ without anyone deciding it should.
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -78,6 +79,81 @@ def redact_url(url: str) -> str:
     return f"{parts.scheme}://<redacted>@{host}{port}/{database}"
 
 
+#: Query parameters and headers whose value is a credential. Matched case-insensitively,
+#: up to the next `&`, whitespace or quote.
+_SECRET_PARAM = re.compile(
+    r"((?:api[_-]?key|apikey|access[_-]?token|auth[_-]?token|token|password|passwd|secret)"
+    r"\s*[=:]\s*)([^&\s\"'<>]+)",
+    re.IGNORECASE,
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Strip credentials out of a string before it is logged, stored or displayed.
+
+    **Why this exists, in one incident.** The FRED connector deliberately stores a
+    key-free URL on its `RawResponse`, and that worked. But when a request failed, `httpx`
+    raised an exception whose *message* contained the real request URL — key and all — and
+    that message went straight into `connector_runs.error`, into the terminal, and would
+    have gone into any log aggregator. A credential redacted in the happy path and printed
+    on the error path is not redacted.
+
+    Two passes, because either alone leaves a hole:
+
+    1. **By parameter name** — catches `api_key=…` in any URL, including for services this
+       code has never heard of and for keys that are not in our settings.
+    2. **By known value** — catches a bare credential with no parameter name attached: a
+       password inside a connection string, or a key echoed back in a response body.
+
+    Never raises. It runs on error paths, where a redaction failure would replace a real
+    diagnostic with a new traceback.
+    """
+    if not text:
+        return text
+    try:
+        result = _SECRET_PARAM.sub(r"\1<redacted>", text)
+        for value in _known_secret_values():
+            # A short "secret" would match far too much ordinary text.
+            if value and len(value) >= 8:
+                result = result.replace(value, "<redacted>")
+        return result
+    except Exception:  # noqa: BLE001 - redaction must never break the caller
+        return "<redaction failed; message withheld to avoid leaking a credential>"
+
+
+def _known_secret_values() -> list[str]:
+    """Literal secrets this process holds, for the value-based pass.
+
+    Includes the password inside each connection string, which is the one credential most
+    likely to turn up in a driver's error text.
+    """
+    try:
+        settings = get_settings()
+    except Exception:  # noqa: BLE001 - settings may be unavailable mid-failure
+        return []
+    values: list[str] = []
+    # Every literal key this process can hold. An Anthropic error carries the request
+    # context back in its message, so a key left out of this list is one that reaches the
+    # log the first time the API refuses a call.
+    for candidate in (
+        settings.fred_api_key,
+        settings.anthropic_api_key,
+        settings.telegram_bot_token,
+    ):
+        if candidate:
+            values.append(candidate)
+    for url in (settings.database_url, settings.test_database_url):
+        if not url:
+            continue
+        try:
+            password = urlsplit(url).password
+        except ValueError:  # pragma: no cover
+            password = None
+        if password:
+            values.append(password)
+    return values
+
+
 class Settings(BaseSettings):
     """Environment-backed configuration, read once per process."""
 
@@ -92,6 +168,32 @@ class Settings(BaseSettings):
     test_database_url: str | None = None
     environment: str = "local"
     app_version: str = "0.0.1"
+
+    # P1.0 / ADR-0009. Local disk is the P1 backend; a remote bucket arrives at P3 entry
+    # behind the same StorageBackend interface. Git-ignored, and covered by scripts/backup.ps1.
+    documents_dir: str = "data/documents"
+
+    # P1.2. Free key from fred.stlouisfed.org. Absent is a legitimate state: the FRED
+    # connector refuses to run rather than half-running, and the manual CSV path (P1.7)
+    # needs no key at all — which is the point of having it.
+    fred_api_key: str | None = None
+
+    # P2.1. EDGAR refuses requests without a descriptive User-Agent carrying a real name
+    # and email (`DATA_FOUNDATION.md` §C). Absent is a legitimate state: the EDGAR
+    # connectors refuse to run rather than send an anonymous request and be blocked.
+    sec_user_agent: str | None = None
+
+    # P4.2. The reconciliation step, and nothing else in the system, needs this. Absent is
+    # a legitimate state and a common one: the deterministic half of the extraction
+    # pipeline runs without it, the manual entry path (P3.2) needs no key at all, and
+    # `ClaudeReconciler` refuses at the moment of use rather than at import.
+    anthropic_api_key: str | None = None
+
+    # P5.4. The daily brief's only credential. Absent is a legitimate state and is the
+    # current one: `packages.brief.delivery.TelegramChannel` refuses at the moment of
+    # send, the delivery is recorded `suppressed` with no `delivered_at`, and the same
+    # content is retried once a token exists. Composing a brief needs no token at all.
+    telegram_bot_token: str | None = None
 
     def __repr__(self) -> str:
         """Credential-free repr. See the module docstring for why this is not optional."""

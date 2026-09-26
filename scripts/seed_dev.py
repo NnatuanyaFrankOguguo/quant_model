@@ -24,7 +24,6 @@ credential is always a deliberate act with an operator behind it.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -33,6 +32,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from packages.common.config import get_settings
+from packages.common.console import configure_logging, info, step, success, warning
 from packages.common.db import SessionLocal
 from packages.common.models import Entitlement, Principal
 
@@ -161,36 +161,42 @@ def _seed_entitlement(session: Session, seed: Seed, principal: Principal) -> str
 
 
 def main(argv: list[str] | None = None) -> int:
-    refuse_in_production("seed_dev.py")
+    configure_logging()
+    with step("Refuse to run against production"):
+        refuse_in_production("seed_dev.py")
     now = datetime.now(UTC)
-    warnings: list[str] = []
+    unattested: list[str] = []
 
-    with SessionLocal() as session:
+    with SessionLocal() as session, step("Seed principals and entitlements") as seeding:
         for seed in SEEDS:
             principal_action, principal = _seed_principal(session, seed, now=now)
             entitlement_action = _seed_entitlement(session, seed, principal)
-            print(
-                f"  {seed.external_id:<24} principal={principal_action:<9} "
-                f"entitlement={entitlement_action:<9} kind={seed.kind:<7} "
-                f"personal_tier={str(seed.personal_tier).lower():<5}  # {seed.note}"
+            seeding.ok(
+                seed.note,
+                external_id=seed.external_id,
+                principal=principal_action,
+                entitlement=entitlement_action,
+                kind=seed.kind,
+                personal_tier=seed.personal_tier,
             )
             if seed.personal_tier and not seed.attested:
-                warnings.append(seed.external_id)
+                unattested.append(seed.external_id)
         session.commit()
+        seeding.result(principals=len(SEEDS))
 
-    print(
-        "\nSeeded. No tokens were minted - run scripts/mint_token.py for that.\n"
-        "fee_charged=false and funds_pooled=false on every row: that is what makes\n"
-        "the personal tier lawful pre-licence (PROJECT_CONTEXT 4, SPEC 1.2)."
+    success(
+        "seeded - no tokens were minted; run scripts/mint_token.py for that. "
+        "fee_charged=false and funds_pooled=false on every row: that is what makes the "
+        "personal tier lawful pre-licence (PROJECT_CONTEXT 4, SPEC 1.2)"
     )
-    for external_id in warnings:
-        print(
-            f"WARNING: {external_id!r} holds personal_tier but has no attestation "
-            "(relationship_kind, attested_by, attested_on are NULL). Fill them in "
-            "with a real relative's details before minting it a token.",
-            file=sys.stderr,
+    for external_id in unattested:
+        warning(
+            "holds personal_tier but has no attestation (relationship_kind, attested_by, "
+            "attested_on are NULL) - fill them in with a real relative's details before "
+            "minting it a token",
+            external_id=external_id,
         )
-    print(_licence_note(), file=sys.stderr)
+    info(_licence_note())
     return 0
 
 
