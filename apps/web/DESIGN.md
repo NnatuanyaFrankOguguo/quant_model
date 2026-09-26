@@ -138,7 +138,14 @@ indicators are features rather than signals.
 Defined in `src/app/globals.css`. **Never write a hex value in a page or component.**
 
 - **Light only.** No dark theme. **No gold, amber or orange**, including the conventional
-  amber warning.
+  amber warning. The *chrome* - brand block and rail - is dark navy (`--chrome*` tokens);
+  every page surface stays light. That is framing, not a theme.
+- **Canvas and cards.** The page is `--canvas` (a faint cool grey); panels, metric rows
+  and the security header are white `--paper` cards with `--shadow-card`. A panel reads
+  as an object, not a ruled box.
+- **Type is Geist.** Geist Sans for words (`--font-sans`), Geist Mono for tickers,
+  series codes and exchange tags (`--font-mono`), loaded through `next/font` in
+  `layout.tsx` so no request leaves for a font CDN.
 - **Blue means "you can act on this"** — links, buttons, focus, the active nav item. Blue
   is never a status colour.
 - **System status is green / violet / red**, always beside a word (WCAG 1.4.1).
@@ -257,7 +264,8 @@ It must work on a phone. It is *better* on a large screen and that is fine to sa
 
 From `globals.css`, plus `<Disclose>` from `@/components/disclose`.
 
-`.shell` `.brand` `.topbar` `.rail` `.main` `.search` `.security-head` `.delta.up|down|flat`
+`.shell` `.brand` `.brand-mark` `.topbar` `.topbar-meta` `.status-chip` `.rail` `.rail-icon`
+`.main` `.search` `.search-kbd` `.crumbs` `.security-head` `.ticker-badge` `.delta.up|down|flat`
 `.tabs` `.metrics` `.metric` `.metric-name` `.metric-value` `.absent` `.panel` `.panel-head`
 `.panel-body` `.grid` `.scroller` `table` `.wrap-cell` `.nowrap` `th.sticky` `.scroll-hint`
 `.disclose` `.sparkline` `.chart` `.chart-frame` `.mark` `.hint` `button.sort` `.controls`

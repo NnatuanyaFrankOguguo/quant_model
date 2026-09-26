@@ -8,19 +8,20 @@
    who has ever looked up a share price should not have to learn where things
    are here.
 
-   An earlier version of this file optimised for teaching and produced an
-   essay. The explanations survive, but they now sit inside a disclosure and
-   the data comes first. See `.disclose` at the bottom.
+   The second pass (Sep 2026) kept every class and changed the finish: a dark
+   navigation rail, white cards on a faintly tinted canvas so a panel reads as
+   an object rather than a ruled box, one typeface family (Geist Sans for
+   words, Geist Mono for tickers and codes), and a tighter type scale. The
+   *page* is still light; only the chrome is dark.
 
    THE PALETTE
-   Carried forward unchanged, because it was not the problem.
    - No dark theme. No gold, amber or orange anywhere.
    - **Blue means "you can act on this"** - links, buttons, focus, the active
      nav item. It is never a status colour, so blue never reads two ways.
    - Status is green / violet / red, always beside a word. Colour is never the
      only signal (WCAG 1.4.1).
 
-   THE ONE ADDITION: market direction
+   MARKET DIRECTION
    `--up` and `--down` are green and red, because that convention is older
    than any of us and fighting it would cost a reader more than it bought.
    They are *always* rendered with an arrow (`.delta` below), so a
@@ -30,36 +31,51 @@
    =========================================================================== */
 
 :root {
-  /* Surfaces: page, recessed panel, raised card. */
+  /* Surfaces. `--paper` is a card and what a chart canvas paints; `--canvas`
+     is the page behind the cards. */
+  --canvas: #f4f6f9;
   --paper: #ffffff;
   --paper-sunk: #f7f9fb;
   --paper-raised: #ffffff;
-  --paper-rail: #fbfcfd;
 
-  /* Ink, cool-leaning so it sits with the blue rather than fighting it. */
-  --ink: #131820;
-  --ink-soft: #545d6b;
-  --ink-faint: #828c99;
+  /* Ink. `--ink-faint` is held at 4.6:1 on white so small print still passes
+     WCAG AA - it is used for 11px labels, where a lighter grey would not. */
+  --ink: #0f1728;
+  --ink-soft: #475467;
+  --ink-faint: #667085;
 
-  --line: #e3e8ee;
-  --line-strong: #c9d2dc;
+  --line: #e6e9ef;
+  --line-strong: #d0d6df;
+  --line-hover: #b8c1ce;
 
   /* Interaction. One blue, three weights. */
-  --act: #1f5edb;
-  --act-deep: #1748ab;
+  --act: #2257e6;
+  --act-deep: #1a44b8;
   --act-wash: #eef3ff;
+  --act-ring: rgb(34 87 230 / 18%);
+  --act-on-chrome: #8fb0ff; /* the blue, lifted to pass contrast on the dark rail */
+  --row-hover: #f5f8ff;
 
   /* Status: the system's own health. Never blue, always beside a word. */
-  --ok: #157048;
-  --ok-wash: #e9f5ef;
-  --attention: #5b46b8;
-  --attention-wash: #efecfb;
-  --broken: #b4283f;
-  --broken-wash: #fdecef;
+  --ok: #0f6e45;
+  --ok-wash: #e8f6ee;
+  --attention: #5a44c0;
+  --attention-wash: #f0edfc;
+  --broken: #b42336;
+  --broken-wash: #fdeef0;
 
   /* Market direction. Always paired with an arrow - see `.delta`. */
-  --up: #10794a;
-  --down: #c0392f;
+  --up: #0e7a4b;
+  --down: #c8322b;
+
+  /* The chrome: brand block and rail. */
+  --chrome: #0b1324;
+  --chrome-raised: #131d33;
+  --chrome-line: rgb(255 255 255 / 7%);
+  --chrome-ink: #a3adbf;
+  --chrome-ink-strong: #f5f7fb;
+  --chrome-ink-faint: #6f7a90;
+  --brand-mark-ink: #ffffff;
 
   /* Spacing on a 4px rhythm, named for intent. */
   --gap-xs: 4px;
@@ -68,23 +84,32 @@
   --gap-lg: 24px;
   --gap-xl: 40px;
 
-  --radius: 6px;
-  --radius-sm: 4px;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-lg: 12px;
 
   /* Layout. The rail is fixed; the main column breathes. */
-  --rail: 208px;
-  --header: 56px;
+  --rail: 224px;
+  --header: 60px;
   --measure: 1440px;
   --prose: 74ch;
 
-  --shadow-card: 0 1px 2px rgb(19 24 32 / 6%);
-  --shadow-pop: 0 6px 24px rgb(19 24 32 / 12%);
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 4%), 0 1px 3px rgb(16 24 40 / 5%);
+  --shadow-pop: 0 12px 32px -4px rgb(16 24 40 / 16%), 0 4px 8px -2px rgb(16 24 40 / 6%);
 
   /* Type. Smaller than prose defaults: this is a data product. */
+  --font-sans:
+    var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono:
+    var(--font-geist-mono), ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
+    monospace;
   --fs-micro: 0.6875rem; /* 11px - table headers, tags */
   --fs-small: 0.8125rem; /* 13px - table body, notes */
   --fs-base: 0.875rem; /* 14px - the working size */
   --fs-body: 0.9375rem; /* 15px - explanatory prose only */
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
 
   /* Light only, and stated rather than left to chance: a reader whose OS is
      in dark mode still gets this page, because a half-themed financial table
@@ -104,14 +129,14 @@ html {
 
 body {
   margin: 0;
-  background: var(--paper);
+  background: var(--canvas);
   color: var(--ink);
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    sans-serif;
+  font-family: var(--font-sans);
   font-size: var(--fs-base);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 /* Every figure in this app is tabular. Lining, fixed-width digits so a column
@@ -128,8 +153,11 @@ table {
 a {
   color: var(--act);
   text-decoration: none;
+  text-underline-offset: 3px;
+  transition: color 120ms var(--ease);
 }
 a:hover {
+  color: var(--act-deep);
   text-decoration: underline;
 }
 
@@ -139,11 +167,35 @@ a:hover {
   border-radius: var(--radius-sm);
 }
 
+::selection {
+  background: var(--act-wash);
+  color: var(--ink);
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--gap);
+  top: -48px;
+  z-index: 100;
+  background: var(--paper);
+  color: var(--act-deep);
+  padding: var(--gap-sm) var(--gap);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+.skip-link:focus {
+  top: var(--gap-sm);
+}
+
 /* ---------------------------------------------------------------------------
    THE SHELL
    Header across the top, rail down the left, content in the rest. A grid
    rather than fixed positioning, so the content column can never slide under
    the rail at an awkward width.
+
+   The rail's dark column is painted by the shell's own background rather than
+   by the rail, because the rail is sticky and exactly one screen tall - on a
+   long page it would stop and leave the canvas showing beneath it.
    --------------------------------------------------------------------------- */
 
 .shell {
@@ -155,86 +207,181 @@ a:hover {
     "rail  main"
     "rail  footer";
   min-height: 100vh;
+  min-height: 100dvh;
+  background: linear-gradient(
+    to right,
+    var(--chrome) var(--rail),
+    var(--canvas) var(--rail)
+  );
 }
 
 .brand {
   grid-area: brand;
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
   align-items: center;
-  gap: var(--gap-sm);
   padding: 0 var(--gap);
-  border-bottom: 1px solid var(--line);
-  border-right: 1px solid var(--line);
-  background: var(--paper);
-  font-weight: 650;
-  letter-spacing: -0.01em;
-  color: var(--ink);
+  background: var(--chrome);
+  border-bottom: 1px solid var(--chrome-line);
 }
 .brand a {
-  color: inherit;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--chrome-ink-strong);
+  border-radius: var(--radius-sm);
 }
 .brand a:hover {
   text-decoration: none;
+  color: var(--chrome-ink-strong);
+}
+.brand-mark {
+  flex: 0 0 auto;
+  color: var(--act);
+}
+.brand-name {
+  display: flex;
+  flex-direction: column;
+  font-weight: 650;
+  font-size: 0.9375rem;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+}
+.brand-sep {
+  color: var(--chrome-ink-faint);
+}
+.brand-sub {
+  font-size: 0.625rem;
+  font-weight: 550;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--chrome-ink-faint);
+  margin-top: 3px;
 }
 
 .topbar {
   grid-area: header;
+  position: sticky;
+  top: 0;
+  z-index: 30;
   display: flex;
   align-items: center;
   gap: var(--gap);
-  padding: 0 var(--gap-lg);
+  padding: 0 32px;
   border-bottom: 1px solid var(--line);
+  background: rgb(255 255 255 / 86%);
+  backdrop-filter: saturate(180%) blur(10px);
+  -webkit-backdrop-filter: saturate(180%) blur(10px);
+}
+.topbar-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--fs-micro);
+  font-weight: 550;
+  color: var(--ink-soft);
   background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-wash);
 }
 
 .rail {
   grid-area: rail;
-  border-right: 1px solid var(--line);
-  background: var(--paper-rail);
-  padding: var(--gap) var(--gap-sm);
+  position: sticky;
+  top: var(--header);
+  align-self: start;
+  max-height: calc(100vh - var(--header));
+  overflow-y: auto;
+  padding: 20px 12px;
+  background: var(--chrome);
 }
 
 .main {
   grid-area: main;
   min-width: 0; /* lets a wide table scroll instead of stretching the grid */
-  padding: var(--gap-lg);
+  padding: 28px 32px 40px;
   width: 100%;
   max-width: var(--measure);
 }
 
-/* The rail's links. The active one is blue and carries a left marker, so the
-   current section is legible without relying on colour alone. */
+/* The rail's links. The active one carries a blue marker as well as a
+   brighter label, so the current section is legible without relying on
+   colour alone. */
 .rail-group {
-  margin-bottom: var(--gap-lg);
+  margin-bottom: 22px;
 }
 .rail-label {
-  font-size: var(--fs-micro);
+  font-size: 0.625rem;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ink-faint);
-  padding: 0 var(--gap-sm);
-  margin-bottom: var(--gap-xs);
+  letter-spacing: 0.12em;
+  color: var(--chrome-ink-faint);
+  padding: 0 10px;
+  margin-bottom: 6px;
 }
 .rail a {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--gap-sm);
-  padding: 7px var(--gap-sm);
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 2px;
   border-radius: var(--radius-sm);
-  color: var(--ink-soft);
+  color: var(--chrome-ink);
   font-size: var(--fs-base);
-  border-left: 2px solid transparent;
+  font-weight: 500;
+  transition:
+    background-color 120ms var(--ease),
+    color 120ms var(--ease);
+}
+.rail-icon {
+  flex: 0 0 auto;
+  opacity: 0.8;
 }
 .rail a:hover {
-  background: var(--paper-sunk);
-  color: var(--ink);
+  background: rgb(255 255 255 / 5%);
+  color: var(--chrome-ink-strong);
   text-decoration: none;
 }
 .rail a[aria-current="page"] {
-  background: var(--act-wash);
-  border-left-color: var(--act);
-  color: var(--act-deep);
+  background: var(--chrome-raised);
+  color: var(--chrome-ink-strong);
   font-weight: 600;
+}
+.rail a[aria-current="page"] .rail-icon {
+  color: var(--act-on-chrome);
+  opacity: 1;
+}
+.rail a[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--act);
+}
+.rail a:focus-visible {
+  outline-color: var(--act-on-chrome);
 }
 
 /* ---------------------------------------------------------------------------
@@ -245,18 +392,25 @@ a:hover {
 .search {
   position: relative;
   flex: 1 1 auto;
-  max-width: 420px;
+  max-width: 460px;
 }
 .search input {
   width: 100%;
-  height: 34px;
-  padding: 0 var(--gap-sm) 0 30px;
+  height: 38px;
+  padding: 0 36px 0 36px;
   font: inherit;
   font-size: var(--fs-base);
   color: var(--ink);
   background: var(--paper-sunk);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  transition:
+    border-color 120ms var(--ease),
+    box-shadow 120ms var(--ease),
+    background-color 120ms var(--ease);
+}
+.search input:hover {
+  border-color: var(--line-strong);
 }
 .search input::placeholder {
   color: var(--ink-faint);
@@ -265,59 +419,85 @@ a:hover {
   background: var(--paper);
   border-color: var(--act);
   outline: none;
-  box-shadow: 0 0 0 3px var(--act-wash);
+  box-shadow: 0 0 0 4px var(--act-ring);
 }
 .search-icon {
   position: absolute;
-  left: 9px;
+  left: 12px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--ink-faint);
   pointer-events: none;
   line-height: 0;
 }
+.search-kbd {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  color: var(--ink-faint);
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  pointer-events: none;
+}
+.search input:focus ~ .search-kbd {
+  display: none;
+}
 /* The results list, when the box has matches. */
 .search-results {
   position: absolute;
   z-index: 40;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
   right: 0;
   background: var(--paper);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
-  max-height: 320px;
+  max-height: 360px;
   overflow-y: auto;
-  padding: var(--gap-xs);
+  padding: 6px;
   margin: 0;
   list-style: none;
 }
 .search-results a {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
   gap: var(--gap);
-  padding: 7px var(--gap-sm);
+  padding: 8px 10px;
   border-radius: var(--radius-sm);
   color: var(--ink);
 }
 .search-results a:hover,
-.search-results a:focus-visible {
+.search-results a:focus-visible,
+.search-results a[aria-selected="true"] {
   background: var(--act-wash);
   text-decoration: none;
 }
 .search-results .ticker {
-  font-weight: 650;
+  flex: 0 0 64px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--act-deep);
 }
 .search-results .name {
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   font-size: var(--fs-small);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .search-empty {
-  padding: var(--gap-sm);
+  padding: 10px;
   font-size: var(--fs-small);
   color: var(--ink-faint);
 }
@@ -327,75 +507,136 @@ a:hover {
    --------------------------------------------------------------------------- */
 
 h1 {
-  font-size: 1.375rem;
-  line-height: 1.25;
+  font-size: 1.625rem;
+  line-height: 1.2;
   font-weight: 650;
-  letter-spacing: -0.015em;
-  margin: 0 0 var(--gap-xs);
+  letter-spacing: -0.025em;
+  margin: 0 0 6px;
 }
 h2 {
-  font-size: 1rem;
-  font-weight: 650;
-  letter-spacing: -0.005em;
-  margin: var(--gap-xl) 0 var(--gap);
+  font-size: 1.0625rem;
+  font-weight: 620;
+  letter-spacing: -0.012em;
+  margin: 36px 0 14px;
 }
 h2:first-child {
   margin-top: 0;
 }
 h3 {
   font-size: var(--fs-base);
-  font-weight: 650;
+  font-weight: 620;
+  letter-spacing: -0.005em;
   margin: var(--gap-lg) 0 var(--gap-sm);
 }
 .page-note {
   color: var(--ink-soft);
-  font-size: var(--fs-small);
+  font-size: var(--fs-base);
   margin: 0 0 var(--gap-lg);
   max-width: var(--prose);
+}
+
+/* A breadcrumb above a company. */
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-sm);
+  font-size: var(--fs-small);
+  color: var(--ink-faint);
+  margin: 0 0 14px;
+}
+.crumbs a {
+  color: var(--ink-soft);
+}
+.crumbs a:hover {
+  color: var(--act-deep);
+}
+.crumbs [aria-current="page"] {
+  font-family: var(--font-mono);
+  color: var(--ink);
+  font-weight: 550;
 }
 
 /* The block at the top of a company page: symbol, name, price, change. */
 .security-head {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--gap-sm) var(--gap);
-  padding-bottom: var(--gap);
-  border-bottom: 1px solid var(--line);
-  margin-bottom: var(--gap-lg);
+  align-items: center;
+  gap: var(--gap-sm) 14px;
+  padding: 20px 24px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 20px;
+}
+.ticker-badge {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: linear-gradient(145deg, var(--chrome-raised), var(--chrome));
+  color: var(--chrome-ink-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  font-weight: 650;
+  letter-spacing: 0.02em;
 }
 .security-head .symbol {
-  font-size: 1.5rem;
+  font-size: 1.75rem;
   font-weight: 700;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
   /* The symbol is the page's `<h1>` - the semantically right element - so the
      global heading margin has to be cleared here or it sits 4px low against
      the name beside it. */
   margin: 0;
-  line-height: 1.2;
+  line-height: 1.1;
 }
 .security-head .legal-name {
   font-size: var(--fs-body);
   color: var(--ink-soft);
 }
 .security-head .exchange {
+  font-family: var(--font-mono);
   font-size: var(--fs-micro);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--ink-faint);
-  border: 1px solid var(--line-strong);
+  font-weight: 550;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  background: var(--paper-sunk);
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  padding: 2px 6px;
+  padding: 2px 7px;
 }
 .security-head .price {
   margin-left: auto;
-  font-size: 1.375rem;
+  font-size: 1.75rem;
   font-weight: 650;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+.security-head .delta {
+  font-size: var(--fs-small);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+}
+.security-head .delta.up {
+  background: var(--ok-wash);
+}
+.security-head .delta.down {
+  background: var(--broken-wash);
 }
 .security-head .asof {
   flex-basis: 100%;
   font-size: var(--fs-small);
   color: var(--ink-faint);
+}
+/* The first of the two provenance lines opens a ruled footer under the
+   figures, so the heading reads as one unit and its sources as another. */
+.security-head .asof:first-of-type {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 8px;
 }
 
 /* A price move. The arrow is not decoration - it is what carries the
@@ -414,9 +655,11 @@ h3 {
 }
 .delta.up::before {
   content: "\25B2\00A0";
+  font-size: 0.8em;
 }
 .delta.down::before {
   content: "\25BC\00A0";
+  font-size: 0.8em;
 }
 .delta.flat::before {
   content: "\2014\00A0";
@@ -428,7 +671,7 @@ h3 {
 
 .tabs {
   display: flex;
-  gap: var(--gap-lg);
+  gap: 4px;
   border-bottom: 1px solid var(--line);
   margin-bottom: var(--gap-lg);
   overflow-x: auto;
@@ -438,17 +681,21 @@ h3 {
   display: none;
 }
 .tabs a {
-  padding: 0 0 10px;
+  padding: 10px 14px 12px;
   color: var(--ink-soft);
   font-size: var(--fs-base);
-  font-weight: 500;
+  font-weight: 550;
   white-space: nowrap;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
+  transition:
+    color 120ms var(--ease),
+    border-color 120ms var(--ease);
 }
 .tabs a:hover {
   color: var(--ink);
   text-decoration: none;
+  border-bottom-color: var(--line-strong);
 }
 .tabs a[aria-current="page"] {
   color: var(--act-deep);
@@ -469,26 +716,28 @@ h3 {
    the same grid with nothing behind it. */
 .metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 148px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
   background: var(--paper);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
   margin-bottom: var(--gap-lg);
 }
 .metric {
   background: var(--paper);
-  padding: 10px var(--gap);
+  padding: 14px 16px 16px;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   margin: 0 -1px -1px 0;
 }
 .metric-name {
   font-size: var(--fs-micro);
+  font-weight: 550;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.035em;
   color: var(--ink-faint);
-  margin-bottom: 2px;
+  margin-bottom: 6px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -507,9 +756,10 @@ h3 {
   line-height: 1.2;
 }
 .metric-value {
-  font-size: 1.0625rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: 1.3125rem;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
 }
 /* An absent figure is never a zero and never an empty cell. It is smaller and
    quieter than a real number so a column of them does not read as data. */
@@ -518,6 +768,7 @@ h3 {
 td.absent {
   font-size: var(--fs-small);
   font-weight: 400;
+  letter-spacing: normal;
   color: var(--ink-faint);
   /* An absence phrase is a short fixed string and must never wrap. Measured on
      /macro: "not loaded yet" breaking across two lines in a 104px column took
@@ -532,7 +783,7 @@ td.absent {
 
 .panel {
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--paper-raised);
   box-shadow: var(--shadow-card);
   margin-bottom: var(--gap-lg);
@@ -543,20 +794,33 @@ td.absent {
   align-items: center;
   justify-content: space-between;
   gap: var(--gap);
-  padding: 10px var(--gap);
+  padding: 14px 18px;
   border-bottom: 1px solid var(--line);
-  background: var(--paper-sunk);
+  background: var(--paper);
 }
 .panel-head h2,
 .panel-head h3 {
   margin: 0;
-  font-size: var(--fs-base);
+  font-size: var(--fs-body);
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+.panel-head a {
+  font-size: var(--fs-small);
+  font-weight: 550;
 }
 .panel-body {
-  padding: var(--gap);
+  padding: 18px;
 }
 .panel-body > :last-child {
   margin-bottom: 0;
+}
+/* A panel whose body is a table needs the caption and the first header cell
+   to line up with the panel title, not float 16px in from it. */
+.panel > .scroller caption,
+.panel > p {
+  padding-left: 18px;
+  padding-right: 18px;
 }
 .grid {
   display: grid;
@@ -566,8 +830,8 @@ td.absent {
 
 /* ---------------------------------------------------------------------------
    TABLES
-   The core of the product. Dense, aligned, sticky-headed, and horizontally
-   scrollable inside their own box rather than by widening the page.
+   The core of the product. Dense, aligned, and horizontally scrollable inside
+   their own box rather than by widening the page.
    --------------------------------------------------------------------------- */
 
 .scroller {
@@ -583,10 +847,6 @@ table {
   border-collapse: collapse;
   font-size: var(--fs-small);
 }
-/* A `<caption>` is as wide as its table, not as wide as the scroller, so on a
-   1015px table at 320px the text ran off the right of the phone and could only
-   be read by scrolling the table sideways. Sticking it to the scroller's left
-   edge keeps it in view; the width cap stops it stretching to the table's. */
 /* A `<caption>` is as wide as its *table*, so on a 1279px table it laid out
    across 1279px and only the leftmost slice was readable without scrolling
    sideways. Stuck to the scroller's left edge it stays in view, and `100cqw` -
@@ -600,7 +860,7 @@ caption {
   text-align: left;
   font-size: var(--fs-small);
   color: var(--ink-soft);
-  padding: 0 var(--gap) var(--gap-sm);
+  padding: 12px var(--gap) 10px;
   position: sticky;
   left: 0;
   max-width: 100cqw;
@@ -616,20 +876,22 @@ thead th {
   background: var(--paper-sunk);
   font-size: var(--fs-micro);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--ink-soft);
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
-  padding: 8px var(--gap);
-  border-bottom: 1px solid var(--line-strong);
+  padding: 9px 14px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 tbody td,
 tbody th {
-  padding: 7px var(--gap);
+  padding: 9px 14px;
   border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: baseline;
+  color: var(--ink);
 }
 /* A row label is a label, not a column heading: not uppercase, not sticky. */
 tbody th[scope="row"] {
@@ -641,6 +903,12 @@ tbody th[scope="row"] {
   letter-spacing: normal;
   font-size: var(--fs-small);
   white-space: nowrap;
+}
+/* A ticker labelling a row is a code, and reads as one. */
+tbody th[scope="row"] > a:only-child {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 td.num,
 th.num {
@@ -676,15 +944,18 @@ th.nowrap {
   left: 0;
   z-index: 1;
   background: var(--paper-raised);
-  border-right: 1px solid var(--line);
+  box-shadow: inset -1px 0 0 var(--line);
+}
+tbody tr {
+  transition: background-color 80ms var(--ease);
 }
 tbody tr:hover td,
 tbody tr:hover th[scope="row"] {
-  background: var(--paper-sunk);
+  background: var(--row-hover);
 }
 /* After the hover rule, so a hovered sticky label still tints with its row. */
 .scroller tbody tr:hover th[scope="row"].sticky {
-  background: var(--paper-sunk);
+  background: var(--row-hover);
 }
 tbody tr:last-child td,
 tbody tr:last-child th {
@@ -708,6 +979,7 @@ thead th > button.sort {
   text-transform: inherit;
   background: none;
   border: 0;
+  box-shadow: none;
   padding: 0;
   margin: 0;
   cursor: pointer;
@@ -768,8 +1040,10 @@ thead th[aria-sort="descending"] > button.sort {
   color: var(--ink-faint);
   /* Bottom padding too: inside a `.panel` this is the last element, and with
      `0` it sat flush on the panel's border. */
-  padding: var(--gap-sm) var(--gap);
+  padding: 10px 18px;
   margin: 0;
+  border-top: 1px solid var(--line);
+  background: var(--paper-sunk);
 }
 /* No media query. Whether a table scrolls is a fact about the *table* and its
    container, not about the viewport - the screener is 1279px inside a ~1007px
@@ -782,7 +1056,7 @@ thead th[aria-sort="descending"] > button.sort {
 
 /* ---------------------------------------------------------------------------
    THE DISCLOSURE
-   A one-line summary with a small arrow; on opening, the summary is
+   A one-line summary with a small chevron; on opening, the summary is
    *replaced* by the full detail rather than the detail appearing beneath it.
 
    Native `<details>`, so it is keyboard-operable and works with no
@@ -792,44 +1066,68 @@ thead th[aria-sort="descending"] > button.sort {
 .disclose {
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--paper-sunk);
-  padding: 10px var(--gap);
+  background: var(--paper);
+  padding: 0;
   margin-bottom: var(--gap-lg);
   font-size: var(--fs-small);
   color: var(--ink-soft);
+  transition: border-color 120ms var(--ease);
+}
+.disclose:hover {
+  border-color: var(--line-strong);
 }
 .disclose > summary {
   display: flex;
   align-items: center;
-  gap: var(--gap-sm);
+  gap: 10px;
+  padding: 10px 14px;
   cursor: pointer;
   list-style: none;
   color: var(--ink-soft);
+  border-radius: var(--radius);
 }
 .disclose > summary::-webkit-details-marker {
   display: none;
 }
-/* The arrow. Small, quiet, and it rotates so the control's state is visible
+/* The "i" mark: says "an explanation lives here" before the text is read. */
+.disclose > summary::before {
+  content: "i";
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--act-wash);
+  color: var(--act-deep);
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1;
+}
+/* The chevron. Small, quiet, and it rotates so the control's state is visible
    without reading the text beside it. */
 .disclose > summary::after {
   content: "";
   flex: 0 0 auto;
-  width: 0;
-  height: 0;
+  width: 7px;
+  height: 7px;
   margin-left: auto;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid var(--ink-faint);
-  transition: transform 120ms ease;
+  margin-right: 2px;
+  border-right: 1.5px solid var(--ink-faint);
+  border-bottom: 1.5px solid var(--ink-faint);
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 160ms var(--ease);
 }
 .disclose[open] > summary::after {
-  transform: rotate(180deg);
+  transform: translateY(2px) rotate(-135deg);
 }
 .disclose > summary:hover {
   color: var(--ink);
 }
 .disclose > summary:hover::after {
-  border-top-color: var(--act);
+  border-color: var(--act);
 }
 /* The swap itself: the summary text goes, the detail arrives. */
 .disclose[open] .brief {
@@ -843,7 +1141,8 @@ thead th[aria-sort="descending"] > button.sort {
   max-width: var(--prose);
   color: var(--ink-soft);
   font-size: var(--fs-small);
-  line-height: 1.6;
+  line-height: 1.65;
+  padding: 0 14px 14px 42px;
 }
 .disclose .full > :first-child {
   margin-top: 0;
@@ -861,10 +1160,15 @@ thead th[aria-sort="descending"] > button.sort {
 .disclose .full > table {
   max-width: none;
 }
+.disclose[open] {
+  background: var(--paper);
+}
 .disclose[open] > summary {
   font-weight: 600;
   color: var(--ink);
-  margin-bottom: var(--gap-sm);
+}
+.disclose[open] > summary::before {
+  content: "i";
 }
 
 /* ---------------------------------------------------------------------------
@@ -872,41 +1176,55 @@ thead th[aria-sort="descending"] > button.sort {
    --------------------------------------------------------------------------- */
 
 .pill {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--fs-micro);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 2px 7px;
+  letter-spacing: 0.01em;
+  padding: 2px 8px 2px 7px;
   border-radius: 999px;
+  border: 1px solid transparent;
   white-space: nowrap;
+  line-height: 1.5;
+}
+.pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }
 .pill.ok {
   background: var(--ok-wash);
   color: var(--ok);
+  border-color: rgb(15 110 69 / 16%);
 }
 .pill.attention {
   background: var(--attention-wash);
   color: var(--attention);
+  border-color: rgb(90 68 192 / 16%);
 }
 .pill.broken {
   background: var(--broken-wash);
   color: var(--broken);
+  border-color: rgb(180 35 54 / 16%);
 }
 /* "Never ran" is an absence of information, not a failure. Grey, not red. */
 .pill.neutral,
 .pill.never_ran {
   background: var(--paper-sunk);
   color: var(--ink-soft);
-  border: 1px solid var(--line);
+  border-color: var(--line);
 }
 
 .notice {
   border: 1px solid var(--line);
   border-left: 3px solid var(--act);
   border-radius: var(--radius);
-  background: var(--paper-sunk);
-  padding: var(--gap);
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+  padding: 14px 18px;
   margin-bottom: var(--gap-lg);
   font-size: var(--fs-small);
 }
@@ -935,8 +1253,8 @@ thead th[aria-sort="descending"] > button.sort {
 .source {
   font-size: var(--fs-micro);
   color: var(--ink-faint);
-  border-top: 1px solid var(--line);
-  padding-top: var(--gap-sm);
+  border-top: 1px dashed var(--line-strong);
+  padding-top: 10px;
   margin-top: var(--gap);
 }
 .source dl {
@@ -987,10 +1305,16 @@ thead th[aria-sort="descending"] > button.sort {
 .prose {
   max-width: var(--prose);
   font-size: var(--fs-body);
-  line-height: 1.65;
+  line-height: 1.7;
 }
 .prose p {
   margin: 0 0 var(--gap);
+}
+code,
+kbd,
+samp {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
 }
 
 button,
@@ -1001,6 +1325,7 @@ button,
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   font: inherit;
   font-size: var(--fs-base);
   font-weight: 550;
@@ -1009,22 +1334,41 @@ button,
   border: 1px solid var(--act);
   border-radius: var(--radius);
   padding: 7px 14px;
-  min-height: 34px;
+  min-height: 36px;
   cursor: pointer;
+  box-shadow:
+    0 1px 2px rgb(16 24 40 / 10%),
+    inset 0 1px 0 rgb(255 255 255 / 12%);
+  transition:
+    background-color 120ms var(--ease),
+    border-color 120ms var(--ease),
+    color 120ms var(--ease);
 }
 button:hover,
 .button:hover {
   background: var(--act-deep);
   border-color: var(--act-deep);
+  color: #fff;
   text-decoration: none;
+}
+button:active,
+.button:active {
+  transform: translateY(0.5px);
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .button.quiet {
   background: var(--paper);
-  color: var(--act-deep);
+  color: var(--ink-soft);
   border-color: var(--line-strong);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 5%);
 }
 .button.quiet:hover {
-  background: var(--act-wash);
+  background: var(--paper-sunk);
+  color: var(--ink);
+  border-color: var(--line-strong);
 }
 /* A range strip or a set of toggles. `.panel-head` does not wrap, so at 320px a
    five-item strip broke out of it; this is the row those controls belong in. */
@@ -1032,14 +1376,22 @@ button:hover,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--gap-sm);
+  gap: 6px;
   margin: 0 0 var(--gap);
 }
-/* Five range buttons in a row do not want to be 34px tall each. */
+/* A row of range or overlay toggles is a toolbar, not a set of calls to
+   action: shorter and quieter than a standalone button. */
+.controls .button {
+  min-height: 32px;
+  padding: 5px 12px;
+  font-size: var(--fs-small);
+}
+
+/* Five range buttons in a row do not want to be 36px tall each. */
 .button.small,
 button.small {
-  min-height: 26px;
-  padding: 3px 10px;
+  min-height: 28px;
+  padding: 3px 11px;
   font-size: var(--fs-small);
 }
 
@@ -1070,20 +1422,20 @@ label {
   display: block;
   font-size: var(--fs-micro);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
   color: var(--ink-soft);
   font-weight: 600;
-  margin-bottom: var(--gap-xs);
+  margin-bottom: 6px;
 }
 /* `:where()` gives this default no specificity. Written as a bare selector it
    weighed the same as `.search input` and, coming later, beat it - taking the
    header search's padding from 30px to 8px so the magnifier sat on the first
    letter, and replacing its sunk background and border. A default must lose to
    every rule that names a component. */
-:where(input[type="text"], input[type="number"], input[type="date"]) {
+:where(input[type="text"], input[type="number"], input[type="date"], select) {
   width: 100%;
-  height: 34px;
-  padding: 0 var(--gap-sm);
+  height: 38px;
+  padding: 0 12px;
   font: inherit;
   font-size: var(--fs-base);
   font-variant-numeric: tabular-nums;
@@ -1091,21 +1443,33 @@ label {
   background: var(--paper);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%);
+  transition:
+    border-color 120ms var(--ease),
+    box-shadow 120ms var(--ease);
 }
-input:focus {
+:where(input, select):hover {
+  border-color: var(--line-hover);
+}
+input:focus,
+select:focus {
   border-color: var(--act);
   outline: none;
-  box-shadow: 0 0 0 3px var(--act-wash);
+  box-shadow: 0 0 0 4px var(--act-ring);
 }
 
 /* The disclaimer. In the shell, so no page can forget it. */
 .disclaimer {
   grid-area: footer;
   font-size: var(--fs-micro);
+  line-height: 1.6;
   color: var(--ink-faint);
   border-top: 1px solid var(--line);
-  padding: var(--gap) var(--gap-lg);
+  padding: 18px 32px 24px;
   max-width: var(--measure);
+}
+.disclaimer b {
+  color: var(--ink-soft);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1124,20 +1488,24 @@ input:focus {
       "rail"
       "main"
       "footer";
+    background: var(--canvas);
   }
   .brand {
-    border-right: none;
+    position: static;
     height: var(--header);
   }
   .topbar {
     padding: 0 var(--gap);
   }
+  .topbar-meta {
+    display: none;
+  }
   .search {
     max-width: none;
   }
   .rail {
-    border-right: none;
-    border-bottom: 1px solid var(--line);
+    position: static;
+    max-height: none;
     padding: var(--gap-sm) var(--gap);
     display: flex;
     gap: var(--gap-xs);
@@ -1154,15 +1522,26 @@ input:focus {
     display: none;
   }
   .rail a {
-    border-left: none;
-    border-radius: var(--radius-sm);
     white-space: nowrap;
     padding: 6px 10px;
+    margin-bottom: 0;
+  }
+  .rail a[aria-current="page"]::before {
+    left: 10px;
+    right: 10px;
+    top: auto;
+    bottom: -8px;
+    width: auto;
+    height: 3px;
+    border-radius: 3px 3px 0 0;
   }
   .main {
-    padding: var(--gap);
+    padding: 20px var(--gap) 32px;
   }
   .disclaimer {
+    padding: var(--gap);
+  }
+  .security-head {
     padding: var(--gap);
   }
   .security-head .price {

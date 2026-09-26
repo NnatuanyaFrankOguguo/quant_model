@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
-import { api, type CompanySummary } from "@/lib/api";
+import { api, type CompanySummary, type HoldingsSummary } from "@/lib/api";
+import { day } from "@/lib/format";
 import { Rail } from "./_rail";
 import { TickerSearch } from "./_search";
 
@@ -37,12 +40,49 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     companies = [];
   }
 
+  // The top bar's "as of" chip. Same rule as the search: a failure here goes quiet
+  // rather than taking the shell down, and the overview fetches the same URL, so this
+  // costs nothing extra on the page most likely to be open.
+  let summary: HoldingsSummary | null = null;
+  try {
+    summary = await api.summary();
+  } catch {
+    summary = null;
+  }
+
   return (
-    <html lang="en">
+    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <body>
+        <a className="skip-link" href="#main">
+          Skip to content
+        </a>
         <div className="shell">
           <div className="brand">
-            <Link href="/">quant_model</Link>
+            <Link href="/" aria-label="quant_model, overview">
+              <svg
+                className="brand-mark"
+                width="28"
+                height="28"
+                viewBox="0 0 28 28"
+                aria-hidden="true"
+              >
+                <rect width="28" height="28" rx="7" fill="currentColor" />
+                <path
+                  d="M7 18.5 11.5 13l3.5 3.5L21 9.5"
+                  fill="none"
+                  stroke="var(--brand-mark-ink)"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span className="brand-name">
+                <span>
+                  quant<span className="brand-sep">_</span>model
+                </span>
+                <span className="brand-sub">Research</span>
+              </span>
+            </Link>
           </div>
 
           <div className="topbar">
@@ -52,6 +92,14 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                 name: company.legal_name,
               }))}
             />
+            <div className="topbar-meta">
+              {summary === null ? null : (
+                <span className="status-chip" title="The date the API last counted its holdings">
+                  <span className="status-dot" aria-hidden="true" />
+                  Data as of {day(summary.counted_at)}
+                </span>
+              )}
+            </div>
           </div>
 
           <Rail />

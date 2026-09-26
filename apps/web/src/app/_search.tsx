@@ -28,6 +28,7 @@ export function TickerSearch({ companies }: { companies: Entry[] }) {
   const router = useRouter();
   const listId = useId();
   const box = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
 
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -57,6 +58,20 @@ export function TickerSearch({ companies }: { companies: Entry[] }) {
     document.addEventListener("mousedown", away);
     return () => document.removeEventListener("mousedown", away);
   }, [open]);
+
+  // "/" focuses the box from anywhere, the convention on every research site - unless the
+  // reader is already typing into a field, where "/" is a character.
+  useEffect(() => {
+    const focus = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      event.preventDefault();
+      input.current?.focus();
+    };
+    document.addEventListener("keydown", focus);
+    return () => document.removeEventListener("keydown", focus);
+  }, []);
 
   const go = (entry: Entry | undefined) => {
     if (!entry) return;
@@ -93,6 +108,7 @@ export function TickerSearch({ companies }: { companies: Entry[] }) {
         </svg>
       </span>
       <input
+        ref={input}
         type="text"
         value={query}
         role="combobox"
@@ -112,6 +128,9 @@ export function TickerSearch({ companies }: { companies: Entry[] }) {
         onFocus={() => setOpen(true)}
         onKeyDown={onKeyDown}
       />
+      <kbd className="search-kbd" aria-hidden="true">
+        /
+      </kbd>
 
       {showing ? (
         <ul className="search-results" id={listId} role="listbox">
@@ -132,9 +151,6 @@ export function TickerSearch({ companies }: { companies: Entry[] }) {
                     event.preventDefault();
                     go(entry);
                   }}
-                  style={
-                    index === active ? { background: "var(--act-wash)" } : undefined
-                  }
                 >
                   <span className="ticker">{entry.ticker}</span>
                   <span className="name">{entry.name}</span>

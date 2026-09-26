@@ -66,11 +66,17 @@ export default async function CompanyLayout({ children, params }: LayoutProps) {
 
   return (
     <>
-      <p className="faint">
-        <Link href="/companies">← All stocks</Link>
-      </p>
+      <nav className="crumbs" aria-label="Breadcrumb">
+        <Link href="/companies">Stocks</Link>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">{data.ticker}</span>
+      </nav>
 
       <div className="security-head">
+        {/* A monogram, not the issuer's logo: no issuer artwork is licensed here. */}
+        <span className="ticker-badge" aria-hidden="true">
+          {data.ticker.slice(0, 2)}
+        </span>
         {/* The page's only `<h1>`. It is in the layout, so every tab has exactly one and
             no tab has two - `DESIGN.md` §9. */}
         <h1 className="symbol">{data.ticker}</h1>

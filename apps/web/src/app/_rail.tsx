@@ -13,6 +13,33 @@ import { usePathname } from "next/navigation";
  * class.
  */
 
+/**
+ * One stroke icon per destination, drawn inline so the set shares a 1.6px stroke and a
+ * 16px box. Decorative only (`aria-hidden`): the label beside each one is the name.
+ */
+const ICONS: Record<string, React.ReactNode> = {
+  "/": <path d="M3 13h4v5H3zM8.5 8h4v10h-4zM14 3h4v15h-4z" />,
+  "/companies": (
+    <>
+      <path d="M3 17 8 11l3.5 3.5L17 7" />
+      <path d="M13 7h4v4" />
+    </>
+  ),
+  "/macro": (
+    <>
+      <circle cx="10" cy="10" r="7" />
+      <path d="M3 10h14M10 3c2 2.2 2.8 4.5 2.8 7s-.8 4.8-2.8 7c-2-2.2-2.8-4.5-2.8-7S8 5.2 10 3Z" />
+    </>
+  ),
+  "/data-health": <path d="M2.5 10h3.5l2-5 4 10 2-5h3.5" />,
+  "/how-to-read-this": (
+    <>
+      <path d="M3 4.5h5a2 2 0 0 1 2 2V17a1.5 1.5 0 0 0-1.5-1.5H3z" />
+      <path d="M17 4.5h-5a2 2 0 0 0-2 2V17a1.5 1.5 0 0 1 1.5-1.5H17z" />
+    </>
+  ),
+};
+
 const SECTIONS: { label: string; links: { href: string; text: string }[] }[] = [
   {
     label: "Markets",
@@ -49,7 +76,21 @@ export function Rail() {
               href={link.href}
               aria-current={isCurrent(link.href) ? "page" : undefined}
             >
-              {link.text}
+              <svg
+                className="rail-icon"
+                width="16"
+                height="16"
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                {ICONS[link.href]}
+              </svg>
+              <span>{link.text}</span>
             </Link>
           ))}
         </div>
